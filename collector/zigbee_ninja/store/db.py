@@ -27,6 +27,16 @@ _MIGRATIONS = [
         expires_at TEXT NOT NULL
     );
     """,
+    """
+    CREATE TABLE series_10s (
+        ts       INTEGER NOT NULL,
+        instance TEXT NOT NULL,
+        kind     TEXT NOT NULL,
+        count    INTEGER NOT NULL,
+        PRIMARY KEY (ts, instance, kind)
+    );
+    CREATE INDEX idx_series_10s_ts ON series_10s (ts);
+    """,
 ]
 
 

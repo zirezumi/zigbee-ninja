@@ -9,9 +9,10 @@ commands, device reporting, housekeeping, retry overhead), models mesh airtime
 amplification for group/broadcast traffic, and calibrates each coordinator's real
 capacity knee with a guided benchmark.
 
-**Status: pre-alpha — M0 scaffold.** The architecture is fully specified in
-[docs/DESIGN.md](docs/DESIGN.md); the implementation is at the beginning of the
-milestone ladder below. Not yet usable.
+**Status: pre-alpha — M1.** The architecture is fully specified in
+[docs/DESIGN.md](docs/DESIGN.md). Broker onboarding, Z2M instance discovery, and
+the live fleet view work; attribution, wire-tier capture, and capacity math are
+still ahead. Not yet generally usable.
 
 ## Principles
 
@@ -37,9 +38,9 @@ milestone ladder below. Not yet usable.
 
 | Milestone | Deliverable |
 |---|---|
-| **M0 ← here** | Repo scaffold, CI, container skeleton, config store, auth shell |
-| M1 | Broker onboarding + discovery + live fleet view |
-| M2 | Attribution v1 (command chains, taxonomy, client attribution) |
+| M0 ✓ | Repo scaffold, CI, container skeleton, config store, auth shell |
+| M1 ✓ | Broker onboarding + discovery + live fleet view |
+| **M2 ← next** | Attribution v1 (command chains, taxonomy, client attribution) |
 | M3 | Z2M extension probe + permission tiles + queue latency |
 | M4 | Wire tap agent + ASH/EZSP decode + fusion |
 | M5 | Airtime/capacity model + calibration wizard + headroom dashboards |

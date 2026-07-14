@@ -1,6 +1,8 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import { api, ApiError } from "./api";
+import { api, ApiError, BrokerView } from "./api";
 import type { Health, Me } from "./api";
+import BrokerSetup from "./views/BrokerSetup";
+import Fleet from "./views/Fleet";
 
 type Phase = "loading" | "setup" | "login" | "ready" | "error";
 
@@ -13,15 +15,6 @@ const NAV_ITEMS = [
   "Footprint",
   "Alerts",
   "Settings",
-];
-
-const MILESTONES: Array<[string, string]> = [
-  ["M1", "Broker onboarding, discovery, live fleet view"],
-  ["M2", "Attribution v1: command chains, taxonomy, client identity"],
-  ["M3", "Z2M extension probe, permission tiles, queue latency"],
-  ["M4", "Wire tap agent, ASH/EZSP decode, fusion"],
-  ["M5", "Airtime model, calibration wizard, headroom dashboards"],
-  ["M6", "Alerting, MQTT-discovery entities — V1"],
 ];
 
 interface CredentialsFormProps {
@@ -52,7 +45,7 @@ function CredentialsForm({ title, subtitle, submitLabel, onSubmit }: Credentials
 
   return (
     <div className="gate">
-      <form className="card" onSubmit={handleSubmit}>
+      <form className="card" onSubmit={(event) => void handleSubmit(event)}>
         <div className="brand">
           <span className="brand-mark">🥷</span>
           <span className="brand-name">zigbee-ninja</span>
@@ -92,6 +85,12 @@ export default function App() {
   const [phase, setPhase] = useState<Phase>("loading");
   const [version, setVersion] = useState("");
   const [username, setUsername] = useState("");
+  const [broker, setBroker] = useState<BrokerView | null>(null);
+  const [reconfiguring, setReconfiguring] = useState(false);
+
+  const refreshBroker = useCallback(async () => {
+    setBroker(await api<BrokerView>("/api/broker"));
+  }, []);
 
   const bootstrap = useCallback(async () => {
     try {
@@ -104,6 +103,7 @@ export default function App() {
       try {
         const me = await api<Me>("/api/auth/me");
         setUsername(me.username);
+        await refreshBroker();
         setPhase("ready");
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) {
@@ -115,7 +115,7 @@ export default function App() {
     } catch {
       setPhase("error");
     }
-  }, []);
+  }, [refreshBroker]);
 
   useEffect(() => {
     void bootstrap();
@@ -127,6 +127,7 @@ export default function App() {
       body: JSON.stringify({ username: user, password }),
     });
     setUsername(created.username);
+    await refreshBroker();
     setPhase("ready");
   }
 
@@ -136,6 +137,7 @@ export default function App() {
       body: JSON.stringify({ username: user, password }),
     });
     setUsername(loggedIn.username);
+    await refreshBroker();
     setPhase("ready");
   }
 
@@ -178,6 +180,8 @@ export default function App() {
     );
   }
 
+  const showSetup = broker !== null && (!broker.configured || reconfiguring);
+
   return (
     <div className="shell">
       <aside>
@@ -201,21 +205,19 @@ export default function App() {
       </aside>
       <main>
         <h1>Fleet</h1>
-        <div className="panel">
-          <p className="panel-kicker">M0 scaffold</p>
-          <p>
-            The collector is online. Discovery, coordinators, and dashboards arrive with the
-            milestones below — this shell exists so every later milestone lands in a working,
-            authenticated GUI.
-          </p>
-          <ul className="milestones">
-            {MILESTONES.map(([id, label]) => (
-              <li key={id}>
-                <span className="mono">{id}</span> {label}
-              </li>
-            ))}
-          </ul>
-        </div>
+        {broker === null ? (
+          <p className="hint">loading…</p>
+        ) : showSetup ? (
+          <BrokerSetup
+            current={broker.configured ? broker : null}
+            onSaved={() => {
+              setReconfiguring(false);
+              void refreshBroker();
+            }}
+          />
+        ) : (
+          <Fleet onReconfigure={() => setReconfiguring(true)} />
+        )}
       </main>
     </div>
   );

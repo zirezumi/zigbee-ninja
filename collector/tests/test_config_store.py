@@ -1,5 +1,5 @@
 from zigbee_ninja.store.config import ConfigStore
-from zigbee_ninja.store.db import Database
+from zigbee_ninja.store.db import _MIGRATIONS, Database
 
 
 def test_config_roundtrip_and_overwrite(tmp_path):
@@ -27,4 +27,4 @@ def test_migrations_are_idempotent(tmp_path):
     Database(tmp_path)
     db2 = Database(tmp_path)  # re-open same directory: migrations must not re-run
     row = db2.connect().execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
-    assert row["v"] == 1
+    assert row["v"] == len(_MIGRATIONS)

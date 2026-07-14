@@ -15,9 +15,14 @@ the code.
 ## Milestone state
 
 M0 (scaffold: config store, auth shell, CI, container) — done.
-Next: **M1** — broker onboarding + discovery (`+/bridge/info` → instances,
-adapter endpoints, channels; `bridge/devices|groups` registries) + live fleet
-view + retention v0. Roadmap table: README.md. Spikes S1–S3 gate M3/M4 (DESIGN §19).
+M1 (broker onboarding, discovery via `+/bridge/info` + registries, 1s rate
+tracking with 10s rollups, live fleet view over WebSocket) — done; live-broker
+soak still pending first real deployment.
+Next: **M2** — attribution v1: command chains at T0, taxonomy joins, T0.5 broker
+client attribution (`log_dest topic` — verify Mosquitto log format + overhead
+first), redundant-command report, attribution explorer view. Also M1 leftovers:
+commit `frontend/package-lock.json` and flip CI + Dockerfile to `npm ci` (two
+TODO(M1) markers). Roadmap: README.md. Spikes S1–S3 gate M3/M4 (DESIGN §19).
 
 ## Hard rules
 

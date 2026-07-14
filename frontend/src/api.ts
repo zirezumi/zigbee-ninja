@@ -17,6 +17,45 @@ export interface Me {
   username: string;
 }
 
+export interface BrokerStatus {
+  state: string;
+  error?: string | null;
+  connected_since?: number | null;
+}
+
+export interface BrokerView {
+  configured: boolean;
+  host?: string;
+  port?: number;
+  username?: string | null;
+  status: BrokerStatus;
+}
+
+export interface InstanceInfo {
+  base_topic: string;
+  online: boolean | null;
+  version: string | null;
+  channel: number | null;
+  pan_id: number | null;
+  adapter_port: string | null;
+  coordinator_type: string | null;
+  coordinator_ieee: string | null;
+  device_count: number;
+  router_count: number;
+  end_device_count: number;
+  group_count: number;
+  last_info_at: number | null;
+}
+
+export type RatesSnapshot = Record<string, Record<string, number>>;
+
+export interface FleetMessage {
+  ts: number;
+  broker: BrokerStatus;
+  instances: InstanceInfo[];
+  rates: RatesSnapshot;
+}
+
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
     credentials: "same-origin",
@@ -34,4 +73,9 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     throw new ApiError(response.status, detail);
   }
   return (await response.json()) as T;
+}
+
+export function fleetSocketUrl(): string {
+  const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+  return `${scheme}://${window.location.host}/api/ws/fleet`;
 }

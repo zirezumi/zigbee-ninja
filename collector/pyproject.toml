@@ -7,12 +7,13 @@ name = "zigbee-ninja"
 version = "0.1.0.dev0"
 description = "Coordinator-throughput observability for Zigbee2MQTT systems"
 license = "Apache-2.0"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 authors = [{ name = "zirezumi" }]
 dependencies = [
     "fastapi>=0.111",
     "uvicorn[standard]>=0.30",
     "argon2-cffi>=23.1",
+    "aiomqtt>=2.1",
 ]
 
 [project.optional-dependencies]
@@ -30,7 +31,7 @@ packages = ["zigbee_ninja"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
