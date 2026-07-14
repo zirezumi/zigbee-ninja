@@ -37,6 +37,29 @@ _MIGRATIONS = [
     );
     CREATE INDEX idx_series_10s_ts ON series_10s (ts);
     """,
+    """
+    CREATE TABLE chains (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        instance      TEXT NOT NULL,
+        target        TEXT NOT NULL,
+        verb          TEXT NOT NULL,
+        opened_at     REAL NOT NULL,
+        client        TEXT,
+        payload_size  INTEGER NOT NULL,
+        echo_count    INTEGER NOT NULL,
+        first_echo_ms REAL,
+        redundant     INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX idx_chains_opened ON chains (opened_at);
+    CREATE TABLE attribution_10s (
+        ts       INTEGER NOT NULL,
+        instance TEXT NOT NULL,
+        klass    TEXT NOT NULL,
+        count    INTEGER NOT NULL,
+        PRIMARY KEY (ts, instance, klass)
+    );
+    CREATE INDEX idx_attribution_10s_ts ON attribution_10s (ts);
+    """,
 ]
 
 

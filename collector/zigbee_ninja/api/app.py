@@ -13,11 +13,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .. import __version__
+from ..attribution import queries as attribution_queries
 from ..ingest.engine import Engine
 from ..ingest.mqtt import BrokerConfig, test_connection
 from ..store.config import ConfigStore
 from ..store.db import Database
 from . import auth
+
+MAX_QUERY_WINDOW_SECONDS = 14 * 24 * 3600
 
 SESSION_COOKIE = "zn_session"
 
@@ -149,6 +152,20 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
     def instances(request: Request) -> dict:
         require_user(request)
         return {"instances": engine.registry.snapshot()}
+
+    @app.get("/api/attribution/summary")
+    def attribution_summary(request: Request, seconds: int = 3600) -> dict:
+        require_user(request)
+        seconds = max(60, min(seconds, MAX_QUERY_WINDOW_SECONDS))
+        engine.flush_rollups()  # fold in anything pending so short windows are fresh
+        return attribution_queries.summary(db, seconds)
+
+    @app.get("/api/attribution/redundant")
+    def attribution_redundant(request: Request, seconds: int = 3600) -> dict:
+        require_user(request)
+        seconds = max(60, min(seconds, MAX_QUERY_WINDOW_SECONDS))
+        engine.flush_rollups()
+        return {"redundant": attribution_queries.redundant(db, seconds)}
 
     @app.websocket("/api/ws/fleet")
     async def ws_fleet(websocket: WebSocket) -> None:

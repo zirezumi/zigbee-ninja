@@ -16,13 +16,18 @@ the code.
 
 M0 (scaffold: config store, auth shell, CI, container) — done.
 M1 (broker onboarding, discovery via `+/bridge/info` + registries, 1s rate
-tracking with 10s rollups, live fleet view over WebSocket) — done; live-broker
-soak still pending first real deployment.
-Next: **M2** — attribution v1: command chains at T0, taxonomy joins, T0.5 broker
-client attribution (`log_dest topic` — verify Mosquitto log format + overhead
-first), redundant-command report, attribution explorer view. Also M1 leftovers:
-commit `frontend/package-lock.json` and flip CI + Dockerfile to `npm ci` (two
-TODO(M1) markers). Roadmap: README.md. Spikes S1–S3 gate M3/M4 (DESIGN §19).
+tracking with 10s rollups, live fleet view over WebSocket) — done.
+M2 (attribution v1: T0 command chains with group expansion + provoked/autonomous
+classification, T0.5 Mosquitto `$SYS/broker/log` client correlation, redundant-
+command detector, `chains` + `attribution_10s` tables, attribution explorer
+view) — done. NOT yet soaked against a live broker; the Mosquitto debug-log
+format match is fixture-tested only — verify on the real broker at deploy time.
+Next: **M3** — Z2M extension probe (deploy/remove over MQTT), permission
+tiles + footprint UX, queue latency, self-accounting; opening spike S3 =
+extension hook inventory. Also M1 leftovers: commit `frontend/package-lock.json`
+and flip CI + Dockerfile to `npm ci` (two TODO(M1) markers). Deploy-to-LXC +
+live-broker soak is pending and needs broker credentials. Roadmap: README.md.
+Spikes S1–S3 gate M3/M4 (DESIGN §19).
 
 ## Hard rules
 

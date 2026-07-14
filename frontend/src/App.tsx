@@ -1,20 +1,22 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api, ApiError, BrokerView } from "./api";
 import type { Health, Me } from "./api";
+import Attribution from "./views/Attribution";
 import BrokerSetup from "./views/BrokerSetup";
 import Fleet from "./views/Fleet";
 
 type Phase = "loading" | "setup" | "login" | "ready" | "error";
+type View = "fleet" | "attribution";
 
-const NAV_ITEMS = [
-  "Fleet",
-  "Attribution",
-  "Burst inspector",
-  "Topology",
-  "Calibration",
-  "Footprint",
-  "Alerts",
-  "Settings",
+const NAV_ITEMS: Array<{ label: string; view?: View }> = [
+  { label: "Fleet", view: "fleet" },
+  { label: "Attribution", view: "attribution" },
+  { label: "Burst inspector" },
+  { label: "Topology" },
+  { label: "Calibration" },
+  { label: "Footprint" },
+  { label: "Alerts" },
+  { label: "Settings" },
 ];
 
 interface CredentialsFormProps {
@@ -87,6 +89,7 @@ export default function App() {
   const [username, setUsername] = useState("");
   const [broker, setBroker] = useState<BrokerView | null>(null);
   const [reconfiguring, setReconfiguring] = useState(false);
+  const [view, setView] = useState<View>("fleet");
 
   const refreshBroker = useCallback(async () => {
     setBroker(await api<BrokerView>("/api/broker"));
@@ -190,11 +193,21 @@ export default function App() {
           <span className="brand-name">zigbee-ninja</span>
         </div>
         <nav>
-          {NAV_ITEMS.map((item, index) => (
-            <span key={item} className={index === 0 ? "nav-item active" : "nav-item disabled"}>
-              {item}
-            </span>
-          ))}
+          {NAV_ITEMS.map((item) =>
+            item.view ? (
+              <button
+                key={item.label}
+                className={item.view === view ? "nav-item active" : "nav-item"}
+                onClick={() => setView(item.view!)}
+              >
+                {item.label}
+              </button>
+            ) : (
+              <span key={item.label} className="nav-item disabled">
+                {item.label}
+              </span>
+            ),
+          )}
         </nav>
         <div className="aside-foot">
           <span className="mono">{version}</span>
@@ -204,7 +217,7 @@ export default function App() {
         </div>
       </aside>
       <main>
-        <h1>Fleet</h1>
+        <h1>{view === "fleet" ? "Fleet" : "Attribution"}</h1>
         {broker === null ? (
           <p className="hint">loading…</p>
         ) : showSetup ? (
@@ -215,8 +228,10 @@ export default function App() {
               void refreshBroker();
             }}
           />
-        ) : (
+        ) : view === "fleet" ? (
           <Fleet onReconfigure={() => setReconfiguring(true)} />
+        ) : (
+          <Attribution />
         )}
       </main>
     </div>

@@ -1,17 +1,20 @@
-"""Wires broker config → MQTT ingest → registry + rate tracker; owns the tasks."""
+"""Wires broker config → MQTT ingest → registry, rates, and attribution."""
 
 from __future__ import annotations
 
 import asyncio
 import time
 
+from ..attribution.chains import ChainTracker, parse_command
 from ..store.config import ConfigStore
 from ..store.db import Database
+from .brokerlog import LOG_TOPIC_PREFIX, BrokerLogCorrelator
 from .mqtt import BrokerConfig, MqttIngest
 from .rates import GLOBAL, ROLLUP_SECONDS, RateTracker, classify
 from .registry import Registry
 
-ROLLUP_RETENTION_SECONDS = 14 * 24 * 3600  # 10s tier keeps two weeks (DESIGN.md §12)
+ROLLUP_RETENTION_SECONDS = 14 * 24 * 3600  # 10s tiers keep two weeks (DESIGN.md §12)
+CHAIN_RETENTION_SECONDS = 48 * 3600  # chain detail keeps 48h (DESIGN.md §12)
 
 
 class Engine:
@@ -20,9 +23,15 @@ class Engine:
         self._config = config
         self.registry = Registry()
         self.rates = RateTracker()
+        self.class_rates = RateTracker()
+        self.brokerlog = BrokerLogCorrelator()
+        self.chains = ChainTracker(resolve_members=self._resolve_members)
         self._ingest: MqttIngest | None = None
         self._ingest_task: asyncio.Task | None = None
         self._flush_task: asyncio.Task | None = None
+
+    def _resolve_members(self, instance: str, target: str) -> list[str]:
+        return self.registry.group_members(instance, target)
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -67,35 +76,108 @@ class Engine:
     # -- data path -----------------------------------------------------------
 
     def on_message(self, topic: str, payload: bytes) -> None:
+        if topic.startswith(LOG_TOPIC_PREFIX):
+            parsed = self.brokerlog.on_log(payload)
+            if parsed is not None:
+                client, published_topic = parsed
+                self._attribute_from_log(client, published_topic)
+            return
+
         self.registry.handle(topic, payload)
         base = self.registry.base_for(topic)
-        if base is not None:
-            kind = classify(topic, base)
-            self.rates.record(base, kind)
-        else:
-            kind = "other"
+        if base is None:
+            self.rates.record(GLOBAL, "other")
+            return
+
+        kind = classify(topic, base)
+        self.rates.record(base, kind)
         self.rates.record(GLOBAL, kind)
+
+        suffix = topic[len(base) + 1 :]
+        if kind == "command":
+            command = parse_command(suffix)
+            if command is not None:
+                target, verb = command
+                client = self.brokerlog.client_for(topic)
+                self.chains.on_command(base, target, verb, payload, client=client)
+                self.class_rates.record(base, "commanded")
+        elif kind == "state":
+            klass = self.chains.on_state(base, suffix)
+            self.class_rates.record(base, klass)
+
+    def _attribute_from_log(self, client: str, published_topic: str) -> None:
+        base = self.registry.base_for(published_topic)
+        if base is None:
+            return
+        command = parse_command(published_topic[len(base) + 1 :])
+        if command is not None:
+            self.chains.attribute_client(base, command[0], client)
 
     def ingest_status(self) -> dict:
         if self._ingest is None:
             return {"state": "unconfigured", "error": None, "connected_since": None}
         return dict(self._ingest.status)
 
-    # -- rollups (retention v0) ----------------------------------------------
+    # -- rollups & persistence -------------------------------------------------
 
     def flush_rollups(self) -> int:
+        conn = self._db.connect()
+        now = int(time.time())
+        written = 0
+
         rows = self.rates.drain_completed_windows()
         if rows:
-            conn = self._db.connect()
             conn.executemany(
                 "INSERT OR REPLACE INTO series_10s (ts, instance, kind, count) "
                 "VALUES (?, ?, ?, ?)",
                 rows,
             )
-            cutoff = int(time.time()) - ROLLUP_RETENTION_SECONDS
-            conn.execute("DELETE FROM series_10s WHERE ts < ?", (cutoff,))
+            conn.execute(
+                "DELETE FROM series_10s WHERE ts < ?", (now - ROLLUP_RETENTION_SECONDS,)
+            )
+            written += len(rows)
+
+        class_rows = self.class_rates.drain_completed_windows()
+        if class_rows:
+            conn.executemany(
+                "INSERT OR REPLACE INTO attribution_10s (ts, instance, klass, count) "
+                "VALUES (?, ?, ?, ?)",
+                class_rows,
+            )
+            conn.execute(
+                "DELETE FROM attribution_10s WHERE ts < ?", (now - ROLLUP_RETENTION_SECONDS,)
+            )
+            written += len(class_rows)
+
+        finalized = self.chains.drain_finalized()
+        if finalized:
+            conn.executemany(
+                "INSERT INTO chains (instance, target, verb, opened_at, client, "
+                "payload_size, echo_count, first_echo_ms, redundant) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        chain.instance,
+                        chain.target,
+                        chain.verb,
+                        chain.opened_at,
+                        chain.client,
+                        chain.payload_size,
+                        chain.echoes,
+                        chain.first_echo_ms,
+                        int(chain.redundant),
+                    )
+                    for chain in finalized
+                ],
+            )
+            conn.execute(
+                "DELETE FROM chains WHERE opened_at < ?", (now - CHAIN_RETENTION_SECONDS,)
+            )
+            written += len(finalized)
+
+        if written:
             conn.commit()
-        return len(rows)
+        return written
 
     async def _flush_loop(self) -> None:
         while True:

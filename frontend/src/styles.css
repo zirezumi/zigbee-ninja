@@ -417,6 +417,158 @@ main h1 {
   font-variant-numeric: tabular-nums;
 }
 
+/* ---- attribution ---- */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.seg-btn {
+  background: transparent;
+  color: var(--ink-2);
+  border: none;
+  border-radius: 0;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.seg-btn.active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.panel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.panel + .panel,
+.toolbar + .panel {
+  margin-top: 0;
+}
+
+.classrows {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.classrow {
+  display: grid;
+  grid-template-columns: 110px 1fr;
+  gap: 4px 14px;
+  align-items: center;
+}
+
+.classrow-detail {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.classbar {
+  display: flex;
+  height: 14px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--line) 40%, transparent);
+}
+
+.classbar-seg {
+  display: block;
+  height: 100%;
+}
+
+.seg-commanded {
+  background: var(--accent);
+}
+
+.seg-provoked {
+  background: color-mix(in srgb, var(--accent) 55%, var(--panel));
+}
+
+.seg-autonomous {
+  background: var(--ink-2);
+}
+
+.seg-controller-housekeeping,
+.seg-stack-housekeeping {
+  background: var(--amber);
+}
+
+.seg-retry-overhead {
+  background: var(--danger);
+}
+
+.seg-self {
+  background: color-mix(in srgb, var(--ink-2) 40%, transparent);
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13.5px;
+}
+
+.table th {
+  text-align: left;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-2);
+  border-bottom: 1px solid var(--line);
+  padding: 4px 10px 6px 0;
+  font-weight: 600;
+}
+
+.table td {
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
+  padding: 6px 10px 6px 0;
+}
+
+.table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+nav button.nav-item {
+  background: transparent;
+  border: none;
+  text-align: left;
+  color: var(--ink);
+  font-weight: 500;
+  padding: 7px 10px;
+  font-size: 14px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+nav button.nav-item:hover {
+  background: color-mix(in srgb, var(--line) 50%, transparent);
+}
+
+nav button.nav-item.active {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
 @media (max-width: 720px) {
   .shell {
     grid-template-columns: 1fr;

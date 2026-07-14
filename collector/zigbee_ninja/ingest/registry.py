@@ -30,6 +30,7 @@ class Registry:
         self._instances: dict[str, dict] = {}
         self._devices: dict[str, list[dict]] = {}
         self._groups: dict[str, list[dict]] = {}
+        self._ieee_to_name: dict[str, dict[str, str]] = {}
 
     def _instance(self, base: str) -> dict:
         return self._instances.setdefault(
@@ -114,6 +115,11 @@ class Registry:
                 }
             )
         self._devices[base] = devices
+        self._ieee_to_name[base] = {
+            device["ieee_address"]: device["friendly_name"]
+            for device in devices
+            if device.get("ieee_address") and device.get("friendly_name")
+        }
         instance = self._instance(base)
         instance.update(
             device_count=len(devices),
@@ -129,11 +135,17 @@ class Registry:
         for entry in data:
             if not isinstance(entry, dict):
                 continue
+            members = entry.get("members") or []
             groups.append(
                 {
                     "id": entry.get("id"),
                     "friendly_name": entry.get("friendly_name"),
-                    "member_count": len(entry.get("members") or []),
+                    "member_count": len(members),
+                    "member_ieee": [
+                        member.get("ieee_address")
+                        for member in members
+                        if isinstance(member, dict) and member.get("ieee_address")
+                    ],
                 }
             )
         self._groups[base] = groups
@@ -156,3 +168,15 @@ class Registry:
 
     def groups(self, base: str) -> list[dict]:
         return list(self._groups.get(base, []))
+
+    def group_members(self, base: str, group_name: str) -> list[str]:
+        """Friendly names of a group's member devices; [] for non-group targets."""
+        ieee_map = self._ieee_to_name.get(base, {})
+        for group in self._groups.get(base, []):
+            if group.get("friendly_name") == group_name:
+                return [
+                    ieee_map[ieee]
+                    for ieee in group.get("member_ieee", [])
+                    if ieee in ieee_map
+                ]
+        return []

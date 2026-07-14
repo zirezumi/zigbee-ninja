@@ -56,6 +56,29 @@ export interface FleetMessage {
   rates: RatesSnapshot;
 }
 
+export interface TopTarget {
+  instance: string;
+  target: string;
+  commands: number;
+  redundant: number;
+  avg_first_echo_ms: number | null;
+}
+
+export interface AttributionSummary {
+  window_seconds: number;
+  classes: Record<string, Record<string, number>>;
+  top_targets: TopTarget[];
+  top_clients: { client: string; commands: number }[];
+  totals: { chains: number; redundant: number; avg_first_echo_ms: number | null };
+}
+
+export interface RedundantRow {
+  instance: string;
+  target: string;
+  count: number;
+  client: string;
+}
+
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
     credentials: "same-origin",
