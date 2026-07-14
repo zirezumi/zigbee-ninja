@@ -1,9 +1,15 @@
 """T1 probe ingest: parse extension telemetry, track latency and probe health.
 
-Latency here is the Z2M-boundary command→device-response time: both timestamps
-come from the probe's own clock, so no cross-host alignment is needed. This is
-the queue+radio round trip (DESIGN.md §10 latency SLIs), a tier above the T0
-command→state-echo measure.
+Latency here is the Z2M-boundary command→state-echo time (both timestamps from
+the probe's own clock, no cross-host alignment). It is an APPROXIMATE proxy: a
+live trace on this system showed presence dimmers also emit frequent autonomous
+reports (illuminance, occupancy, mmWave, OTA) that would mispair with commands
+and inflate the figure toward the match-window ceiling. Two guards keep it
+honest — pairing is restricted to actuator state-echo clusters (so a sensor/OTA
+report is never mistaken for a command response), and a report pairs with the
+NEWEST pending command, not the oldest. The authoritative, unambiguous latency
+SLI is the wire tier's sendUnicast→messageSentHandler pairing (DESIGN.md §10),
+which supersedes this proxy once T2 is live.
 """
 
 from __future__ import annotations
@@ -23,6 +29,27 @@ MATCH_WINDOW_SECONDS = 3.0
 SAMPLE_WINDOW_SECONDS = 300.0
 MAX_SAMPLES = 1000
 
+# Clusters whose reports are a plausible echo of a light/actuator command. A
+# report on any other cluster (sensors, metering, OTA, vendor mmWave) is
+# autonomous and must never be paired as a command response. Vendor color/state
+# clusters that carry bulb state echoes are included by prefix (manuSpecific*
+# is matched separately below to catch Hue/Inovelli state reports).
+ACTUATOR_CLUSTERS = frozenset(
+    {"genOnOff", "genLevelCtrl", "lightingColorCtrl", "genScenes"}
+)
+_AUTONOMOUS_MANU_HINTS = ("mmwave", "occup", "ota")
+
+
+def is_state_echo_cluster(cluster: str) -> bool:
+    if cluster in ACTUATOR_CLUSTERS:
+        return True
+    # Vendor state echoes (e.g. manuSpecificPhilips2 for Hue) count, but vendor
+    # sensor/mmWave clusters do not.
+    low = cluster.lower()
+    if low.startswith("manuspecific"):
+        return not any(hint in low for hint in _AUTONOMOUS_MANU_HINTS)
+    return False
+
 
 class LatencyTracker:
     def __init__(self, resolve_members: Callable[[str, str], list[str]] | None = None):
@@ -37,20 +64,25 @@ class LatencyTracker:
         for member in self._resolve_members(instance, target):
             self._pending.setdefault((instance, member), deque(maxlen=8)).append(probe_ts)
 
-    def on_device_message(self, instance: str, name: str, probe_ts: float) -> None:
+    def on_device_message(
+        self, instance: str, name: str, cluster: str, probe_ts: float
+    ) -> None:
         self._latest_ts[instance] = max(self._latest_ts.get(instance, 0.0), probe_ts)
+        if not is_state_echo_cluster(cluster):
+            return  # autonomous report — never a command response
         pending = self._pending.get((instance, name))
         if not pending:
             return
-        while pending:
-            opened = pending[0]
-            if probe_ts - opened > MATCH_WINDOW_SECONDS:
-                pending.popleft()
-                continue
-            pending.popleft()
+        while pending and probe_ts - pending[0] > MATCH_WINDOW_SECONDS:
+            pending.popleft()  # drop stale commands
+        # Newest command at or before this report: the one it most plausibly
+        # answers. Consume it and everything older so no command double-counts.
+        chosen: float | None = None
+        while pending and pending[0] <= probe_ts:
+            chosen = pending.popleft()
+        if chosen is not None:
             samples = self._samples.setdefault(instance, deque(maxlen=MAX_SAMPLES))
-            samples.append((probe_ts, (probe_ts - opened) * 1000.0))
-            return
+            samples.append((probe_ts, (probe_ts - chosen) * 1000.0))
 
     def snapshot(self) -> dict[str, dict]:
         result: dict[str, dict] = {}
@@ -138,8 +170,10 @@ class ProbeIngest:
                     command = parse_command(topic[len(base) + 1 :])
                     if command is not None:
                         self.latency.on_command(base, command[0], float(ts))
-            elif kind == "dm" and len(event) >= 3 and isinstance(event[2], str):
-                self.latency.on_device_message(base, event[2], float(ts))
+            elif kind == "dm" and len(event) >= 4 and isinstance(event[2], str):
+                # dm event: [ts, "dm", name, cluster, type, lqi, size]
+                cluster = event[3] if isinstance(event[3], str) else ""
+                self.latency.on_device_message(base, event[2], cluster, float(ts))
 
     def _handle_heartbeat(self, base: str, payload: bytes) -> None:
         stat = self._stat(base)

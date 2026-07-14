@@ -53,6 +53,64 @@ def test_unmatched_device_message_produces_no_sample():
     assert ingest.latency.snapshot() == {}
 
 
+def test_autonomous_cluster_report_not_paired_as_latency():
+    # A command to a presence dimmer followed only by autonomous sensor/OTA/mmWave
+    # reports from that same device must NOT produce a (false, inflated) sample.
+    ingest = ProbeIngest()
+    ingest.handle(
+        "z2m-test",
+        "zigbee-ninja/probe/events",
+        events_payload(
+            1,
+            [
+                [1000.0, "mi", "z2m-test/presence_dimmer/set", 12],
+                [1000.4, "dm", "presence_dimmer", "msIlluminanceMeasurement", "r", 90, 8],
+                [1002.1, "dm", "presence_dimmer", "genOta", "commandQueryNextImage", 90, 8],
+                [1002.3, "dm", "presence_dimmer", "manuSpecificInovelliMMWave", "cmd", 90, 8],
+            ],
+        ),
+    )
+    assert ingest.latency.snapshot() == {}
+
+
+def test_vendor_state_echo_cluster_is_paired():
+    # Hue bulbs echo state on manuSpecificPhilips2 — that IS a command response.
+    ingest = ProbeIngest()
+    ingest.handle(
+        "z2m-test",
+        "zigbee-ninja/probe/events",
+        events_payload(
+            1,
+            [
+                [1000.0, "mi", "z2m-test/bulb/set", 20],
+                [1000.3, "dm", "bulb", "manuSpecificPhilips2", "attributeReport", 100, 25],
+            ],
+        ),
+    )
+    assert ingest.latency.snapshot()["z2m-test"]["count"] == 1
+
+
+def test_newest_command_pairing_under_burst():
+    # Two commands to the same device within the window, then one state echo:
+    # it answers the NEWEST command (300ms), not the oldest (would be 1300ms).
+    ingest = ProbeIngest()
+    ingest.handle(
+        "z2m-test",
+        "zigbee-ninja/probe/events",
+        events_payload(
+            1,
+            [
+                [1000.0, "mi", "z2m-test/lamp/set", 10],
+                [1001.0, "mi", "z2m-test/lamp/set", 10],
+                [1001.3, "dm", "lamp", "genLevelCtrl", "attributeReport", 100, 25],
+            ],
+        ),
+    )
+    snapshot = ingest.latency.snapshot()
+    assert snapshot["z2m-test"]["count"] == 1
+    assert 290 <= snapshot["z2m-test"]["p50_ms"] <= 310
+
+
 def test_seq_gap_detection():
     ingest = ProbeIngest()
     ingest.handle("z2m-test", "zigbee-ninja/probe/events", events_payload(1, []))
