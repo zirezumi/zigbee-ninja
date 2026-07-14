@@ -32,11 +32,20 @@ heartbeat self-reports its attached hook inventory, shown on the Footprint page.
 NOTHING M1–M3 is live-broker-soaked yet — the probe has never run inside a real
 Z2M instance (CI only does `node --check`); first deploy must watch the
 heartbeat hooks list + Z2M log.
-Next: **M4** — ninja-tap agent + TCP reassembly + ASH/EZSP decode (spike S1
-FIRST: capture a live coordinator flow and decode offline before committing;
-S2 counters route) + T1/T2 fusion. Also M1 leftovers: commit
-`frontend/package-lock.json`, flip CI + Dockerfile to `npm ci`. Deploy-to-LXC +
-live-broker soak pending (needs broker credentials). Roadmap: README.md.
+M4 groundwork done: `decode/` now holds the ASH stream decoder (escaping,
+CRC16-CCITT w/ standard check-value test, LFSR derandomization, cancel/
+substitute, reTx accounting; written from UG101 — NOT from GPL bellows/zigpy),
+the EZSP envelope parser (legacy↔extended switch driven by observed version
+negotiation; core frame-name map pending S1 validation), a classic-pcap reader
+with in-order TCP reassembly (retransmit dedupe + gap accounting), and the
+spike-S1 command: `python -m zigbee_ninja.decode.pcap_cli capture.pcap --port
+6638`. All synthetic-fixture tested end-to-end.
+Remaining for **M4**: spike S1 (live golden capture on the reference host →
+run the CLI → pin fixtures, validate frame-name map + deep parameter decode),
+ninja-tap agent + collector WS ingest, T1/T2 fusion, spike S2 (counters).
+Also M1 leftovers: commit `frontend/package-lock.json`, flip CI + Dockerfile
+to `npm ci`. Deploy-to-LXC + live-broker soak pending (needs broker
+credentials). Roadmap: README.md.
 
 ## Hard rules
 
