@@ -17,6 +17,16 @@ import aiomqtt
 
 MAX_BACKOFF_SECONDS = 30
 
+# Z2M discovery/registry topics, subscribed BEFORE the "#" firehose. On a broker
+# with a large retained set (a Home Assistant broker holds hundreds of retained
+# `homeassistant/.../config` messages), a "#"-only subscribe floods the client
+# with retained traffic and the broker can drop late-sorting `z2m-*/bridge/*`
+# retained messages from the per-client queue — leaving discovery empty. A
+# dedicated up-front subscribe delivers the (small) retained bridge set first,
+# so discovery never depends on surviving the flood. Both single- and two-level
+# base topics are covered (e.g. `z2m-1/bridge/*` and `home/z2m/bridge/*`).
+DISCOVERY_TOPICS = ("+/bridge/#", "+/+/bridge/#")
+
 
 @dataclass
 class BrokerConfig:
@@ -79,6 +89,13 @@ class MqttIngest:
             raise RuntimeError("MQTT broker is not connected")
         await client.publish(topic, payload, qos=0)
 
+    @staticmethod
+    async def _subscribe(client) -> None:
+        """Discovery topics first, then the firehose (see DISCOVERY_TOPICS)."""
+        for topic in DISCOVERY_TOPICS:
+            await client.subscribe(topic)
+        await client.subscribe([("#", 0), ("$SYS/#", 0)])
+
     def _set_status(self, state: str, error: str | None = None) -> None:
         self.status = {
             "state": state,
@@ -92,9 +109,7 @@ class MqttIngest:
             self._set_status("connecting")
             try:
                 async with self._config.client() as client:
-                    # "#" does not match $-prefixed topics, so $SYS needs its own
-                    # subscription (used by T0.5 broker-log attribution in M2).
-                    await client.subscribe([("#", 0), ("$SYS/#", 0)])
+                    await self._subscribe(client)
                     self._client = client
                     self._set_status("connected")
                     backoff = 1.0
