@@ -1,6 +1,8 @@
 # Build context is the repository root:  docker build -f deploy/Dockerfile .
 
-FROM node:22-alpine AS frontend
+# The frontend bundle is architecture-independent — pin this stage to the build
+# platform so it never runs under QEMU emulation in multi-arch CI builds.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend
 WORKDIR /src
 # TODO(M1): switch to `npm ci` once package-lock.json is committed
 COPY frontend/package.json ./

@@ -5,9 +5,14 @@ on:
     branches: [main]
   pull_request:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   collector:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -25,6 +30,7 @@ jobs:
 
   frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -43,6 +49,7 @@ jobs:
   image:
     runs-on: ubuntu-latest
     needs: [collector, frontend]
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
@@ -67,3 +74,5 @@ jobs:
           tags: |
             ghcr.io/zirezumi/zigbee-ninja:latest
             ghcr.io/zirezumi/zigbee-ninja:sha-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
