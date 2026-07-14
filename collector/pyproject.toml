@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "zigbee-ninja"
+version = "0.1.0.dev0"
+description = "Coordinator-throughput observability for Zigbee2MQTT systems"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [{ name = "zirezumi" }]
+dependencies = [
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    "argon2-cffi>=23.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+zigbee-ninja = "zigbee_ninja.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["zigbee_ninja"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

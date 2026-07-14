@@ -1,0 +1,13 @@
+services:
+  zigbee-ninja:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    ports:
+      - "8686:8686"
+    volumes:
+      - zn-data:/data
+    restart: unless-stopped
+
+volumes:
+  zn-data:

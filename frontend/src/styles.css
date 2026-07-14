@@ -1,0 +1,251 @@
+:root {
+  --paper: #12181a;
+  --panel: #1a2321;
+  --line: #293432;
+  --ink: #d7e1dd;
+  --ink-2: #93a5a0;
+  --accent: #4fc2a4;
+  --accent-ink: #7cd6bf;
+  --danger: #e08573;
+  --mono: "Cascadia Code", "JetBrains Mono", "SF Mono", Consolas, monospace;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --paper: #fafbfa;
+    --panel: #ffffff;
+    --line: #dde5e2;
+    --ink: #1c2422;
+    --ink-2: #4c5b57;
+    --accent: #23836c;
+    --accent-ink: #175c4c;
+    --danger: #a8412f;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: 0.85em;
+  color: var(--accent-ink);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand-mark {
+  font-size: 22px;
+}
+
+.brand-name {
+  font-family: var(--mono);
+  font-size: 15px;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+}
+
+/* ---- gate (setup / login) ---- */
+.gate {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.gate.quiet {
+  color: var(--ink-2);
+  font-family: var(--mono);
+  text-align: center;
+}
+
+.card {
+  width: 100%;
+  max-width: 380px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.card h1 {
+  font-size: 20px;
+  margin: 6px 0 0;
+}
+
+.subtitle {
+  color: var(--ink-2);
+  margin: 0;
+  font-size: 13.5px;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  font-family: var(--mono);
+}
+
+input {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--ink);
+  padding: 9px 11px;
+  font-size: 15px;
+  font-family: inherit;
+}
+
+input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-color: transparent;
+}
+
+button {
+  background: var(--accent);
+  color: var(--paper);
+  border: none;
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 2px;
+}
+
+button.ghost {
+  background: transparent;
+  color: var(--ink-2);
+  border: 1px solid var(--line);
+  font-weight: 500;
+}
+
+.error {
+  color: var(--danger);
+  font-size: 13.5px;
+  margin: 0;
+}
+
+/* ---- authenticated shell ---- */
+.shell {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  min-height: 100vh;
+}
+
+aside {
+  border-right: 1px solid var(--line);
+  padding: 20px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-item {
+  padding: 7px 10px;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.nav-item.active {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.nav-item.disabled {
+  color: var(--ink-2);
+  opacity: 0.55;
+}
+
+.aside-foot {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+main {
+  padding: 28px 34px;
+  max-width: 860px;
+}
+
+main h1 {
+  font-size: 24px;
+  margin: 0 0 16px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 20px 24px;
+}
+
+.panel-kicker {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin: 0 0 8px;
+}
+
+.milestones {
+  list-style: none;
+  padding: 0;
+  margin: 14px 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--ink-2);
+}
+
+@media (max-width: 720px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+
+  aside {
+    border-right: none;
+    border-bottom: 1px solid var(--line);
+  }
+}

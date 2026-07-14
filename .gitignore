@@ -1,0 +1,20 @@
+# python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+
+# node
+node_modules/
+frontend/dist/
+
+# runtime
+data/
+*.db
+*.db-wal
+*.db-shm
+.env
