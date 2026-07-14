@@ -134,8 +134,13 @@ def stream(args: argparse.Namespace) -> None:
     collector.connect()  # OSError here bubbles to main()'s backoff
     log("connected to collector")
 
+    # -Z root: do not drop privileges / chroot. The agent already runs confined
+    # to CAP_NET_RAW; tcpdump's default drop-and-chroot to /var/lib/tcpdump fails
+    # (and exits) under a hardened systemd sandbox (ProtectSystem/NoNewPrivileges),
+    # which otherwise shows up as tcpdump exiting immediately in a tight loop.
     tcpdump = subprocess.Popen(
-        ["tcpdump", "-i", iface, "-w", "-", "-U", "-s", str(args.snaplen), args.filter],
+        ["tcpdump", "-i", iface, "-w", "-", "-U", "-Z", "root",
+         "-s", str(args.snaplen), args.filter],
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
     )
