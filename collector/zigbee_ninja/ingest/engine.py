@@ -8,8 +8,10 @@ import time
 from ..attribution.chains import ChainTracker, parse_command
 from ..store.config import ConfigStore
 from ..store.db import Database
+from ..tiles import TileManager
 from .brokerlog import LOG_TOPIC_PREFIX, BrokerLogCorrelator
 from .mqtt import BrokerConfig, MqttIngest
+from .probe import ProbeIngest
 from .rates import GLOBAL, ROLLUP_SECONDS, RateTracker, classify
 from .registry import Registry
 
@@ -26,12 +28,27 @@ class Engine:
         self.class_rates = RateTracker()
         self.brokerlog = BrokerLogCorrelator()
         self.chains = ChainTracker(resolve_members=self._resolve_members)
+        self.probes = ProbeIngest(
+            resolve_members=self._resolve_members, on_heartbeat=self._on_probe_heartbeat
+        )
+        self.tiles = TileManager(db, publisher=self.publish)
         self._ingest: MqttIngest | None = None
         self._ingest_task: asyncio.Task | None = None
         self._flush_task: asyncio.Task | None = None
 
     def _resolve_members(self, instance: str, target: str) -> list[str]:
         return self.registry.group_members(instance, target)
+
+    def _on_probe_heartbeat(self, base: str, heartbeat: dict) -> None:
+        self.tiles.on_heartbeat(base, heartbeat)
+
+    async def publish(self, topic: str, payload: str) -> None:
+        """Publish on the ingest connection; self-attributed (DESIGN.md P4)."""
+        if self._ingest is None:
+            raise RuntimeError("Broker is not configured")
+        await self._ingest.publish(topic, payload)
+        base = self.registry.base_for(topic)
+        self.class_rates.record(base or GLOBAL, "self")
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -94,6 +111,13 @@ class Engine:
         self.rates.record(GLOBAL, kind)
 
         suffix = topic[len(base) + 1 :]
+        if kind == "probe":
+            self.probes.handle(base, suffix, payload)
+            return
+        if kind == "bridge" and suffix.startswith("bridge/response/extension/"):
+            action = suffix.rsplit("/", 1)[-1]
+            self.tiles.on_bridge_response(base, action, payload)
+            return
         if kind == "command":
             command = parse_command(suffix)
             if command is not None:

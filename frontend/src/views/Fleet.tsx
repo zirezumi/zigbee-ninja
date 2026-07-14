@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { FleetMessage, InstanceInfo, fleetSocketUrl } from "../api";
+import { FleetMessage, InstanceInfo, LatencyStats, ProbeStats, fleetSocketUrl } from "../api";
 
 const KIND_ORDER = ["command", "state", "bridge", "availability", "probe", "other"];
 const HISTORY_LENGTH = 60;
@@ -30,9 +30,11 @@ interface InstanceCardProps {
   instance: InstanceInfo;
   kinds: Record<string, number> | undefined;
   history: number[];
+  latency?: LatencyStats;
+  probe?: ProbeStats;
 }
 
-function InstanceCard({ instance, kinds, history }: InstanceCardProps) {
+function InstanceCard({ instance, kinds, history, latency, probe }: InstanceCardProps) {
   const online = instance.online;
   return (
     <div className="instance-card">
@@ -62,6 +64,18 @@ function InstanceCard({ instance, kinds, history }: InstanceCardProps) {
         </span>
         <span>Groups</span>
         <span>{instance.group_count}</span>
+        <span>Probe</span>
+        <span>
+          {probe?.version
+            ? `v${probe.version}${probe.enabled === false ? " (paused)" : ""}`
+            : "not deployed"}
+        </span>
+        <span>Cmd RTT</span>
+        <span>
+          {latency
+            ? `p50 ${latency.p50_ms} ms · p95 ${latency.p95_ms} ms (${latency.count})`
+            : "—"}
+        </span>
       </div>
       <div className="kinds">
         {KIND_ORDER.map((kind) => (
@@ -154,6 +168,8 @@ export default function Fleet({ onReconfigure }: FleetProps) {
               instance={instance}
               kinds={message?.rates[instance.base_topic]}
               history={historyRef.current[instance.base_topic] ?? []}
+              latency={message?.latency[instance.base_topic]}
+              probe={message?.probes[instance.base_topic]}
             />
           ))}
         </div>

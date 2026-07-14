@@ -41,8 +41,8 @@ still ahead. Not yet generally usable.
 | M0 ✓ | Repo scaffold, CI, container skeleton, config store, auth shell |
 | M1 ✓ | Broker onboarding + discovery + live fleet view |
 | M2 ✓ | Attribution v1 (command chains, client attribution, redundant detector) |
-| **M3 ← next** | Z2M extension probe + permission tiles + queue latency |
-| M4 | Wire tap agent + ASH/EZSP decode + fusion |
+| M3 ✓ | Z2M extension probe + permission tiles + queue latency |
+| **M4 ← next** | Wire tap agent + ASH/EZSP decode + fusion |
 | M5 | Airtime/capacity model + calibration wizard + headroom dashboards |
 | M6 | Alerting + MQTT-discovery entities → **V1** |
 | follow-ups | Home Assistant add-on packaging, ZHA support, what-if rebalancing advisor |

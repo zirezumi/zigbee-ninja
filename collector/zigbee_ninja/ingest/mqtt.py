@@ -69,8 +69,15 @@ class MqttIngest:
     def __init__(self, config: BrokerConfig, on_message: Callable[[str, bytes], None]):
         self._config = config
         self._on_message = on_message
+        self._client: aiomqtt.Client | None = None
         self.status: dict = {"state": "disconnected", "error": None, "connected_since": None}
         self.handler_errors = 0
+
+    async def publish(self, topic: str, payload: str) -> None:
+        client = self._client
+        if client is None or self.status["state"] != "connected":
+            raise RuntimeError("MQTT broker is not connected")
+        await client.publish(topic, payload, qos=0)
 
     def _set_status(self, state: str, error: str | None = None) -> None:
         self.status = {
@@ -88,6 +95,7 @@ class MqttIngest:
                     # "#" does not match $-prefixed topics, so $SYS needs its own
                     # subscription (used by T0.5 broker-log attribution in M2).
                     await client.subscribe([("#", 0), ("$SYS/#", 0)])
+                    self._client = client
                     self._set_status("connected")
                     backoff = 1.0
                     async for message in client.messages:
@@ -99,5 +107,7 @@ class MqttIngest:
                 self._set_status("error", str(exc) or exc.__class__.__name__)
             except OSError as exc:
                 self._set_status("error", str(exc))
+            finally:
+                self._client = None
             await asyncio.sleep(backoff)
             backoff = min(backoff * 2, MAX_BACKOFF_SECONDS)

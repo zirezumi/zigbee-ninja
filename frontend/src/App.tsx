@@ -4,9 +4,10 @@ import type { Health, Me } from "./api";
 import Attribution from "./views/Attribution";
 import BrokerSetup from "./views/BrokerSetup";
 import Fleet from "./views/Fleet";
+import Footprint from "./views/Footprint";
 
 type Phase = "loading" | "setup" | "login" | "ready" | "error";
-type View = "fleet" | "attribution";
+type View = "fleet" | "attribution" | "footprint";
 
 const NAV_ITEMS: Array<{ label: string; view?: View }> = [
   { label: "Fleet", view: "fleet" },
@@ -14,10 +15,16 @@ const NAV_ITEMS: Array<{ label: string; view?: View }> = [
   { label: "Burst inspector" },
   { label: "Topology" },
   { label: "Calibration" },
-  { label: "Footprint" },
+  { label: "Footprint", view: "footprint" },
   { label: "Alerts" },
   { label: "Settings" },
 ];
+
+const VIEW_TITLES: Record<View, string> = {
+  fleet: "Fleet",
+  attribution: "Attribution",
+  footprint: "Footprint & permissions",
+};
 
 interface CredentialsFormProps {
   title: string;
@@ -217,7 +224,7 @@ export default function App() {
         </div>
       </aside>
       <main>
-        <h1>{view === "fleet" ? "Fleet" : "Attribution"}</h1>
+        <h1>{VIEW_TITLES[view]}</h1>
         {broker === null ? (
           <p className="hint">loading…</p>
         ) : showSetup ? (
@@ -230,8 +237,10 @@ export default function App() {
           />
         ) : view === "fleet" ? (
           <Fleet onReconfigure={() => setReconfiguring(true)} />
-        ) : (
+        ) : view === "attribution" ? (
           <Attribution />
+        ) : (
+          <Footprint />
         )}
       </main>
     </div>

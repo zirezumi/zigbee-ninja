@@ -60,6 +60,20 @@ _MIGRATIONS = [
     );
     CREATE INDEX idx_attribution_10s_ts ON attribution_10s (ts);
     """,
+    """
+    CREATE TABLE tiles (
+        capability     TEXT NOT NULL,
+        target         TEXT NOT NULL,
+        status         TEXT NOT NULL,
+        granted_at     REAL,
+        deployed_at    REAL,
+        revoked_at     REAL,
+        version        TEXT,
+        last_health_at REAL,
+        detail         TEXT,
+        PRIMARY KEY (capability, target)
+    );
+    """,
 ]
 
 

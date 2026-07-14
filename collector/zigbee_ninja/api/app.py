@@ -37,6 +37,11 @@ class BrokerSettings(BaseModel):
     password: str | None = None
 
 
+class TileAction(BaseModel):
+    capability: str
+    target: str
+
+
 def _set_session_cookie(response: Response, token: str) -> None:
     response.set_cookie(
         SESSION_COOKIE,
@@ -153,6 +158,40 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
         require_user(request)
         return {"instances": engine.registry.snapshot()}
 
+    @app.get("/api/tiles")
+    def tiles_list(request: Request) -> dict:
+        require_user(request)
+        bases = [instance["base_topic"] for instance in engine.registry.snapshot()]
+        return {"tiles": engine.tiles.list(bases, engine.probes.stats())}
+
+    @app.post("/api/tiles/deploy")
+    async def tiles_deploy(request: Request, action: TileAction) -> dict:
+        require_user(request)
+        if action.capability != "z2m_extension":
+            raise HTTPException(status_code=400, detail="Unknown tile capability")
+        try:
+            return await engine.tiles.deploy_extension(action.target)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/tiles/revoke")
+    async def tiles_revoke(request: Request, action: TileAction) -> dict:
+        require_user(request)
+        if action.capability != "z2m_extension":
+            raise HTTPException(status_code=400, detail="Unknown tile capability")
+        try:
+            return await engine.tiles.revoke_extension(action.target)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/tiles/revoke_all")
+    async def tiles_revoke_all(request: Request) -> dict:
+        require_user(request)
+        try:
+            return {"revoked": await engine.tiles.revoke_all()}
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
     @app.get("/api/attribution/summary")
     def attribution_summary(request: Request, seconds: int = 3600) -> dict:
         require_user(request)
@@ -183,6 +222,8 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
                         "broker": engine.ingest_status(),
                         "instances": engine.registry.snapshot(),
                         "rates": engine.rates.snapshot(),
+                        "latency": engine.probes.latency.snapshot(),
+                        "probes": engine.probes.stats(),
                     }
                 )
                 await asyncio.sleep(1)

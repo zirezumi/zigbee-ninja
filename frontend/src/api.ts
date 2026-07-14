@@ -49,11 +49,46 @@ export interface InstanceInfo {
 
 export type RatesSnapshot = Record<string, Record<string, number>>;
 
+export interface LatencyStats {
+  count: number;
+  p50_ms: number;
+  p95_ms: number;
+}
+
+export interface ProbeStats {
+  last_heartbeat_at: number | null;
+  version: string | null;
+  enabled: boolean | null;
+  hooks: string[];
+  counters: Record<string, number>;
+  seq_gaps: number;
+}
+
 export interface FleetMessage {
   ts: number;
   broker: BrokerStatus;
   instances: InstanceInfo[];
   rates: RatesSnapshot;
+  latency: Record<string, LatencyStats>;
+  probes: Record<string, ProbeStats>;
+}
+
+export interface Tile {
+  capability: string;
+  target: string;
+  status: string;
+  version: string | null;
+  bundled_version: string;
+  health: string | null;
+  drift: boolean;
+  detail: string | null;
+  probe: {
+    version: string | null;
+    hooks: string[];
+    counters: Record<string, number>;
+    seq_gaps: number;
+    last_heartbeat_at: number | null;
+  };
 }
 
 export interface TopTarget {

@@ -20,14 +20,23 @@ tracking with 10s rollups, live fleet view over WebSocket) — done.
 M2 (attribution v1: T0 command chains with group expansion + provoked/autonomous
 classification, T0.5 Mosquitto `$SYS/broker/log` client correlation, redundant-
 command detector, `chains` + `attribution_10s` tables, attribution explorer
-view) — done. NOT yet soaked against a live broker; the Mosquitto debug-log
-format match is fixture-tested only — verify on the real broker at deploy time.
-Next: **M3** — Z2M extension probe (deploy/remove over MQTT), permission
-tiles + footprint UX, queue latency, self-accounting; opening spike S3 =
-extension hook inventory. Also M1 leftovers: commit `frontend/package-lock.json`
-and flip CI + Dockerfile to `npm ci` (two TODO(M1) markers). Deploy-to-LXC +
-live-broker soak is pending and needs broker credentials. Roadmap: README.md.
-Spikes S1–S3 gate M3/M4 (DESIGN §19).
+view) — done.
+M3 (T1: defensive single-file extension probe in
+`collector/zigbee_ninja/probe_assets/` deployed/revoked over
+`bridge/request/extension/save|remove` with transaction-correlated responses;
+`tiles` table + TileManager lifecycle w/ heartbeat health/drift + revoke-all;
+Footprint view; probe ingest w/ seq-gap accounting; T1 command→response latency
+on the probe's own clock, surfaced on fleet cards; MQTT publish path with
+`self` class accounting) — done. Spike S3 is answered EMPIRICALLY: the probe
+heartbeat self-reports its attached hook inventory, shown on the Footprint page.
+NOTHING M1–M3 is live-broker-soaked yet — the probe has never run inside a real
+Z2M instance (CI only does `node --check`); first deploy must watch the
+heartbeat hooks list + Z2M log.
+Next: **M4** — ninja-tap agent + TCP reassembly + ASH/EZSP decode (spike S1
+FIRST: capture a live coordinator flow and decode offline before committing;
+S2 counters route) + T1/T2 fusion. Also M1 leftovers: commit
+`frontend/package-lock.json`, flip CI + Dockerfile to `npm ci`. Deploy-to-LXC +
+live-broker soak pending (needs broker credentials). Roadmap: README.md.
 
 ## Hard rules
 
