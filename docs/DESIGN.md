@@ -290,6 +290,16 @@ instructions surfaced.
 - **Clean-room constraint:** ported from zigbee-herdsman (MIT) semantics or
   written from the Silicon Labs UG100 spec — never from bellows/zigpy (GPL, §16).
   Golden pcap fixtures anchor the test suite (spike S1).
+- **Deep parameter decode** (`decode/ezsp_params.py`) covers exactly the frames
+  the capacity and latency models need: the send paths, `messageSentHandler`,
+  `incomingMessageHandler` (APS frame, sender, per-frame LQI/RSSI), route
+  records, network-status/route-error callbacks, and counter-read responses.
+  Field layouts are pinned **empirically against live captures** (EZSP v14-era
+  encoding: 32-bit `sl_status`, 16-bit message tags, rx-packet-info struct) and
+  every parser self-checks the frame's internal length arithmetic — a firmware
+  layout change degrades to a visible `layout_mismatch` counter, never to
+  silently wrong numbers. v13-era layouts are added only when pinned against a
+  real v13 capture.
 
 ### §7.4 HA integration
 
@@ -387,9 +397,18 @@ airtime(frame) = (6 PHY-overhead bytes + PSDU_len) × 32 µs
               + CSMA backoff expectation (calibrated factor)
 ```
 
-PSDU length is exact at T2/T3 (`measured`), reconstructed from ZCL payload +
-deterministic header/security-overhead arithmetic at T1 (near-exact), and
-estimated via a payload→ZCL mapping table at T0 (`inferred`).
+PSDU length is reconstructed from the exact APS payload length at T2 plus
+deterministic MAC/NWK/APS header + security overhead arithmetic (provenance
+`reconstructed`; truly `measured` bytes arrive only with T3). Two documented
+approximations: TX unicasts from a concentrator may carry a source-route
+subframe the EZSP boundary can't see (TX PSDUs are lower bounds), and RX
+airtime counts the final hop only until topology-based hop expansion lands.
+The CSMA-backoff term above defaults to **0 µs before calibration**: mean
+backoff is idle listening rather than channel occupancy, and η<sub>CSMA</sub>
+in denominator 1 already discounts CSMA overhead — calibration may later move
+cost between the two knobs, never double-count it. At T1 the same
+reconstruction applies to ZCL payload sizes (near-exact); T0 estimates via a
+payload→ZCL mapping table (`inferred`).
 
 **Unicast cost:** `hops × (frame + ACK + IFS) × (1 + retry_rate)`. Hop counts
 come from topology snapshots (parent/route data); unknown routes default to a

@@ -27,6 +27,13 @@ FRAME_NAMES = {
     0x0038: "sendMulticast",
     0x003F: "messageSentHandler",
     0x0045: "incomingMessageHandler",
+    # The three below were identified structurally against live captures: route
+    # records sweep the 13+2*relayCount length check, and the route-error /
+    # network-status pair fire together with matching targets (sl_status
+    # 0x0C14 delivery-failed + NWK status codes like 0x0c many-to-one failure).
+    0x0059: "incomingRouteRecordHandler",
+    0x0080: "incomingRouteErrorHandler",
+    0x00C4: "incomingNetworkStatusHandler",
     0x0065: "readAndClearCounters",
     0x00F1: "readCounters",
 }
