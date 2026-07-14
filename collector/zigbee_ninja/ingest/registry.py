@@ -169,6 +169,15 @@ class Registry:
     def groups(self, base: str) -> list[dict]:
         return list(self._groups.get(base, []))
 
+    def instance_for_endpoint(self, ip: str, port: int) -> str | None:
+        """Base topic whose coordinator adapter is at tcp://ip:port (for T2 flows)."""
+        needle = f"{ip}:{port}"
+        for base, instance in self._instances.items():
+            adapter = instance.get("adapter_port") or ""
+            if adapter.startswith("tcp://") and adapter[len("tcp://") :] == needle:
+                return base
+        return None
+
     def group_members(self, base: str, group_name: str) -> list[str]:
         """Friendly names of a group's member devices; [] for non-group targets."""
         ieee_map = self._ieee_to_name.get(base, {})

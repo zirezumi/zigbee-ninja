@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
 import time
 
 from ..attribution.chains import ChainTracker, parse_command
@@ -14,6 +15,7 @@ from .mqtt import BrokerConfig, MqttIngest
 from .probe import ProbeIngest
 from .rates import GLOBAL, ROLLUP_SECONDS, RateTracker, classify
 from .registry import Registry
+from .tap import TapIngest
 
 ROLLUP_RETENTION_SECONDS = 14 * 24 * 3600  # 10s tiers keep two weeks (DESIGN.md §12)
 CHAIN_RETENTION_SECONDS = 48 * 3600  # chain detail keeps 48h (DESIGN.md §12)
@@ -32,9 +34,18 @@ class Engine:
             resolve_members=self._resolve_members, on_heartbeat=self._on_probe_heartbeat
         )
         self.tiles = TileManager(db, publisher=self.publish)
+        self.tap = TapIngest(resolve_instance=self.registry.instance_for_endpoint)
         self._ingest: MqttIngest | None = None
         self._ingest_task: asyncio.Task | None = None
         self._flush_task: asyncio.Task | None = None
+
+    def tap_token(self) -> str:
+        """Long-lived token a ninja-tap agent presents to stream (generated once)."""
+        token = self._config.get("tap_token")
+        if not token:
+            token = secrets.token_urlsafe(24)
+            self._config.set("tap_token", token)
+        return token
 
     def _resolve_members(self, instance: str, target: str) -> list[str]:
         return self.registry.group_members(instance, target)

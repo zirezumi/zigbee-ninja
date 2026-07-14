@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 from contextlib import asynccontextmanager
@@ -206,6 +207,52 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
         engine.flush_rollups()
         return {"redundant": attribution_queries.redundant(db, seconds)}
 
+    @app.get("/api/tap")
+    def tap_info(request: Request) -> dict:
+        require_user(request)
+        return {
+            "token": engine.tap_token(),
+            "stats": engine.tap.stats(),
+        }
+
+    @app.websocket("/api/ws/tap")
+    async def ws_tap(websocket: WebSocket) -> None:
+        # Agent auth: Bearer token in the Authorization header (outbound-only,
+        # per-collector token). Not a browser session — this is a capture agent.
+        auth_header = websocket.headers.get("authorization", "")
+        token = auth_header[7:] if auth_header.lower().startswith("bearer ") else ""
+        if not token or token != engine.tap_token():
+            await websocket.close(code=4401)
+            return
+        await websocket.accept()
+        agent_id = f"{websocket.client.host}:{websocket.client.port}"
+        registered = False
+        try:
+            while True:
+                message = await websocket.receive()
+                if message.get("type") == "websocket.disconnect":
+                    break
+                text = message.get("text")
+                if text is not None:  # JSON hello frame
+                    try:
+                        meta = json.loads(text)
+                    except ValueError:
+                        meta = {}
+                    if meta.get("type") == "hello":
+                        engine.tap.register_agent(agent_id, meta)
+                        registered = True
+                    continue
+                data = message.get("bytes")
+                if data:
+                    if not registered:
+                        engine.tap.register_agent(agent_id, {})
+                        registered = True
+                    engine.tap.feed(agent_id, data)
+        except WebSocketDisconnect:
+            pass
+        finally:
+            engine.tap.drop_agent(agent_id)
+
     @app.websocket("/api/ws/fleet")
     async def ws_fleet(websocket: WebSocket) -> None:
         token = websocket.cookies.get(SESSION_COOKIE)
@@ -224,6 +271,7 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
                         "rates": engine.rates.snapshot(),
                         "latency": engine.probes.latency.snapshot(),
                         "probes": engine.probes.stats(),
+                        "tap": engine.tap.stats(),
                     }
                 )
                 await asyncio.sleep(1)
