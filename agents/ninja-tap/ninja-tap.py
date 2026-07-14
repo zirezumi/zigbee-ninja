@@ -159,7 +159,8 @@ def stream(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--collector", required=True, help="ws://host:port/api/ws/tap")
-    parser.add_argument("--token", required=True)
+    parser.add_argument("--token", help="agent token (prefer --token-file for systemd)")
+    parser.add_argument("--token-file", help="path to a file containing the agent token")
     parser.add_argument("--filter", default="tcp port 6638", help="BPF filter")
     parser.add_argument("--iface", default=None, help="capture interface (auto if omitted)")
     parser.add_argument("--sample-host", default="192.168.1.71",
@@ -167,6 +168,12 @@ def main() -> None:
     parser.add_argument("--name", default=socket.gethostname())
     parser.add_argument("--snaplen", type=int, default=2048)
     args = parser.parse_args()
+
+    if args.token_file:
+        with open(args.token_file) as fh:
+            args.token = fh.read().strip()
+    if not args.token:
+        parser.error("one of --token or --token-file is required")
 
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
     while True:
