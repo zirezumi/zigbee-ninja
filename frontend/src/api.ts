@@ -73,6 +73,16 @@ export interface FleetMessage {
   probes: Record<string, ProbeStats>;
 }
 
+export interface HaView {
+  configured: boolean;
+  url?: string;
+  status: {
+    state: string;
+    error?: string | null;
+    counters?: Record<string, number>;
+  };
+}
+
 export interface Tile {
   capability: string;
   target: string;

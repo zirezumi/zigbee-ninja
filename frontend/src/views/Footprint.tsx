@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { api, ApiError, Tile } from "../api";
+import { FormEvent, useCallback, useEffect, useState } from "react";
+import { api, ApiError, HaView, Tile } from "../api";
 
 const CAPABILITY_LABELS: Record<string, string> = {
   z2m_extension: "Z2M extension probe (T1)",
@@ -24,6 +24,109 @@ function statusChip(tile: Tile): { label: string; className: string } {
     default:
       return { label: "not deployed", className: "chip" };
   }
+}
+
+function HaCard() {
+  const [view, setView] = useState<HaView | null>(null);
+  const [url, setUrl] = useState("");
+  const [token, setToken] = useState("");
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      const data = await api<HaView>("/api/ha");
+      setView(data);
+      if (data.url) setUrl(data.url);
+    } catch {
+      /* card stays in loading state */
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+    const interval = window.setInterval(() => void refresh(), 10000);
+    return () => window.clearInterval(interval);
+  }, [refresh]);
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await api("/api/ha", { method: "POST", body: JSON.stringify({ url, token }) });
+      setToken("");
+      setEditing(false);
+      void refresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Unable to reach the collector");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const state = view?.status.state ?? "…";
+  const counters = view?.status.counters;
+
+  return (
+    <div className="panel">
+      <p className="panel-kicker">Home Assistant integration (per-automation attribution)</p>
+      <p className="hint">
+        A read-only WebSocket subscription resolves each <code>mqtt.publish</code> to the
+        automation or script that fired it, naming commanders in the Attribution explorer.
+        Broker-safe: no broker changes, no write access to HA. Create a long-lived token in
+        HA (Profile → Security → Long-lived access tokens) and paste it here — it is stored
+        in the collector's data volume and never displayed again.
+      </p>
+      {view?.configured && !editing ? (
+        <p>
+          <span className={state === "connected" ? "chip ok" : "chip warn"}>
+            {state}
+            {view.status.error ? ` — ${view.status.error}` : ""}
+          </span>{" "}
+          <span className="mono">{view.url}</span>
+          {counters && (
+            <span className="hint">
+              {" "}
+              · {counters.publishes ?? 0} publishes seen, {counters.named ?? 0} named
+            </span>
+          )}{" "}
+          <button className="ghost small" onClick={() => setEditing(true)}>
+            Reconfigure
+          </button>
+        </p>
+      ) : (
+        <form className="stack" onSubmit={(event) => void handleSubmit(event)}>
+          <div className="row">
+            <label className="grow">
+              HA URL
+              <input
+                value={url}
+                onChange={(event) => setUrl(event.target.value)}
+                placeholder="http://homeassistant.local:8123"
+                required
+              />
+            </label>
+          </div>
+          <label>
+            Long-lived access token
+            <input
+              type="password"
+              value={token}
+              onChange={(event) => setToken(event.target.value)}
+              autoComplete="off"
+              required
+            />
+          </label>
+          {error && <p className="error">{error}</p>}
+          <button type="submit" disabled={busy || !url || !token}>
+            {busy ? "Testing connection…" : "Connect"}
+          </button>
+        </form>
+      )}
+    </div>
+  );
 }
 
 export default function Footprint() {
@@ -68,6 +171,7 @@ export default function Footprint() {
 
   return (
     <>
+      <HaCard />
       <div className="panel">
         <p className="panel-kicker">Every foothold, listed and revocable</p>
         <p className="hint">

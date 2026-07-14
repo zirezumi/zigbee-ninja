@@ -294,11 +294,18 @@ instructions surfaced.
 ### §7.4 HA integration
 
 With a long-lived token, the collector subscribes to HA's WebSocket event stream
-(service calls, automation/script triggers, state changes with context ids) and
-pulls the entity/device/area registries. Combined with T0.5's client attribution,
-an HA-client command resolves to *automation X / script Y / UI user Z*, and
-Zigbee devices gain HA area/name enrichment. Exactly two capabilities, both
-optional: commander resolution and friendly naming.
+(`automation_triggered`, `script_started`, `call_service`). An `mqtt.publish`
+service call carries its target topic; its context id (or parent context)
+resolves to the automation/script run that fired it, so a chain's commander
+becomes *automation X / script Y / UI user Z*.
+
+**This is the primary commander-attribution path** — the broker-safe replacement
+for T0.5, which cannot deliver per-PUBLISH client ids over MQTT on Mosquitto
+(see §4 T0.5). It is read-only against HA (no writes, no broker change) and
+strictly more informative than a client id on a single-controller install.
+Implemented in `ingest/hacontrol.py`; the commander it resolves takes precedence
+over any broker-log client id in the chain builder. Device area/name enrichment
+via the HA registries is a later add-on to the same connection.
 
 ## §8 Event pipeline & time model
 

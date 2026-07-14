@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from .. import __version__
 from ..attribution import queries as attribution_queries
 from ..ingest.engine import Engine
+from ..ingest.hacontrol import HaConfig, test_ha
 from ..ingest.mqtt import BrokerConfig, test_connection
 from ..store.config import ConfigStore
 from ..store.db import Database
@@ -41,6 +42,11 @@ class BrokerSettings(BaseModel):
 class TileAction(BaseModel):
     capability: str
     target: str
+
+
+class HaSettings(BaseModel):
+    url: str
+    token: str
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
@@ -206,6 +212,25 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
         seconds = max(60, min(seconds, MAX_QUERY_WINDOW_SECONDS))
         engine.flush_rollups()
         return {"redundant": attribution_queries.redundant(db, seconds)}
+
+    @app.get("/api/ha")
+    def ha_get(request: Request) -> dict:
+        require_user(request)
+        stored = engine.ha_config()
+        view: dict = {"configured": stored is not None, "status": engine.ha_status()}
+        if stored is not None:
+            view.update(stored.public_dict())  # token never echoed
+        return view
+
+    @app.post("/api/ha")
+    async def ha_set(request: Request, settings: HaSettings) -> dict:
+        require_user(request)
+        candidate = HaConfig(url=settings.url.rstrip("/"), token=settings.token)
+        error = await test_ha(candidate)
+        if error is not None:
+            raise HTTPException(status_code=400, detail=f"HA connection failed: {error}")
+        await engine.apply_ha_config(settings.model_dump())
+        return {"configured": True, "url": candidate.url, "status": engine.ha_status()}
 
     @app.get("/api/tap")
     def tap_info(request: Request) -> dict:

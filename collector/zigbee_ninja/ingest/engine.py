@@ -11,6 +11,7 @@ from ..store.config import ConfigStore
 from ..store.db import Database
 from ..tiles import TileManager
 from .brokerlog import LOG_TOPIC_PREFIX, BrokerLogCorrelator
+from .hacontrol import HaAttribution, HaConfig, HaLink
 from .mqtt import BrokerConfig, MqttIngest
 from .probe import ProbeIngest
 from .rates import GLOBAL, ROLLUP_SECONDS, RateTracker, classify
@@ -35,6 +36,9 @@ class Engine:
         )
         self.tiles = TileManager(db, publisher=self.publish)
         self.tap = TapIngest(resolve_instance=self.registry.instance_for_endpoint)
+        self.ha_attr = HaAttribution()
+        self._ha_link: HaLink | None = None
+        self._ha_task: asyncio.Task | None = None
         self._ingest: MqttIngest | None = None
         self._ingest_task: asyncio.Task | None = None
         self._flush_task: asyncio.Task | None = None
@@ -70,9 +74,10 @@ class Engine:
     async def start(self) -> None:
         self._flush_task = asyncio.create_task(self._flush_loop())
         await self.restart_ingest()
+        await self.restart_ha()
 
     async def stop(self) -> None:
-        for task in (self._ingest_task, self._flush_task):
+        for task in (self._ingest_task, self._flush_task, self._ha_task):
             if task is not None:
                 task.cancel()
                 try:
@@ -81,6 +86,7 @@ class Engine:
                     pass
         self._ingest_task = None
         self._flush_task = None
+        self._ha_task = None
 
     async def restart_ingest(self) -> None:
         if self._ingest_task is not None:
@@ -100,6 +106,45 @@ class Engine:
         # TODO(DESIGN.md §15): encrypt secrets at rest before the M6 hardening pass.
         self._config.set("broker", data)
         await self.restart_ingest()
+
+    # -- HA integration (per-automation attribution) ---------------------------
+
+    def ha_config(self) -> HaConfig | None:
+        data = self._config.get("ha")
+        return HaConfig.from_dict(data) if data else None
+
+    async def restart_ha(self) -> None:
+        if self._ha_task is not None:
+            self._ha_task.cancel()
+            try:
+                await self._ha_task
+            except asyncio.CancelledError:
+                pass
+            self._ha_task = None
+            self._ha_link = None
+        config = self.ha_config()
+        if config is not None:
+            self._ha_link = HaLink(config, self.ha_attr, self._on_ha_publish)
+            self._ha_task = asyncio.create_task(self._ha_link.run())
+
+    async def apply_ha_config(self, data: dict) -> None:
+        # TODO(DESIGN.md §15): encrypt secrets at rest before the M6 hardening pass.
+        self._config.set("ha", data)
+        await self.restart_ha()
+
+    def ha_status(self) -> dict:
+        if self._ha_link is None:
+            return {"state": "unconfigured", "error": None, "connected_since": None}
+        return {**self._ha_link.status, "counters": dict(self.ha_attr.counters)}
+
+    def _on_ha_publish(self, topic: str, commander: str) -> None:
+        """Backfill: HA told us who published `topic`; name any open chain."""
+        base = self.registry.base_for(topic)
+        if base is None:
+            return
+        command = parse_command(topic[len(base) + 1 :])
+        if command is not None:
+            self.chains.attribute_client(base, command[0], commander)
 
     # -- data path -----------------------------------------------------------
 
@@ -133,7 +178,8 @@ class Engine:
             command = parse_command(suffix)
             if command is not None:
                 target, verb = command
-                client = self.brokerlog.client_for(topic)
+                # HA attribution (automation name) beats broker client-id.
+                client = self.ha_attr.name_for(topic) or self.brokerlog.client_for(topic)
                 self.chains.on_command(base, target, verb, payload, client=client)
                 self.class_rates.record(base, "commanded")
         elif kind == "state":

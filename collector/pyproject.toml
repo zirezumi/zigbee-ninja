@@ -14,6 +14,7 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "argon2-cffi>=23.1",
     "aiomqtt>=2.1",
+    "websockets>=13",
 ]
 
 [project.optional-dependencies]
