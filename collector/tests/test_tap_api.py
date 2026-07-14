@@ -35,6 +35,33 @@ def test_tap_ws_rejects_bad_token(client):
             pass
 
 
+def test_airtime_requires_auth(client):
+    assert client.get("/api/airtime").status_code == 401
+
+
+def test_airtime_endpoint_aggregates_stored_windows(client):
+    import time
+
+    authed(client)
+    conn = client.app.state.db.connect()
+    now = int(time.time())
+    conn.execute(
+        "INSERT INTO airtime_10s VALUES (?, 'z2m-test', 'tx_unicast', 27200.0, 10)",
+        (now - 20,),
+    )
+    conn.execute(
+        "INSERT INTO airtime_10s VALUES (?, 'z2m-test', 'rx', 2784.0, 1)", (now - 20,)
+    )
+    conn.commit()
+
+    data = client.get("/api/airtime?seconds=600").json()
+    instance = data["instances"]["z2m-test"]
+    assert instance["buckets"]["tx_unicast"] == {"airtime_us": 27200.0, "frames": 10}
+    assert instance["us_per_s"] == round((27200.0 + 2784.0) / 600, 1)
+    assert instance["budget_pct"] > 0
+    assert instance["provenance"] == "reconstructed"
+
+
 def test_tap_ws_ingests_pcap_stream(client):
     authed(client)
     engine = client.app.state.engine

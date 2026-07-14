@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from .. import __version__
 from ..attribution import queries as attribution_queries
+from ..capacity import airtime as airtime_model
 from ..ingest.engine import Engine
 from ..ingest.hacontrol import HaConfig, test_ha
 from ..ingest.mqtt import BrokerConfig, test_connection
@@ -212,6 +213,34 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
         seconds = max(60, min(seconds, MAX_QUERY_WINDOW_SECONDS))
         engine.flush_rollups()
         return {"redundant": attribution_queries.redundant(db, seconds)}
+
+    @app.get("/api/airtime")
+    def airtime_series(request: Request, seconds: int = 3600) -> dict:
+        require_user(request)
+        seconds = max(60, min(seconds, MAX_QUERY_WINDOW_SECONDS))
+        engine.flush_rollups()
+        since = int(time.time()) - seconds
+        rows = db.connect().execute(
+            "SELECT instance, bucket, SUM(airtime_us) AS airtime_us, SUM(frames) AS frames "
+            "FROM airtime_10s WHERE ts >= ? GROUP BY instance, bucket",
+            (since,),
+        ).fetchall()
+        instances: dict = {}
+        for row in rows:
+            view = instances.setdefault(row["instance"], {"buckets": {}})
+            view["buckets"][row["bucket"]] = {
+                "airtime_us": row["airtime_us"],
+                "frames": row["frames"],
+            }
+        for view in instances.values():
+            us_per_s = sum(b["airtime_us"] for b in view["buckets"].values()) / seconds
+            view["us_per_s"] = round(us_per_s, 1)
+            view["airtime_pct"] = round(us_per_s / 1_000_000.0 * 100.0, 3)
+            view["budget_pct"] = round(
+                us_per_s / airtime_model.CHANNEL_BUDGET_US_PER_S * 100.0, 3
+            )
+            view["provenance"] = airtime_model.PROVENANCE
+        return {"window_seconds": seconds, "instances": instances}
 
     @app.get("/api/ha")
     def ha_get(request: Request) -> dict:

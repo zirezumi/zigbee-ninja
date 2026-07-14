@@ -169,6 +169,11 @@ class Registry:
     def groups(self, base: str) -> list[dict]:
         return list(self._groups.get(base, []))
 
+    def router_count_for(self, base: str) -> int:
+        """Router census for the mesh-amplification model (0 until discovered)."""
+        instance = self._instances.get(base)
+        return int(instance.get("router_count") or 0) if instance else 0
+
     def instance_for_endpoint(self, ip: str, port: int) -> str | None:
         """Base topic whose coordinator adapter is at tcp://ip:port (for T2 flows)."""
         needle = f"{ip}:{port}"

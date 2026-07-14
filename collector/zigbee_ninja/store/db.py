@@ -74,6 +74,17 @@ _MIGRATIONS = [
         PRIMARY KEY (capability, target)
     );
     """,
+    """
+    CREATE TABLE airtime_10s (
+        ts         INTEGER NOT NULL,
+        instance   TEXT NOT NULL,
+        bucket     TEXT NOT NULL,
+        airtime_us REAL NOT NULL,
+        frames     INTEGER NOT NULL,
+        PRIMARY KEY (ts, instance, bucket)
+    );
+    CREATE INDEX idx_airtime_10s_ts ON airtime_10s (ts);
+    """,
 ]
 
 

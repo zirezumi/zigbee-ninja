@@ -35,7 +35,10 @@ class Engine:
             resolve_members=self._resolve_members, on_heartbeat=self._on_probe_heartbeat
         )
         self.tiles = TileManager(db, publisher=self.publish)
-        self.tap = TapIngest(resolve_instance=self.registry.instance_for_endpoint)
+        self.tap = TapIngest(
+            resolve_instance=self.registry.instance_for_endpoint,
+            router_count=self.registry.router_count_for,
+        )
         self.ha_attr = HaAttribution()
         self._ha_link: HaLink | None = None
         self._ha_task: asyncio.Task | None = None
@@ -229,6 +232,18 @@ class Engine:
                 "DELETE FROM attribution_10s WHERE ts < ?", (now - ROLLUP_RETENTION_SECONDS,)
             )
             written += len(class_rows)
+
+        airtime_rows = self.tap.airtime.drain_completed_windows()
+        if airtime_rows:
+            conn.executemany(
+                "INSERT OR REPLACE INTO airtime_10s (ts, instance, bucket, airtime_us, frames) "
+                "VALUES (?, ?, ?, ?, ?)",
+                airtime_rows,
+            )
+            conn.execute(
+                "DELETE FROM airtime_10s WHERE ts < ?", (now - ROLLUP_RETENTION_SECONDS,)
+            )
+            written += len(airtime_rows)
 
         finalized = self.chains.drain_finalized()
         if finalized:
