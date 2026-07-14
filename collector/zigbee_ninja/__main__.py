@@ -13,6 +13,11 @@ def main() -> None:
         app,
         host=os.environ.get("ZN_HOST", "0.0.0.0"),
         port=int(os.environ.get("ZN_PORT", "8686")),
+        # The ninja-tap agent is a stdlib-only client that streams continuously
+        # and does not answer WS control pings; disable server-initiated pings so
+        # a live tap is not dropped every ping_timeout. Dead connections still
+        # surface via TCP on the next send.
+        ws_ping_interval=None,
     )
 
 

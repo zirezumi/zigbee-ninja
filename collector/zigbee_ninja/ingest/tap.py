@@ -73,9 +73,16 @@ class TapIngest:
             return
         agent = self.agents[agent_id]
         agent["bytes"] += len(data)
-        for segment in reader.feed(data):
-            agent["segments"] += 1
-            self._on_segment(segment)
+        try:
+            for segment in reader.feed(data):
+                agent["segments"] += 1
+                self._on_segment(segment)
+        except Exception:
+            # A malformed stream (e.g. a reconnect that skipped the pcap header)
+            # must never crash the WS handler. Reset this agent's reader so the
+            # next fresh session re-syncs on its global header.
+            agent["reader_resets"] = agent.get("reader_resets", 0) + 1
+            self._readers[agent_id] = StreamingPcapReader()
 
     def _flow_for(self, segment) -> FlowState | None:
         # Identify which endpoint is the coordinator (the tapped port side).

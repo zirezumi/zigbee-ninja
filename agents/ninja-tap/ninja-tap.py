@@ -26,7 +26,7 @@ import subprocess
 import sys
 import time
 
-RING_BYTES = 4 * 1024 * 1024  # local backlog cap when the collector is unreachable
+RECONNECT_BACKOFF = 2  # seconds between capture sessions
 
 
 def log(msg: str) -> None:
@@ -114,6 +114,13 @@ class Collector:
 
 
 def stream(args: argparse.Namespace) -> None:
+    """One capture session: connect, THEN start tcpdump so this collector
+
+    connection receives a fresh pcap global header, and stream until either
+    side drops. A disconnect returns so the outer loop restarts the whole
+    session (fresh header again) — the collector's per-connection pcap reader
+    never sees headerless mid-stream bytes.
+    """
     iface = args.iface or pick_iface(args.sample_host)
     meta = {
         "agent": args.name,
@@ -122,54 +129,31 @@ def stream(args: argparse.Namespace) -> None:
         "pcap_snaplen": args.snaplen,
         "started_at": time.time(),
     }
+
+    collector = Collector(args.collector, args.token, meta)
+    collector.connect()  # OSError here bubbles to main()'s backoff
+    log("connected to collector")
+
     tcpdump = subprocess.Popen(
         ["tcpdump", "-i", iface, "-w", "-", "-U", "-s", str(args.snaplen), args.filter],
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
     )
     log(f"capturing on {iface}: {args.filter}")
-
-    backlog = bytearray()
-    collector: Collector | None = None
     assert tcpdump.stdout is not None
-
-    def flush(collector: Collector) -> None:
-        if backlog:
-            collector.send_binary(bytes(backlog))
-            backlog.clear()
-
     try:
         while True:
             chunk = tcpdump.stdout.read(16384)
             if not chunk:
-                break
-            if collector is None:
-                try:
-                    collector = Collector(args.collector, args.token, meta)
-                    collector.connect()
-                    log("connected to collector")
-                except OSError as exc:
-                    if len(backlog) < RING_BYTES:
-                        backlog += chunk
-                    else:  # drop oldest, account for loss
-                        meta["dropped_bytes"] = meta.get("dropped_bytes", 0) + len(chunk)
-                    log(f"collector unreachable ({exc}); buffering {len(backlog)}B")
-                    time.sleep(2)
-                    continue
+                return
             try:
-                if backlog:
-                    flush(collector)
                 collector.send_binary(chunk)
             except OSError as exc:
-                log(f"send failed ({exc}); will reconnect")
-                collector.close()
-                collector = None
-                if len(backlog) < RING_BYTES:
-                    backlog += chunk
+                log(f"collector dropped ({exc}); restarting capture")
+                return
     finally:
         tcpdump.terminate()
-        if collector is not None:
-            collector.close()
+        collector.close()
 
 
 def main() -> None:
@@ -190,9 +174,9 @@ def main() -> None:
             stream(args)
         except KeyboardInterrupt:
             return
-        except Exception as exc:  # noqa: BLE001 - agent must survive tcpdump restarts
-            log(f"capture loop error ({exc}); restarting in 3s")
-            time.sleep(3)
+        except Exception as exc:  # noqa: BLE001 - agent must survive tcpdump/collector drops
+            log(f"session error ({exc})")
+        time.sleep(RECONNECT_BACKOFF)
 
 
 if __name__ == "__main__":

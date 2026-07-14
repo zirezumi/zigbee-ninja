@@ -50,3 +50,16 @@ def test_drop_agent_clears_reader():
     tap.drop_agent("agent-1")
     assert tap.stats()["agents"] == 0
     tap.feed("agent-1", b"ignored")  # must not raise
+
+
+def test_headerless_stream_resets_reader_without_crashing():
+    # A reconnect that skips the pcap global header (bad magic) must not crash
+    # the handler; the reader resets and later re-syncs on a fresh header.
+    tap = TapIngest(resolve_instance=resolve)
+    tap.register_agent("agent-1", {})
+    tap.feed("agent-1", b"\xde\xad\xbe\xef" * 8)  # not a pcap header
+    assert tap.agents["agent-1"]["reader_resets"] >= 1
+
+    pcap, _ = conversation()
+    tap.feed("agent-1", pcap)  # fresh header re-syncs
+    assert tap.stats()["flows"][0]["instance"] == "z2m-test"
