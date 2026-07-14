@@ -28,8 +28,9 @@ def test_parse_extended_frames():
     assert callback.is_callback is True
 
 
-def test_stream_switches_format_after_version_negotiation():
-    stream = EzspStream()
+def test_legacy_stream_switches_format_after_version_negotiation():
+    # Legacy-first path (old NCPs): explicitly opt out of the extended default.
+    stream = EzspStream(default_extended=False)
     assert stream.feed(LEGACY_VERSION_CMD).header_format == "legacy"
     assert stream.feed(LEGACY_VERSION_RSP).header_format == "legacy"
     assert stream.protocol_version == 13
@@ -38,6 +39,20 @@ def test_stream_switches_format_after_version_negotiation():
     frame = stream.feed(EXT_SEND_UNICAST)
     assert frame.header_format == "extended"
     assert frame.name == "sendUnicast"
+
+
+def test_stream_defaults_to_extended_for_midstream_capture():
+    # A passive capture of an already-running modern link never sees the
+    # handshake, yet must decode extended frames from the first byte
+    # (validated against a live SLZB-06MG24 capture in spike S1).
+    stream = EzspStream()
+    frame = stream.feed(EXT_SEND_UNICAST)
+    assert frame.header_format == "extended"
+    assert frame.name == "sendUnicast"
+
+    callback = stream.feed(EXT_INCOMING_CB)
+    assert callback.name == "incomingMessageHandler"
+    assert callback.is_callback is True
 
 
 def test_unknown_frame_id_gets_hex_label():

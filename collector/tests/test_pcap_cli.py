@@ -82,6 +82,8 @@ def test_end_to_end_synthetic_capture(tmp_path):
     assert len(report["connections"]) == 1
     conn = report["connections"][0]
 
+    # Legacy version handshake is present in this synthetic capture, so the
+    # stream negotiates down from the extended default and reads the version.
     assert conn["protocol_version"] == 13
     assert conn["ezsp_frames"] == {
         "version": 2,

@@ -1,0 +1,5 @@
+# Raw captures contain live LAN addresses and device data — never commit them
+# to the public repo (CLAUDE.md hygiene rules). Sanitized fixtures, if any, are
+# added explicitly with `git add -f`.
+*.pcap
+*.pcapng

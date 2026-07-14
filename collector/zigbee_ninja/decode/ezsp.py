@@ -80,19 +80,39 @@ def parse_extended(payload: bytes) -> EzspFrame | None:
 
 
 class EzspStream:
-    """Per-connection EZSP parser: legacy until a version response negotiates ≥8."""
+    """Per-connection EZSP parser.
 
-    def __init__(self):
+    Header format cannot be assumed from a passive mid-stream capture: the link
+    may already be running the extended (v8+) header long before we observe any
+    version handshake. Since every modern Ember NCP negotiates v8+ (SLZB, Sonoff
+    ZBDongle-E, SkyConnect all run v13+), the stream *defaults to extended* and
+    only drops to legacy if a legacy-format version exchange is actually seen —
+    validated against a live SLZB-06MG24 capture in spike S1.
+    """
+
+    def __init__(self, default_extended: bool = True):
         self.protocol_version: int | None = None
+        self._default_extended = default_extended
         self.frames: list[EzspFrame] = []
         self.parse_errors = 0
 
     @property
     def extended(self) -> bool:
-        return self.protocol_version is not None and self.protocol_version >= 8
+        if self.protocol_version is not None:
+            return self.protocol_version >= 8
+        return self._default_extended
+
+    def _looks_like_legacy_version(self, payload: bytes) -> bool:
+        # The version handshake uses the legacy header even on modern NCPs and is
+        # the only legacy-format traffic on an otherwise-extended link. Its
+        # frame-ID byte (payload[2]) is 0x00 (VERSION); every extended frame
+        # carries a nonzero control-high byte there (frameFormatVersion == 1),
+        # so this discriminates the handshake unambiguously in either direction.
+        return len(payload) >= 3 and payload[2] == VERSION_FRAME_ID
 
     def feed(self, payload: bytes) -> EzspFrame | None:
-        frame = parse_extended(payload) if self.extended else parse_legacy(payload)
+        use_extended = self.extended and not self._looks_like_legacy_version(payload)
+        frame = parse_extended(payload) if use_extended else parse_legacy(payload)
         if frame is None:
             self.parse_errors += 1
             return None
