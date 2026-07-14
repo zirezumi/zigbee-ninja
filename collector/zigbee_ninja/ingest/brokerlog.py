@@ -1,13 +1,18 @@
 """T0.5: Mosquitto broker-log parsing for publish→client attribution.
 
-With `log_dest topic` and debug logging enabled on the broker, Mosquitto
-republishes its own log onto $SYS/broker/log/#; per-PUBLISH lines carry the
-publishing client id. Format is tolerant-parsed and the feature degrades to
-client-anonymous when lines don't match (DESIGN.md paragraph 4, T0.5).
-
-Live verification of the exact format/overhead on the target broker is an M2
-deploy-time step; the regex below matches the Mosquitto 2.x debug format:
+Per-PUBLISH debug lines carry the publishing client id. This module parses them
+(tolerant; degrades to client-anonymous when lines don't match). The regex
+matches the Mosquitto 2.x debug format:
   1720000000: Received PUBLISH from ha-core (d0, q0, r0, m0, 'z2m-1/lamp/set', ... (42 bytes))
+
+DELIVERY CAVEAT (verified live on Mosquitto 2.0.22, DESIGN.md §4 T0.5):
+`log_dest topic` does NOT publish debug-level lines to `$SYS/broker/log/#` —
+only notice/subscribe-class messages reach the topic; the "Received PUBLISH
+from …" lines go to stderr/file only. So feeding this parser requires a
+broker-side log reader (journal/file tail), NOT a pure-MQTT subscription. The
+`on_log` entry point therefore takes raw log-line bytes from whatever source
+(topic today only carries non-PUBLISH lines); wiring a broker-side reader — or
+preferring the HA-token per-automation path (§7.4) — is a deployment choice.
 """
 
 from __future__ import annotations

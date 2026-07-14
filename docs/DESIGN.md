@@ -105,16 +105,24 @@ full device/group registries. This tier alone supports message-rate dashboards
 and MQTT-level attribution. It cannot see frame sizes, radio timing, retries, or
 Z2M-internal radio work.
 
-### T0.5 — Broker publish attribution *(config change on broker)*
+### T0.5 — Broker publish attribution *(broker-side log reader)*
 
-Mosquitto's `log_dest topic` republishes its own log onto `$SYS/broker/log/#`;
-with debug-level logging enabled, per-PUBLISH lines carry the **publishing client
-id**. That turns "a command arrived" into "client `ha-core` issued this command"
-— over pure MQTT, with no foothold beyond a broker config change (guided
-instructions, or automated via the optional SSH tile). Log-format drift across
-Mosquitto versions is handled by a tolerant parser keyed on
-`$SYS/broker/version`; the added broker load is measured and shown before the
-user commits. *(Verify format + overhead early in M2.)*
+With debug-level logging enabled, Mosquitto emits per-PUBLISH lines carrying the
+**publishing client id** ("Received PUBLISH from `ha-core` …") — turning "a
+command arrived" into "client `ha-core` issued this command". The tolerant
+parser (`brokerlog.py`) reads those lines.
+
+> **Live correction (2026-07-14, Mosquitto 2.0.22): these debug lines are NOT
+> available over MQTT.** `log_dest topic` publishes only notice/subscribe-class
+> messages to `$SYS/broker/log/#`; debug-level PUBLISH lines go **only** to
+> `stderr`/`file`. So T0.5 cannot be pure-MQTT as originally specified — it
+> requires a **broker-side log reader** (tail the journal/file, parse, forward),
+> i.e. a foothold on the broker host, not just a config change. On a
+> single-controller (HA-only) install the marginal value is also low (nearly
+> every command is `ha-core`). **Preferred alternative:** per-*automation*
+> attribution via the HA-token integration (§7.4) — broker-safe (read-only HA
+> WebSocket) and strictly more informative. Broker debug logging also ~doubles
+> broker message volume; measure before enabling.
 
 ### T1 — Z2M runtime extension *(credentials: broker only)*
 
@@ -206,7 +214,7 @@ A **tile** is one grantable capability against one named target:
 
 | Tile | Target | Deploy mechanism | Revoke mechanism |
 |---|---|---|---|
-| Broker telemetry (T0.5) | broker | Guided config change, or automated via SSH tile | Config revert (guided or automated) |
+| Broker telemetry (T0.5) | broker | Broker debug logging **+ a broker-side log reader** (see §4 T0.5 live correction) — not pure-MQTT on Mosquitto | Remove reader + revert config |
 | Z2M extension (T1) | per Z2M instance | `bridge/request/extension/save` over MQTT | `bridge/request/extension/remove` |
 | Wire tap (T2) | per capture host | Copy-paste one-liner installer (default); SSH-automated (opt-in) | GUI revoke → agent self-uninstalls; or local `ninja-tap uninstall` |
 | Topology pulls | per Z2M instance | Grant + rate limit (networkmap requests load the mesh) | Toggle off |
