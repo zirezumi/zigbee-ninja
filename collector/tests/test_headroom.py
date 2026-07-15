@@ -4,7 +4,7 @@ from zigbee_ninja.capacity import headroom
 from zigbee_ninja.store.db import Database
 
 
-def seed(db: Database):
+def seed(db: Database, spread: bool = False):
     conn = db.connect()
     # Load windows for z2m-a: 2, 4, and 16 eps of TX plus some RX airtime.
     for ts, tx_frames, p95 in ((1000, 20, 50.0), (1010, 40, 60.0), (1020, 160, 300.0)):
@@ -24,9 +24,9 @@ def seed(db: Database):
             (ts, p95),
         )
 
-    def record(instance, started, knee_eps, breach, censored, env):
+    def record(instance, started, knee_eps, breach, censored, env, mode="single"):
         detail = {
-            "plan": {"target": f"router-{instance}", "rtt_source": "wire"},
+            "plan": {"target": f"router-{instance}", "rtt_source": "wire", "mode": mode},
             "steps": [],
             "knee": {
                 "eps": knee_eps,
@@ -59,6 +59,9 @@ def seed(db: Database):
         "INSERT INTO calibrations (instance, target, started_at, finished_at, "
         "status, knee_eps, detail) VALUES ('z2m-a', 'x', 1021, 1029, 'aborted', NULL, '{}')"
     )
+    if spread:
+        # A spread ramp that ended on a wire-RTT breach: the measured NCP knee.
+        record("z2m-a", 700, 55.0, "rtt_p95", False, env_a, mode="spread")
     conn.commit()
 
 
@@ -104,6 +107,21 @@ def test_summarize_joins_knees_rates_and_scatter(tmp_path):
     assert b["denominators"]["pipeline"] is None
     assert b["rates"] is None
     assert b["headroom"] is None
+
+
+def test_spread_knee_takes_the_headline_and_ncp_denominator(tmp_path):
+    db = Database(tmp_path)
+    seed(db, spread=True)
+    view = headroom.summarize(db, 3600, INSTANCES_INFO, clock=lambda: 2000.0)
+    a = view["instances"]["z2m-a"]
+    # The spread measurement becomes the headline knee and a measured
+    # denominator 2; the single-target result keeps denominator 3 (per device).
+    assert a["knee"]["eps"] == 55.0
+    assert a["knee"]["mode"] == "spread"
+    assert a["knee"]["kind"] == "mesh_knee"
+    assert a["denominators"]["ncp_knee"] == {"eps": 55.0, "provenance": "measured"}
+    assert a["denominators"]["pipeline"] == {"eps": 16.0, "provenance": "measured"}
+    assert a["headroom"]["knee_utilization_pct"] == round(4.0 / 55.0 * 100.0, 1)
 
 
 def test_scatter_aggregates_to_minutes_on_wide_windows(tmp_path):

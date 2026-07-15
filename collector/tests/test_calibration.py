@@ -36,6 +36,42 @@ DEVICES = [
         "binding_count": 0,
     },
     {
+        "ieee_address": "0xb3",
+        "friendly_name": "bulb-c",
+        "type": "Router",
+        "power_source": "Mains (single phase)",
+        "vendor": "ExampleCo",
+        "model": "BULB-1",
+        "network_address": 12,
+        "get_attribute": "state",
+        "published_measurements": [],
+        "binding_count": 0,
+    },
+    {
+        "ieee_address": "0xb4",
+        "friendly_name": "bulb-d",
+        "type": "Router",
+        "power_source": "Mains (single phase)",
+        "vendor": "ExampleCo",
+        "model": "BULB-1",
+        "network_address": 13,
+        "get_attribute": "state",
+        "published_measurements": [],
+        "binding_count": 0,
+    },
+    {
+        "ieee_address": "0xb5",
+        "friendly_name": "bulb-e",
+        "type": "Router",
+        "power_source": "Mains (single phase)",
+        "vendor": "ExampleCo",
+        "model": "BULB-1",
+        "network_address": 14,
+        "get_attribute": "state",
+        "published_measurements": [],
+        "binding_count": 0,
+    },
+    {
         "ieee_address": "0xc3",
         "friendly_name": "sensor-c",
         "type": "EndDevice",
@@ -190,17 +226,18 @@ class Harness:
         rate = status["current"]["rate_eps"] if status and status["current"] else 0.0
         index = len(self.published) - 1
         if self.answer(rate, index):
-            self.pending.append(self.now)
+            # The mesh answers the device that was actually read: parse
+            # <base>/<name>/get (single-segment bases in these fixtures).
+            base, _, name = topic[: -len("/get")].partition("/")
+            self.pending.append((self.now, base, name))
         else:
             self.dropped += 1
 
     async def _sleep(self, seconds: float) -> None:
         self.now += seconds
-        active = self.manager.status()["active"]
-        while self.pending and self.now - self.pending[0] >= self.service_time:
-            self.pending.pop(0)
-            if active is not None:
-                self.manager.on_state(active["instance"], active["target"])
+        while self.pending and self.now - self.pending[0][0] >= self.service_time:
+            _, base, name = self.pending.pop(0)
+            self.manager.on_state(base, name)
         if self.on_advance is not None:
             self.on_advance(self.now)
 
@@ -503,6 +540,78 @@ def test_hooks_only_engage_during_a_run(tmp_path):
             "set_verb": False,
             "idle_state": False,
         }
+
+    asyncio.run(scenario())
+
+
+# -- spread mode (NCP knee, denominator 2) -------------------------------------------
+
+
+def test_spread_preview_roster_and_validation(tmp_path):
+    harness = Harness(tmp_path)
+    plan = harness.manager.preview_spread(INSTANCE, count=4)
+    assert plan["mode"] == "spread"
+    assert [entry["friendly_name"] for entry in plan["targets"]] == [
+        "plug-a",
+        "bulb-b",
+        "bulb-c",
+        "bulb-d",
+    ]
+    assert plan["target"] == "4 routers (spread)"
+    assert [step["rate_eps"] for step in plan["steps"]] == list(benchmark.SPREAD_RATES_EPS)
+    assert plan["per_target_max_eps"] == 16.0
+    assert plan["authorization"]
+
+    # count clamps to the eligible roster (5 eligible routers in the fixture).
+    plan = harness.manager.preview_spread(INSTANCE, count=99)
+    assert len(plan["targets"]) == 5
+
+    with pytest.raises(ValueError, match="spread ramp needs"):
+        harness.manager.preview_spread(INSTANCE, targets=["plug-a", "bulb-b"])
+
+
+def test_spread_ramp_round_robins_and_finds_censored_knee(tmp_path):
+    harness = Harness(tmp_path)
+
+    async def scenario():
+        plan = harness.manager.preview_spread(INSTANCE, count=5)
+        await harness.manager.start(INSTANCE, "", plan["authorization"])
+        await harness.manager._task
+        record = harness.manager.history()[0]
+        assert record["mode"] == "spread"
+        assert record["status"] == "completed"
+        assert record["knee"]["censored"] is True
+        assert record["knee_eps"] >= 60  # ~64/s achieved on the final step
+        # Round-robin spreads the reads evenly across the roster.
+        per_target: dict[str, int] = {}
+        for topic, _ in harness.published:
+            per_target[topic] = per_target.get(topic, 0) + 1
+        counts = sorted(per_target.values())
+        assert len(counts) == 5
+        assert counts[-1] - counts[0] <= 1
+
+    asyncio.run(scenario())
+
+
+def test_spread_wire_breach_measures_the_ncp_knee(tmp_path):
+    # Wire p95 blows past the 300 ms floor at the 32/s step → the mesh/NCP is
+    # what degraded (per-device shares stayed low) → a measured denominator-2.
+    harness = Harness(
+        tmp_path,
+        wire_covers=True,
+        wire_steps=[[50.0, 55.0], [52.0, 60.0], [700.0, 900.0]],
+    )
+
+    async def scenario():
+        plan = harness.manager.preview_spread(INSTANCE, count=5)
+        await harness.manager.start(INSTANCE, "", plan["authorization"])
+        await harness.manager._task
+        record = harness.manager.history()[0]
+        breached = [step for step in record["steps"] if step["breach"]]
+        assert breached[0]["breach"] == "rtt_p95"
+        assert breached[0]["rate_eps"] == 32.0
+        assert record["knee"]["censored"] is False
+        assert record["knee_eps"] == pytest.approx(16.0, abs=1.0)
 
     asyncio.run(scenario())
 

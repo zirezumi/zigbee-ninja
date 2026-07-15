@@ -55,12 +55,15 @@ class HaSettings(BaseModel):
 
 class CalibrationPreviewRequest(BaseModel):
     instance: str
-    target: str
+    target: str | None = None
+    mode: str = "single"  # single | spread
+    count: int = 6  # spread only: how many routers to auto-pick
+    targets: list[str] | None = None  # spread only: explicit roster override
 
 
 class CalibrationRunRequest(BaseModel):
     instance: str
-    target: str
+    target: str | None = None  # required for single, ignored for spread
     authorization: str
 
 
@@ -339,6 +342,12 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
         single-use authorization token — nothing transmits."""
         require_user(request)
         try:
+            if settings.mode == "spread":
+                return engine.calibration.preview_spread(
+                    settings.instance, settings.count, settings.targets
+                )
+            if not settings.target:
+                raise ValueError("target is required for a single-target preview")
             return engine.calibration.preview(settings.instance, settings.target)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -348,7 +357,7 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
         require_user(request)
         try:
             return await engine.calibration.start(
-                settings.instance, settings.target, settings.authorization
+                settings.instance, settings.target or "", settings.authorization
             )
         except CalibrationRejected as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc

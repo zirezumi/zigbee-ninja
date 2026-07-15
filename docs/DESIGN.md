@@ -503,11 +503,17 @@ A guided wizard, per coordinator, per-run authorized (grants never persist):
    the closed loop can no longer reach the requested rate, which measures the
    *pipeline* service ceiling (denominator 3) and bounds the NCP knee from
    below; the record says which rule ended the ramp, and a ramp that exhausts
-   the schedule cleanly records a censored (lower-bound) knee. (An earlier
-   revision specified an optional groupcast stage against a wizard-created
-   test group to calibrate the broadcast retry factor `avg_tx`; that stage is
-   superseded — avg_tx is now measured passively and continuously from the
-   coordinator's own broadcast counters, §10.)
+   the schedule cleanly records a censored (lower-bound) knee. **Spread
+   mode** lifts the per-device limit: reads round-robin across several
+   top-ranked routers (per-target FIFOs pair each reply with its own
+   device's reads) with the per-device share held under the measured
+   per-device ceilings, so the aggregate ramp probes the NCP/global-pipeline
+   knee — denominator 2 measured, not just bounded — while a single-target
+   run keeps measuring denominator 3. (An earlier revision specified an
+   optional groupcast stage against a wizard-created test group to calibrate
+   the broadcast retry factor `avg_tx`; that stage is superseded — avg_tx is
+   now measured passively and continuously from the coordinator's own
+   broadcast counters, §10.)
 4. **Safety rails** — hard rate/duration/total-read caps enforced inside the
    send loop; watchdog abort on any device on the instance going offline, on
    an error spike in the Zigbee2MQTT log, or on total reply silence; manual

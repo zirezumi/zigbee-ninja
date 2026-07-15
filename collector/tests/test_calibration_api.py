@@ -98,6 +98,17 @@ def test_validation_and_authorization_gates(client):
     # Abort with nothing active is a clean conflict.
     assert client.post("/api/calibration/abort").status_code == 409
 
+    # Mode gates: a single-target preview needs a target; a spread preview
+    # needs enough eligible routers (this fixture has one).
+    response = client.post("/api/calibration/preview", json={"instance": "z2m-test"})
+    assert response.status_code == 400
+    assert "target is required" in response.json()["detail"]
+    response = client.post(
+        "/api/calibration/preview", json={"instance": "z2m-test", "mode": "spread"}
+    )
+    assert response.status_code == 400
+    assert "spread ramp needs" in response.json()["detail"]
+
 
 def test_run_lifecycle_self_attribution_and_cooldown(client, monkeypatch):
     """Drives a miniature but real ramp through the full engine wiring: the

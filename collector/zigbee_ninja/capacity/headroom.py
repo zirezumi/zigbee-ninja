@@ -35,32 +35,37 @@ def _percentile(ordered: list[float], fraction: float) -> float:
     return ordered[min(len(ordered) - 1, int(len(ordered) * fraction))]
 
 
-def _latest_knees(db: Database) -> dict[str, dict]:
+def _latest_knees(db: Database) -> dict[str, dict[str, dict]]:
+    """Latest knee per (instance, calibration mode) — the modes measure
+    different denominators: a single-target ramp finds the per-device pipeline
+    ceiling, a spread ramp probes the NCP/global pipeline knee."""
     rows = db.connect().execute(
         "SELECT instance, knee_eps, finished_at, detail FROM calibrations "
-        "WHERE id IN (SELECT MAX(id) FROM calibrations "
-        "WHERE status = 'completed' AND knee_eps IS NOT NULL GROUP BY instance)"
+        "WHERE status = 'completed' AND knee_eps IS NOT NULL ORDER BY id"
     ).fetchall()
-    knees: dict[str, dict] = {}
-    for row in rows:
+    knees: dict[str, dict[str, dict]] = {}
+    for row in rows:  # ordered by id → later rows overwrite = latest per mode
         detail = json.loads(row["detail"])
+        plan = detail.get("plan") or {}
+        mode = plan.get("mode", "single")
         knee = detail.get("knee") or {}
         breach = knee.get("breach")
         censored = bool(knee.get("censored"))
-        # A saturated ramp measured the pipeline ceiling; the NCP knee is
+        # A saturated ramp measured a pipeline ceiling; the NCP knee is
         # bounded from below either way the ramp ended without a mesh breach.
         kind = (
             "pipeline_ceiling"
             if breach == "saturated"
             else ("lower_bound" if censored else "mesh_knee")
         )
-        knees[row["instance"]] = {
+        knees.setdefault(row["instance"], {})[mode] = {
             "eps": row["knee_eps"],
             "kind": kind,
+            "mode": mode,
             "breach": breach,
             "censored": censored,
             "rtt_source": knee.get("rtt_source"),
-            "target": (detail.get("plan") or {}).get("target"),
+            "target": plan.get("target"),
             "measured_at": row["finished_at"],
             "environment": detail.get("environment") or {},
         }
@@ -144,7 +149,12 @@ def summarize(
                 "windows": len(eps_sorted),
             }
         us_per_s = loads["airtime_us"] / seconds
-        knee = knees.get(base)
+        modes = knees.get(base, {})
+        spread_knee = modes.get("spread")
+        single_knee = modes.get("single")
+        # Headline knee = aggregate capacity: the spread measurement when one
+        # exists, else the single-target result (a per-device lower bound).
+        knee = spread_knee or single_knee
         stale = False
         if knee is not None and base in current_env:
             environment = knee["environment"]
@@ -185,6 +195,8 @@ def summarize(
                     "pct": round(us_per_s / airtime.CHANNEL_BUDGET_US_PER_S * 100.0, 3),
                     "provenance": airtime.PROVENANCE,
                 },
+                # Denominator 2 comes from the spread ramp when one has run;
+                # a single-target result only bounds it from below.
                 "ncp_knee": None
                 if knee is None
                 else {
@@ -193,9 +205,10 @@ def summarize(
                     if knee["kind"] == "mesh_knee"
                     else "lower_bound",
                 },
+                # Denominator 3, per device, from the single-target ramp.
                 "pipeline": None
-                if knee is None or knee["kind"] != "pipeline_ceiling"
-                else {"eps": knee["eps"], "provenance": "measured"},
+                if single_knee is None or single_knee["kind"] != "pipeline_ceiling"
+                else {"eps": single_knee["eps"], "provenance": "measured"},
             },
             "rates": rates,
             "headroom": headroom,

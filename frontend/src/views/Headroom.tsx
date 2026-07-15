@@ -40,7 +40,9 @@ function KneeScatter({
     const options: uPlot.Options = {
       width: Math.max(host.current.clientWidth, 360),
       height: 220,
-      scales: { x: { time: false, range: [0, xMax] } },
+      // Log latency axis: rare multi-second delivery tails stay visible
+      // without crushing the sub-100 ms bulk of the distribution.
+      scales: { x: { time: false, range: [0, xMax] }, y: { distr: 3, log: 10 } },
       axes: [
         {
           label: "TX load (frames/s, per rollup window)",
@@ -106,7 +108,12 @@ function InstancePanel({ base, view }: { base: string; view: HeadroomInstance })
           <>
             <span className="chip ok">
               knee {kneeLabel(view)}
-              {knee.kind === "pipeline_ceiling" ? " · pipeline ceiling" : ""}
+              {knee.mode === "spread" ? " · NCP (spread)" : ""}
+              {knee.kind === "pipeline_ceiling"
+                ? knee.mode === "spread"
+                  ? " · global pipeline ceiling"
+                  : " · per-device pipeline ceiling"
+                : ""}
             </span>
             {knee.stale_environment && (
               <span className="chip warn">firmware changed since calibration — recalibrate?</span>

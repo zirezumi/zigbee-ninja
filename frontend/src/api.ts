@@ -222,12 +222,20 @@ export interface CalibrationStep {
 }
 
 export interface CalibrationPlan {
+  mode: string; // single | spread
   instance: string;
   target: string;
   target_ieee: string | null;
-  get_attribute: string;
-  topic: string;
-  payload: string;
+  get_attribute: string | null;
+  topic: string | null;
+  payload: string | null;
+  targets: Array<{
+    friendly_name: string;
+    get_attribute: string;
+    topic: string;
+    payload: string;
+  }>;
+  per_target_max_eps: number | null;
   traffic: string;
   steps: Array<{ rate_eps: number; duration_s: number; reads: number }>;
   total_reads: number;
@@ -253,6 +261,7 @@ export interface CalibrationActive {
   run_id: string;
   instance: string;
   target: string;
+  mode: string;
   state: string;
   started_at: number;
   step_index: number;
@@ -287,6 +296,7 @@ export interface CalibrationRecord {
   environment: Record<string, string | null>;
   rtt_source: string | null;
   batch_id: string | null;
+  mode: string;
 }
 
 export interface CalibrationBulkStatus {
@@ -345,6 +355,7 @@ export interface CandidatesView {
 export interface HeadroomKnee {
   eps: number;
   kind: string;
+  mode: string;
   breach: string | null;
   censored: boolean;
   rtt_source: string | null;

@@ -163,18 +163,28 @@ function PreviewPanel({
   onAuthorize: () => void;
   onCancel: () => void;
 }) {
+  const spread = preview.mode === "spread";
   return (
     <div className="panel">
       <div className="toolbar">
         <p className="panel-kicker">
-          Dry run — calibrate {preview.target} on {preview.instance}
+          Dry run — {spread ? "NCP spread ramp" : `calibrate ${preview.target}`} on{" "}
+          {preview.instance}
         </p>
+        {spread && <span className="chip warn">spread · denominator 2</span>}
         <span className="chip">{preview.rtt_source === "wire" ? "wire RTT" : "echo RTT"}</span>
       </div>
       <p>{preview.traffic}</p>
-      <p className="mono hint">
-        {preview.topic} ← {preview.payload}
-      </p>
+      {spread ? (
+        <p className="mono hint">
+          {preview.targets.map((entry) => entry.friendly_name).join(" · ")} — per-device
+          share ≤ {preview.per_target_max_eps}/s
+        </p>
+      ) : (
+        <p className="mono hint">
+          {preview.topic} ← {preview.payload}
+        </p>
+      )}
       <div className="panel-grid">
         <div>
           <p className="panel-kicker">Schedule</p>
@@ -380,11 +390,14 @@ function CandidatesPanel({
   view,
   busyTarget,
   onSelect,
+  onSpread,
 }: {
   view: CandidatesView;
   busyTarget: string | null;
   onSelect: (target: string) => void;
+  onSpread: () => void;
 }) {
+  const eligibleCount = view.candidates.filter((row) => row.eligible).length;
   return (
     <div className="panel">
       <div className="toolbar">
@@ -394,6 +407,14 @@ function CandidatesPanel({
             ? `ranked with the topology snapshot from ${ago(view.topology_pulled_at)}`
             : "no topology snapshot — pull one for LQI-aware ranking"}
         </span>
+        <button
+          className="small"
+          disabled={eligibleCount < 4 || busyTarget !== null}
+          title="Round-robin reads across the top routers so no single device's queue binds first — probes the NCP knee (denominator 2)"
+          onClick={onSpread}
+        >
+          Preview NCP spread ramp
+        </button>
       </div>
       {view.candidates.length === 0 ? (
         <p className="hint">No routers discovered on this instance.</p>
@@ -489,6 +510,7 @@ function HistoryPanel({
                     {record.status}
                   </span>
                 )}{" "}
+                {record.mode === "spread" && <span className="chip warn">spread</span>}{" "}
                 {record.batch_id && <span className="chip">{record.batch_id}</span>}{" "}
                 {record.knee?.breach && <span className="hint">({record.knee.breach})</span>}
                 {drifted && (
@@ -573,6 +595,21 @@ export default function Calibration() {
       setError(err instanceof ApiError ? err.message : "Preview failed");
     } finally {
       setBusyTarget(null);
+    }
+  }
+
+  async function loadSpreadPreview() {
+    if (!instance) return;
+    setError(null);
+    try {
+      setPreview(
+        await api<CalibrationPreview>("/api/calibration/preview", {
+          method: "POST",
+          body: JSON.stringify({ instance, mode: "spread" }),
+        }),
+      );
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Spread preview failed");
     }
   }
 
@@ -710,6 +747,7 @@ export default function Calibration() {
                 view={candidates}
                 busyTarget={busyTarget}
                 onSelect={(target) => void loadPreview(target)}
+                onSpread={() => void loadSpreadPreview()}
               />
             )
           )}

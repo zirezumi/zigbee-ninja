@@ -41,6 +41,14 @@ from ..store.db import Database
 
 # -- ramp schedule & hard caps (all shown verbatim in the dry-run preview) ------
 RAMP_RATES_EPS = (1.0, 2.0, 4.0, 8.0, 16.0, 32.0)
+# Spread mode round-robins reads across several routers so no single device's
+# Zigbee2MQTT queue binds first — the aggregate ramp probes the NCP/global
+# pipeline knee (§10 denominator 2) instead of the per-device ceiling.
+SPREAD_RATES_EPS = (8.0, 16.0, 32.0, 64.0)
+SPREAD_MIN_TARGETS = 4
+SPREAD_DEFAULT_TARGETS = 6
+SPREAD_MAX_TARGETS = 10
+SPREAD_PER_TARGET_MAX_EPS = 16.0  # per-device share stays under measured ceilings
 STEP_SECONDS = 20.0
 READ_TIMEOUT_SECONDS = 5.0
 SETTLE_TICK_SECONDS = 0.2
@@ -106,11 +114,18 @@ class _ActiveRun:
     step_index: int = 0
     current: StepResult | None = None
     steps: list[StepResult] = field(default_factory=list)
-    outstanding: deque = field(default_factory=deque)  # send timestamps, FIFO
+    # Send timestamps, one FIFO per target so replies pair with their own
+    # device's reads (a single-target run is simply K = 1).
+    outstanding: dict[str, deque] = field(default_factory=dict)
+    target_names: frozenset = field(default_factory=frozenset)
+    rr_index: int = 0
     step_echo_rtts: list[float] = field(default_factory=list)
     sent_total: int = 0
     bridge_errors: int = 0
     abort_reason: str | None = None
+
+    def outstanding_total(self) -> int:
+        return sum(len(fifo) for fifo in self.outstanding.values())
 
 
 @dataclass
@@ -200,22 +215,23 @@ class CalibrationManager:
             run is not None
             and verb == "get"
             and base == run.plan["instance"]
-            and target == run.plan["target"]
+            and target in run.target_names
         )
 
     def on_state(self, base: str, name: str) -> bool:
-        """Complete one outstanding read on the target's state echo.
+        """Complete one outstanding read on a target's state echo.
 
         Returns True only when an outstanding read was completed — the engine
         then classes the echo `self`. A target state publish with nothing
         outstanding stays an ordinary autonomous report.
         """
         run = self._active
-        if run is None or base != run.plan["instance"] or name != run.plan["target"]:
+        if run is None or base != run.plan["instance"] or name not in run.target_names:
             return False
-        if not run.outstanding:
+        fifo = run.outstanding.get(name)
+        if not fifo:
             return False
-        sent_at = run.outstanding.popleft()
+        sent_at = fifo.popleft()
         run.step_echo_rtts.append((self._clock() - sent_at) * 1000.0)
         if run.current is not None:
             run.current.completed += 1
@@ -234,7 +250,7 @@ class CalibrationManager:
             state = payload.decode(errors="replace").strip()
         if state != "offline":
             return
-        if name == run.plan["target"]:
+        if name in run.target_names:
             self._request_abort(f"target {name} went offline")
         else:
             self._request_abort(f"uninvolved device {name} went offline during the run")
@@ -326,7 +342,21 @@ class CalibrationManager:
     # -- preview & authorization (§11.2) -------------------------------------------
 
     def preview(self, instance: str, target: str) -> dict:
-        return self._authorize(self._build_plan(instance, target))
+        return self._authorize(self._build_plan(instance, [target], mode="single"))
+
+    def preview_spread(
+        self,
+        instance: str,
+        count: int = SPREAD_DEFAULT_TARGETS,
+        targets: list[str] | None = None,
+    ) -> dict:
+        """NCP-knee ramp: reads round-robin across the top-ranked routers so
+        no single device's pipeline queue binds first (§10 denominator 2)."""
+        if targets is None:
+            ranked = self.candidates(instance)["candidates"]
+            eligible = [row["friendly_name"] for row in ranked if row["eligible"]]
+            targets = eligible[: min(max(count, SPREAD_MIN_TARGETS), SPREAD_MAX_TARGETS)]
+        return self._authorize(self._build_plan(instance, targets, mode="spread"))
 
     def preview_bulk(
         self, instances: list[str] | None = None, targets: dict[str, str] | None = None
@@ -349,7 +379,7 @@ class CalibrationManager:
                         skipped.append({"instance": base, "reason": "no eligible router"})
                         continue
                     pinned = top["friendly_name"]
-                runs.append(self._build_plan(base, pinned))
+                runs.append(self._build_plan(base, [pinned], mode="single"))
             except ValueError as exc:
                 skipped.append({"instance": base, "reason": str(exc)})
         if not runs:
@@ -386,15 +416,35 @@ class CalibrationManager:
             "authorization_expires_at": plan["created_at"] + AUTHORIZATION_TTL_SECONDS,
         }
 
-    def _build_plan(self, instance: str, target: str) -> dict:
-        device = self._find_device(instance, target)
+    def _build_plan(self, instance: str, target_names: list[str], mode: str) -> dict:
+        if len(set(target_names)) != len(target_names):
+            raise ValueError("Duplicate calibration targets")
+        if mode == "spread" and not (
+            SPREAD_MIN_TARGETS <= len(target_names) <= SPREAD_MAX_TARGETS
+        ):
+            raise ValueError(
+                f"A spread ramp needs {SPREAD_MIN_TARGETS}–{SPREAD_MAX_TARGETS} "
+                f"eligible routers; got {len(target_names)}"
+            )
+        devices = [self._find_device(instance, name) for name in target_names]
         info = self._instance_info(instance)
         wire = self._wire_covers(instance)
         warnings: list[str] = []
-        measurements = device.get("published_measurements") or []
-        if measurements:
+        chatty = [
+            device["friendly_name"]
+            for device in devices
+            if device.get("published_measurements")
+        ]
+        if chatty:
+            measurements = sorted(
+                {
+                    prop
+                    for device in devices
+                    for prop in device.get("published_measurements") or []
+                }
+            )
             warnings.append(
-                f"Each reply republishes the target's state; {target} reports "
+                f"Each reply republishes device state; {', '.join(chatty)} report(s) "
                 f"{', '.join(measurements)} — expect state/recorder churn in "
                 "controllers for the run duration."
             )
@@ -416,23 +466,52 @@ class CalibrationManager:
                 "their traffic contends with the benchmark."
             )
 
+        rates = RAMP_RATES_EPS if mode == "single" else SPREAD_RATES_EPS
+        cap = MAX_RATE_EPS if mode == "single" else SPREAD_PER_TARGET_MAX_EPS * len(devices)
         steps = [
             {"rate_eps": rate, "duration_s": STEP_SECONDS, "reads": int(rate * STEP_SECONDS)}
-            for rate in RAMP_RATES_EPS
-            if rate <= MAX_RATE_EPS
+            for rate in rates
+            if rate <= cap
         ]
+        targets = [
+            {
+                "friendly_name": device["friendly_name"],
+                "get_attribute": device["get_attribute"],
+                "topic": f"{instance}/{device['friendly_name']}/get",
+                "payload": json.dumps({device["get_attribute"]: ""}),
+            }
+            for device in devices
+        ]
+        single = mode == "single"
         now = self._clock()
         plan = {
+            "mode": mode,
             "instance": instance,
-            "target": target,
-            "target_ieee": device.get("ieee_address"),
-            "get_attribute": device["get_attribute"],
-            "topic": f"{instance}/{target}/get",
-            "payload": json.dumps({device["get_attribute"]: ""}),
+            "target": (
+                target_names[0] if single else f"{len(devices)} routers (spread)"
+            ),
+            "target_ieee": devices[0].get("ieee_address") if single else None,
+            "get_attribute": devices[0]["get_attribute"] if single else None,
+            "topic": targets[0]["topic"] if single else None,
+            "payload": targets[0]["payload"] if single else None,
+            "targets": targets,
             "traffic": (
                 "Unicast ZCL attribute reads via Zigbee2MQTT's own command path; "
                 "each read is one TX unicast plus the target's reply — nothing is "
                 "written or actuated."
+                if single
+                else (
+                    f"Unicast ZCL attribute reads round-robined across "
+                    f"{len(devices)} routers via Zigbee2MQTT's own command path — "
+                    f"per-device share stays at or below "
+                    f"{SPREAD_PER_TARGET_MAX_EPS:.0f}/s (under every measured "
+                    "per-device ceiling), so the aggregate ramp probes the "
+                    "NCP/global pipeline knee (denominator 2). Nothing is written "
+                    "or actuated."
+                )
+            ),
+            "per_target_max_eps": (
+                None if single else round(max(rate for rate in rates) / len(devices), 1)
             ),
             "steps": steps,
             "total_reads": sum(step["reads"] for step in steps),
@@ -478,23 +557,36 @@ class CalibrationManager:
 
     async def start(self, instance: str, target: str, authorization: str) -> dict:
         plan = self._take_authorization(authorization, batch=False)
-        if plan["instance"] != instance or plan["target"] != target:
+        single = plan.get("mode", "single") == "single"
+        if plan["instance"] != instance or (single and plan["target"] != target):
             raise CalibrationRejected("Authorization does not match this instance/target")
         self._require_idle()
-        # Re-verify against the live registry: the fleet may have changed
-        # between preview and confirmation.
-        device = self._find_device(instance, target)
-        if device.get("get_attribute") != plan["get_attribute"]:
-            raise CalibrationRejected("Target definition changed since the preview")
+        self._verify_plan_targets(plan)
         self._authorizations.pop(authorization, None)  # single-use
-        run = _ActiveRun(
-            run_id=f"cal-{secrets.token_hex(4)}",
-            plan=plan,
-            started_at=self._clock(),
-        )
+        run = self._make_run(plan)
         self._active = run
         self._task = asyncio.get_running_loop().create_task(self._run(run))
         return self.status()
+
+    def _verify_plan_targets(self, plan: dict) -> None:
+        """Re-verify against the live registry: the fleet may have changed
+        between preview and confirmation."""
+        for entry in plan["targets"]:
+            try:
+                device = self._find_device(plan["instance"], entry["friendly_name"])
+            except ValueError as exc:
+                raise CalibrationRejected(str(exc)) from exc
+            if device.get("get_attribute") != entry["get_attribute"]:
+                raise CalibrationRejected("Target definition changed since the preview")
+
+    def _make_run(self, plan: dict) -> _ActiveRun:
+        return _ActiveRun(
+            run_id=f"cal-{secrets.token_hex(4)}",
+            plan=plan,
+            started_at=self._clock(),
+            outstanding={entry["friendly_name"]: deque() for entry in plan["targets"]},
+            target_names=frozenset(entry["friendly_name"] for entry in plan["targets"]),
+        )
 
     async def start_bulk(self, authorization: str) -> dict:
         batch = self._take_authorization(authorization, batch=True)
@@ -636,10 +728,8 @@ class CalibrationManager:
                 # Re-verify at its turn in the queue — the fleet may have
                 # changed since the batch was authorized.
                 try:
-                    device = self._find_device(plan["instance"], plan["target"])
-                    if device.get("get_attribute") != plan["get_attribute"]:
-                        raise ValueError("target definition changed since the preview")
-                except ValueError as exc:
+                    self._verify_plan_targets(plan)
+                except CalibrationRejected as exc:
                     bulk.skipped.append(
                         {
                             "instance": plan["instance"],
@@ -650,11 +740,7 @@ class CalibrationManager:
                     self._record_skip({**plan, "batch_id": bulk.batch_id}, str(exc))
                     continue
                 bulk.state = "running"
-                run = _ActiveRun(
-                    run_id=f"cal-{secrets.token_hex(4)}",
-                    plan={**plan, "batch_id": bulk.batch_id},
-                    started_at=self._clock(),
-                )
+                run = self._make_run({**plan, "batch_id": bulk.batch_id})
                 self._active = run
                 await self._run(run)
                 if run.abort_reason is not None:
@@ -673,6 +759,7 @@ class CalibrationManager:
     async def _run_step(self, run: _ActiveRun, step: StepResult) -> None:
         interval = 1.0 / step.rate_eps
         bound = max(MIN_OUTSTANDING, math.ceil(step.rate_eps * OUTSTANDING_RTT_ALLOWANCE))
+        targets = run.plan["targets"]
         step_end = step.started_at + step.duration_s
         while self._clock() < step_end:
             self._check_abort(run)
@@ -682,12 +769,14 @@ class CalibrationManager:
                 raise _Abort("total read cap reached")
             if self._clock() - run.started_at > MAX_RUN_SECONDS:
                 raise _Abort("run wall-clock cap reached")
-            if len(run.outstanding) < bound:
+            if run.outstanding_total() < bound:
+                entry = targets[run.rr_index % len(targets)]
+                run.rr_index += 1
                 try:
-                    await self._publish(run.plan["topic"], run.plan["payload"])
+                    await self._publish(entry["topic"], entry["payload"])
                 except Exception as exc:
                     raise _Abort(f"publish failed: {exc}") from exc
-                run.outstanding.append(self._clock())
+                run.outstanding[entry["friendly_name"]].append(self._clock())
                 step.sent += 1
                 run.sent_total += 1
             else:
@@ -699,14 +788,15 @@ class CalibrationManager:
         run.state = "settling"
         deadline = self._clock() + READ_TIMEOUT_SECONDS + 1.0
         try:
-            while run.outstanding and self._clock() < deadline:
+            while run.outstanding_total() and self._clock() < deadline:
                 self._check_abort(run)
                 self._expire_timeouts(run, step)
-                if run.outstanding:
+                if run.outstanding_total():
                     await self._sleep(SETTLE_TICK_SECONDS)
-            while run.outstanding:  # anything left is past its timeout
-                run.outstanding.popleft()
-                step.timeouts += 1
+            for fifo in run.outstanding.values():  # anything left is past timeout
+                while fifo:
+                    fifo.popleft()
+                    step.timeouts += 1
         finally:
             run.state = "running"
 
@@ -774,9 +864,10 @@ class CalibrationManager:
 
     def _expire_timeouts(self, run: _ActiveRun, step: StepResult) -> None:
         now = self._clock()
-        while run.outstanding and now - run.outstanding[0] > READ_TIMEOUT_SECONDS:
-            run.outstanding.popleft()
-            step.timeouts += 1
+        for fifo in run.outstanding.values():
+            while fifo and now - fifo[0] > READ_TIMEOUT_SECONDS:
+                fifo.popleft()
+                step.timeouts += 1
 
     # -- record & read side ---------------------------------------------------------
 
@@ -845,12 +936,13 @@ class CalibrationManager:
                 "run_id": run.run_id,
                 "instance": run.plan["instance"],
                 "target": run.plan["target"],
+                "mode": run.plan.get("mode", "single"),
                 "state": run.state,
                 "started_at": run.started_at,
                 "step_index": run.step_index,
                 "total_steps": len(run.plan["steps"]),
                 "current": asdict(run.current) if run.current is not None else None,
-                "outstanding": len(run.outstanding),
+                "outstanding": run.outstanding_total(),
                 "sent_total": run.sent_total,
                 "steps": [asdict(step) for step in run.steps],
                 "abort_requested": run.abort_reason,
@@ -903,6 +995,7 @@ class CalibrationManager:
                     "environment": detail.get("environment", {}),
                     "rtt_source": (detail.get("plan") or {}).get("rtt_source"),
                     "batch_id": (detail.get("plan") or {}).get("batch_id"),
+                    "mode": (detail.get("plan") or {}).get("mode", "single"),
                 }
             )
         return result
