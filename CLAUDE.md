@@ -54,10 +54,25 @@ with 1s live views, `airtime_10s` rollups, and `/api/airtime`; wire-tier
 latency SLI (sendUnicast→messageSentHandler tag pairing on pcap timestamps) —
 the authoritative replacement for the T1 command→echo proxy — plus delivery
 statuses, route-record/route-error mesh-health counters, and per-frame LQI/RSSI
-EWMAs on the fleet path. Remaining for **M5**: topology snapshots, calibration
-wizard + NCP knee denominator, utilization/headroom dashboards, continuous knee
-validation. HA-token per-automation attribution (§7.4) is built + deployed,
-awaiting a token to activate.
+EWMAs on the fleet path. HA-token per-automation attribution (§7.4) is LIVE
+(100% publish naming on the reference deployment). Topology snapshots are LIVE:
+grant-gated networkmap pulls (15-min rate limit, one scan at a time),
+`topology_snapshots` storage + summaries + Topology view; per-query failure
+detail distinguishes firmware ZDO omissions from unreachable nodes.
+**Calibration wizard (§11) is BUILT — unicast stage**: per-run authorization
+(dry-run preview mints a single-use TTL'd token; no grants persist),
+closed-loop /get ramp with outstanding bound, knee detection (timeout ratio,
+delivery failures, p95 RTT breach vs step-1 baseline, driver saturation =
+pipeline ceiling), watchdog aborts (uninvolved-device offline, Z2M error-log
+spike, total silence, manual, hard caps), cooldown, `calibrations` table
+(migration 8) with per-step curves, self-attributed traffic end to end,
+candidates ranking from topology LQI − bindings/groups, and the Calibration
+GUI view (preview/authorize/live-ramp/history + recalibrate-on-drift chip).
+NOT yet run against a live coordinator — every run needs the owner's explicit
+per-run authorization. Remaining for **M5**: first live calibration run
+(owner-authorized), utilization/headroom dashboards + continuous knee
+validation scatter, optional groupcast stage (calibrates avg_tx), knee → §10
+denominator-2 wiring in `capacity/`.
 Roadmap: README.md.
 
 ## Hard rules
