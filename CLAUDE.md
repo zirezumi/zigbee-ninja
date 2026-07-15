@@ -54,8 +54,7 @@ EWMAs on the fleet path. Remaining for **M5**: topology snapshots, calibration
 wizard + NCP knee denominator, utilization/headroom dashboards, continuous knee
 validation. HA-token per-automation attribution (§7.4) is built + deployed,
 awaiting a token to activate.
-M1 leftovers: commit `frontend/package-lock.json`, flip CI + Dockerfile to
-`npm ci`. Roadmap: README.md.
+Roadmap: README.md.
 
 ## Hard rules
 
