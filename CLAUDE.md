@@ -68,13 +68,22 @@ spike, total silence, manual, hard caps), cooldown, `calibrations` table
 (migration 8) with per-step curves, self-attributed traffic end to end,
 candidates ranking from topology LQI − bindings/groups, and the Calibration
 GUI view (preview/authorize/live-ramp/history + recalibrate-on-drift chip).
-First live run completed (owner-authorized): clean ramp, knee found via the
-saturation rule with wire RTT flat throughout — single-target runs measure the
-Zigbee2MQTT per-device request-queue ceiling (denominator 3, ~1/RTT) and bound
-the NCP knee from below; driving the NCP itself needs a multi-target spread
-(future refinement). Remaining for **M5**: utilization/headroom dashboards +
-continuous knee validation scatter, optional groupcast stage (calibrates
-avg_tx), knee → §10 denominator wiring in `capacity/`.
+All five reference coordinators are calibrated (owner-authorized): every run
+completed cleanly via the saturation rule with wire RTT flat throughout —
+single-target runs measure the Zigbee2MQTT per-device request-queue ceiling
+(denominator 3, ~1/RTT) and bound the NCP knee from below; driving the NCP
+itself needs a multi-target spread (future refinement). **Bulk calibration**
+is live: one dry-run preview enumerates a batch (auto-picked or pinned
+targets), one single-use token authorizes exactly that list, runs execute
+sequentially with the full cooldown, aborts stop the remainder, vanished
+targets leave `skipped` history rows. **Headroom dashboards close the M5
+GUI**: `capacity/headroom.py` + GET /api/headroom report the three §10
+denominators side by side, steady/burst headroom vs the knee (10 s
+granularity), and the latency-vs-load knee-validation scatter — with
+benchmark windows excluded from every aggregate (§11.5); the Headroom view
+(uPlot) draws the scatter with the knee overlay and Fleet cards carry a knee
+line. Remaining M5 tail: optional groupcast stage (calibrates avg_tx),
+multi-target NCP-knee ramp. Then M6.
 Roadmap: README.md.
 
 ## Hard rules
