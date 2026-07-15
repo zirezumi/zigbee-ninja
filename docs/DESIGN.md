@@ -452,11 +452,15 @@ LQI/RSSI at T2 keeps link-quality trends fresh for free.
    timing.
 
 **Outputs:** utilization percent per denominator; steady headroom (knee − p95
-rate) and burst headroom (knee − p99 of 1 s windows); latency SLIs (enqueue→TX,
+rate) and burst headroom (knee − peak rate; persisted rollups are 10 s, so
+burst granularity is 10 s until 1 s series persist); latency SLIs (enqueue→TX,
 TX→delivery-confirm, command→state-echo); error SLIs (BUSY, delivery failures) —
 plotted against load. That last scatter enables **continuous knee validation**
 from natural traffic, catching capacity regressions (firmware updates, mesh
-drift) without waiting for a re-benchmark.
+drift) without waiting for a re-benchmark. Knee semantics carry through: a
+ramp that ended in driver saturation contributes the *pipeline* per-device
+ceiling (denominator 3) and a lower bound for the NCP knee, never a false
+"measured" denominator 2.
 
 ## §11 Calibration benchmark
 
@@ -543,6 +547,10 @@ standalone; HA ingress trust in add-on mode (fast-follow). Default port `8686`.
    sparklines, active alerts, coverage meters.
 2. **Coordinator detail** — stacked series by causality bucket; message-rate,
    airtime, and latency panes; error overlay; shared-channel pooling note.
+   The §10 utilization/headroom outputs shipped first as the dedicated
+   **Headroom** view: the three denominators side by side, steady/burst
+   headroom against the calibrated knee, and the latency-vs-load
+   knee-validation scatter (uPlot); Fleet cards carry the knee line.
 3. **Attribution explorer** — pivotable bucket × device-class × commander matrix;
    top-N devices/automations; the redundant-command report.
 4. **Wire tap** — per-coordinator wire-tier telemetry: agent/flow health

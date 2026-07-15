@@ -18,6 +18,7 @@ from .. import tiles as tiles_module
 from ..attribution import queries as attribution_queries
 from ..calibration.benchmark import CalibrationRejected
 from ..capacity import airtime as airtime_model
+from ..capacity import headroom as headroom_model
 from ..ingest.engine import Engine
 from ..ingest.hacontrol import HaConfig, test_ha
 from ..ingest.mqtt import BrokerConfig, test_connection
@@ -267,6 +268,15 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
             )
             view["provenance"] = airtime_model.PROVENANCE
         return {"window_seconds": seconds, "instances": instances}
+
+    @app.get("/api/headroom")
+    def headroom_view(request: Request, seconds: int = 21600) -> dict:
+        """Utilization per denominator, steady/burst headroom, and the
+        latency-vs-load scatter for continuous knee validation (§10)."""
+        require_user(request)
+        seconds = max(600, min(seconds, MAX_QUERY_WINDOW_SECONDS))
+        engine.flush_rollups()
+        return headroom_model.summarize(db, seconds, engine.registry.snapshot())
 
     @app.get("/api/topology")
     def topology_get(request: Request, instance: str | None = None, full: bool = False) -> dict:

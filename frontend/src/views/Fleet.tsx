@@ -2,10 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import {
   AirtimeLive,
   FleetMessage,
+  HeadroomInstance,
+  HeadroomView,
   InstanceInfo,
   LatencyStats,
   ProbeStats,
   WireLatencyStats,
+  api,
   fleetSocketUrl,
 } from "../api";
 
@@ -65,6 +68,7 @@ interface InstanceCardProps {
   probe?: ProbeStats;
   airtime?: AirtimeLive;
   wireLatency?: WireLatencyStats;
+  headroom?: HeadroomInstance;
   coverage: Coverage;
 }
 
@@ -76,6 +80,7 @@ function InstanceCard({
   probe,
   airtime,
   wireLatency,
+  headroom,
   coverage,
 }: InstanceCardProps) {
   const online = instance.online;
@@ -125,6 +130,15 @@ function InstanceCard({
             ? `p50 ${wireLatency.p50_ms} ms · p95 ${wireLatency.p95_ms} ms (${wireLatency.count})`
             : "—"}
         </span>
+        <span>Knee</span>
+        <span title="Calibrated sustainable command rate (§11); ≥ marks a lower bound. Load share from the trailing hour.">
+          {headroom?.knee
+            ? `${headroom.knee.kind === "mesh_knee" ? "" : "≥"}${headroom.knee.eps}/s` +
+              (headroom.headroom
+                ? ` · load ${headroom.headroom.knee_utilization_pct}% of knee`
+                : "")
+            : "not calibrated"}
+        </span>
         <span>Z2M echo</span>
         <span title="Command → state-echo proxy at the Z2M boundary (T1, approximate)">
           {latency
@@ -153,6 +167,26 @@ export default function Fleet({ onReconfigure }: FleetProps) {
   const [message, setMessage] = useState<FleetMessage | null>(null);
   const [socketState, setSocketState] = useState<"connecting" | "open" | "closed">("connecting");
   const historyRef = useRef<Record<string, number[]>>({});
+
+  const [headroom, setHeadroom] = useState<HeadroomView | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const data = await api<HeadroomView>("/api/headroom?seconds=3600");
+        if (alive) setHeadroom(data);
+      } catch {
+        // knee line simply stays absent until the next poll succeeds
+      }
+    };
+    void load();
+    const interval = window.setInterval(() => void load(), 30000);
+    return () => {
+      alive = false;
+      window.clearInterval(interval);
+    };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -234,6 +268,7 @@ export default function Fleet({ onReconfigure }: FleetProps) {
                 probe={probe}
                 airtime={message?.tap.airtime[base]}
                 wireLatency={message?.tap.latency[base]}
+                headroom={headroom?.instances[base]}
                 coverage={{
                   t0: broker?.state === "connected",
                   t1: heartbeat != null && now - heartbeat < 120,

@@ -338,6 +338,45 @@ export interface CandidatesView {
   topology_pulled_at: number | null;
 }
 
+export interface HeadroomKnee {
+  eps: number;
+  kind: string;
+  breach: string | null;
+  censored: boolean;
+  rtt_source: string | null;
+  target: string | null;
+  measured_at: number | null;
+  environment: Record<string, string | null>;
+  stale_environment: boolean;
+}
+
+export interface HeadroomInstance {
+  knee: HeadroomKnee | null;
+  denominators: {
+    channel_budget: { us_per_s: number; pct: number; provenance: string };
+    ncp_knee: { eps: number; provenance: string } | null;
+    pipeline: { eps: number; provenance: string } | null;
+  };
+  rates: {
+    p50_eps: number;
+    p95_eps: number;
+    max_eps: number;
+    windows: number;
+  } | null;
+  headroom: {
+    steady_eps: number;
+    burst_eps: number;
+    knee_utilization_pct: number;
+    granularity: string;
+  } | null;
+  scatter: Array<{ eps: number; p95_ms: number }>;
+}
+
+export interface HeadroomView {
+  window_seconds: number;
+  instances: Record<string, HeadroomInstance>;
+}
+
 export interface TopTarget {
   instance: string;
   target: string;

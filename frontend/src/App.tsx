@@ -6,16 +6,25 @@ import BrokerSetup from "./views/BrokerSetup";
 import Calibration from "./views/Calibration";
 import Fleet from "./views/Fleet";
 import Footprint from "./views/Footprint";
+import Headroom from "./views/Headroom";
 import Topology from "./views/Topology";
 import Wire from "./views/Wire";
 
 type Phase = "loading" | "setup" | "login" | "ready" | "error";
-type View = "fleet" | "attribution" | "wire" | "topology" | "calibration" | "footprint";
+type View =
+  | "fleet"
+  | "attribution"
+  | "wire"
+  | "headroom"
+  | "topology"
+  | "calibration"
+  | "footprint";
 
 const NAV_ITEMS: Array<{ label: string; view?: View }> = [
   { label: "Fleet", view: "fleet" },
   { label: "Attribution", view: "attribution" },
   { label: "Wire tap", view: "wire" },
+  { label: "Headroom", view: "headroom" },
   { label: "Burst inspector" },
   { label: "Topology", view: "topology" },
   { label: "Calibration", view: "calibration" },
@@ -28,6 +37,7 @@ const VIEW_TITLES: Record<View, string> = {
   fleet: "Fleet",
   attribution: "Attribution",
   wire: "Wire tap",
+  headroom: "Headroom",
   topology: "Topology",
   calibration: "Calibration",
   footprint: "Footprint & permissions",
@@ -248,6 +258,8 @@ export default function App() {
           <Attribution />
         ) : view === "wire" ? (
           <Wire />
+        ) : view === "headroom" ? (
+          <Headroom />
         ) : view === "topology" ? (
           <Topology />
         ) : view === "calibration" ? (
