@@ -40,6 +40,7 @@ export interface InstanceInfo {
   adapter_port: string | null;
   coordinator_type: string | null;
   coordinator_ieee: string | null;
+  coordinator_revision: string | null;
   device_count: number;
   router_count: number;
   end_device_count: number;
@@ -195,6 +196,120 @@ export interface Tile {
     seq_gaps: number;
     last_heartbeat_at: number | null;
   };
+}
+
+export interface CalibrationStep {
+  rate_eps: number;
+  duration_s: number;
+  started_at: number;
+  sent: number;
+  completed: number;
+  timeouts: number;
+  deferred: number;
+  achieved_eps: number;
+  echo_p50_ms: number | null;
+  echo_p95_ms: number | null;
+  wire_p50_ms: number | null;
+  wire_p95_ms: number | null;
+  wire_samples: number;
+  delivery_failed_delta: number;
+  rtt_source: string | null;
+  breach: string | null;
+}
+
+export interface CalibrationPlan {
+  instance: string;
+  target: string;
+  target_ieee: string | null;
+  get_attribute: string;
+  topic: string;
+  payload: string;
+  traffic: string;
+  steps: Array<{ rate_eps: number; duration_s: number; reads: number }>;
+  total_reads: number;
+  estimated_duration_s: number;
+  read_timeout_s: number;
+  max_outstanding_rule: string;
+  rtt_source: string;
+  caps: { max_rate_eps: number; max_run_seconds: number; max_total_reads: number };
+  stop_rules: Record<string, string | number>;
+  watchdog: Record<string, string | number>;
+  cooldown_seconds: number;
+  warnings: string[];
+  environment: Record<string, string | null>;
+  created_at: number;
+}
+
+export interface CalibrationPreview extends CalibrationPlan {
+  authorization: string;
+  authorization_expires_at: number;
+}
+
+export interface CalibrationActive {
+  run_id: string;
+  instance: string;
+  target: string;
+  state: string;
+  started_at: number;
+  step_index: number;
+  total_steps: number;
+  current: CalibrationStep | null;
+  outstanding: number;
+  sent_total: number;
+  steps: CalibrationStep[];
+  abort_requested: string | null;
+  plan: CalibrationPlan;
+}
+
+export interface CalibrationKnee {
+  eps: number;
+  censored: boolean;
+  breach: string | null;
+  breach_rate_eps: number | null;
+  rtt_source: string;
+}
+
+export interface CalibrationRecord {
+  id: number;
+  instance: string;
+  target: string;
+  started_at: number;
+  finished_at: number | null;
+  status: string;
+  knee_eps: number | null;
+  steps: CalibrationStep[];
+  knee: CalibrationKnee | null;
+  abort_reason: string | null;
+  environment: Record<string, string | null>;
+  rtt_source: string | null;
+}
+
+export interface CalibrationView {
+  active: CalibrationActive | null;
+  cooldown_until: number | null;
+  history: CalibrationRecord[];
+}
+
+export interface CalibrationCandidate {
+  friendly_name: string;
+  ieee_address: string | null;
+  vendor: string | null;
+  model: string | null;
+  get_attribute: string | null;
+  published_measurements: string[];
+  binding_count: number;
+  group_count: number;
+  lqi: number | null;
+  degree: number;
+  eligible: boolean;
+  reasons: string[];
+  score: number | null;
+}
+
+export interface CandidatesView {
+  instance: string;
+  candidates: CalibrationCandidate[];
+  topology_pulled_at: number | null;
 }
 
 export interface TopTarget {

@@ -3,13 +3,14 @@ import { api, ApiError, BrokerView } from "./api";
 import type { Health, Me } from "./api";
 import Attribution from "./views/Attribution";
 import BrokerSetup from "./views/BrokerSetup";
+import Calibration from "./views/Calibration";
 import Fleet from "./views/Fleet";
 import Footprint from "./views/Footprint";
 import Topology from "./views/Topology";
 import Wire from "./views/Wire";
 
 type Phase = "loading" | "setup" | "login" | "ready" | "error";
-type View = "fleet" | "attribution" | "wire" | "topology" | "footprint";
+type View = "fleet" | "attribution" | "wire" | "topology" | "calibration" | "footprint";
 
 const NAV_ITEMS: Array<{ label: string; view?: View }> = [
   { label: "Fleet", view: "fleet" },
@@ -17,7 +18,7 @@ const NAV_ITEMS: Array<{ label: string; view?: View }> = [
   { label: "Wire tap", view: "wire" },
   { label: "Burst inspector" },
   { label: "Topology", view: "topology" },
-  { label: "Calibration" },
+  { label: "Calibration", view: "calibration" },
   { label: "Footprint", view: "footprint" },
   { label: "Alerts" },
   { label: "Settings" },
@@ -28,6 +29,7 @@ const VIEW_TITLES: Record<View, string> = {
   attribution: "Attribution",
   wire: "Wire tap",
   topology: "Topology",
+  calibration: "Calibration",
   footprint: "Footprint & permissions",
 };
 
@@ -248,6 +250,8 @@ export default function App() {
           <Wire />
         ) : view === "topology" ? (
           <Topology />
+        ) : view === "calibration" ? (
+          <Calibration />
         ) : (
           <Footprint />
         )}

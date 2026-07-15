@@ -553,7 +553,11 @@ standalone; HA ingress trust in add-on mode (fast-follow). Default port `8686`.
    degree, per-query sweep answers — a node that answers Mgmt_Lqi but omits
    Mgmt_Rtg is a firmware quirk, not unreachable); the force-directed graph
    rides on the stored raw maps later.
-7. **Calibration** — wizard + history + knee-drift indicators.
+7. **Calibration** — wizard + history + knee-drift indicators. First slice
+   shipped: ranked target picker, dry-run preview with per-run authorization,
+   live ramp progress with the RTT-vs-rate curve and an ever-present abort,
+   and history with an environment-drift "recalibrate?" chip. The optional
+   groupcast stage (§11) is not yet implemented.
 8. **Footprint & permissions** — tiles, health, versions, revoke-all; connected
    wire-tap agents.
 9. **Alerts** — rules and notification center (§14).
