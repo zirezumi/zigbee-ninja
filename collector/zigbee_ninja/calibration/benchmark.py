@@ -1,0 +1,750 @@
+"""NCP throughput calibration: per-run-authorized closed-loop ramp (DESIGN.md §11).
+
+This is the one zigbee-ninja feature that transmits onto the mesh on purpose,
+so its posture is the strictest in the product:
+
+- **Per-run authorization, never a standing grant.** A dry-run preview shows
+  the exact traffic, schedule, caps, and stop rules and mints a single-use
+  authorization token (short TTL). Starting a run requires echoing that token;
+  nothing persists across runs (DESIGN.md §6).
+- **Closed loop.** Reads are paced at the step rate but bounded by outstanding
+  replies — a stalling mesh throttles the driver instead of being buried.
+- **Benign traffic.** Unicast attribute reads through the instance's own MQTT
+  command path (`<base>/<target>/get {"<attr>": ""}`), the same path
+  controllers use. Reads actuate nothing; each reply republishes device state.
+- **Self-attributed.** The engine classifies both the reads and their state
+  echoes as `self` (P4); run windows are recorded in the calibrations table so
+  utilization views can flag or exclude them.
+
+The knee (§10 denominator 2) is the highest ramp step sustained without a stop
+rule firing: p95 RTT breach vs the step-1 baseline, read-timeout ratio,
+instance delivery failures, or driver saturation (the closed loop can no
+longer reach the requested rate — which indicates the *pipeline* service
+ceiling, denominator 3, and bounds the NCP knee from below; the record says
+which). RTT prefers the wire-tier SLI when a tap covers the coordinator and
+falls back to the MQTT command→state-echo path, provenance-tagged either way.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import math
+import secrets
+import statistics
+import time
+from collections import deque
+from collections.abc import Awaitable, Callable
+from dataclasses import asdict, dataclass, field
+
+from ..store.db import Database
+
+# -- ramp schedule & hard caps (all shown verbatim in the dry-run preview) ------
+RAMP_RATES_EPS = (1.0, 2.0, 4.0, 8.0, 16.0, 32.0)
+STEP_SECONDS = 20.0
+READ_TIMEOUT_SECONDS = 5.0
+SETTLE_TICK_SECONDS = 0.2
+# The outstanding bound allows this much in-flight time before throttling;
+# beyond it the driver defers sends and the step registers as saturated.
+OUTSTANDING_RTT_ALLOWANCE = 0.25
+MIN_OUTSTANDING = 4
+MAX_RATE_EPS = 50.0
+MAX_RUN_SECONDS = 900.0
+MAX_TOTAL_READS = 5000
+COOLDOWN_SECONDS = 120.0
+AUTHORIZATION_TTL_SECONDS = 600.0
+
+# -- stop rules (knee detection — a normal end of ramp) -------------------------
+RTT_BREACH_FACTOR = 3.0
+RTT_FLOORS_MS = {"wire": 300.0, "echo": 2000.0}
+TIMEOUT_BREACH_RATIO = 0.10
+SATURATION_RATIO = 0.80
+DELIVERY_FAILURES_PER_STEP = 10
+
+# -- watchdog rules (abort — something beyond the run is being affected) --------
+WATCHDOG_BRIDGE_ERRORS = 5
+STALL_MIN_SENT = 10
+STALL_SECONDS = 10.0
+
+HISTORY_LIMIT = 20
+
+
+class CalibrationRejected(RuntimeError):
+    """Refused before any mesh traffic was generated."""
+
+
+class _Abort(Exception):
+    """Internal: watchdog or manual abort — stop transmitting immediately."""
+
+
+@dataclass
+class StepResult:
+    rate_eps: float
+    duration_s: float
+    started_at: float = 0.0
+    sent: int = 0
+    completed: int = 0
+    timeouts: int = 0
+    deferred: int = 0
+    achieved_eps: float = 0.0
+    echo_p50_ms: float | None = None
+    echo_p95_ms: float | None = None
+    wire_p50_ms: float | None = None
+    wire_p95_ms: float | None = None
+    wire_samples: int = 0
+    delivery_failed_delta: int = 0
+    rtt_source: str | None = None
+    breach: str | None = None
+
+
+@dataclass
+class _ActiveRun:
+    run_id: str
+    plan: dict
+    started_at: float
+    state: str = "running"  # running | settling
+    step_index: int = 0
+    current: StepResult | None = None
+    steps: list[StepResult] = field(default_factory=list)
+    outstanding: deque = field(default_factory=deque)  # send timestamps, FIFO
+    step_echo_rtts: list[float] = field(default_factory=list)
+    sent_total: int = 0
+    bridge_errors: int = 0
+    abort_reason: str | None = None
+
+
+def _percentiles(values: list[float]) -> tuple[float | None, float | None]:
+    if not values:
+        return None, None
+    ordered = sorted(values)
+    p50 = round(statistics.median(ordered), 1)
+    p95 = round(ordered[min(len(ordered) - 1, int(len(ordered) * 0.95))], 1)
+    return p50, p95
+
+
+def _device_lqi_and_degree(raw_map: dict) -> dict[str, dict]:
+    """Per-IEEE best link LQI and link count from a raw Z2M networkmap."""
+    result: dict[str, dict] = {}
+    for link in raw_map.get("links") or []:
+        source = str(link.get("sourceIeeeAddr") or (link.get("source") or {}).get("ieeeAddr"))
+        target = str(link.get("targetIeeeAddr") or (link.get("target") or {}).get("ieeeAddr"))
+        lqi = link.get("lqi", link.get("linkquality"))
+        for end in (source, target):
+            entry = result.setdefault(end, {"lqi": None, "degree": 0})
+            entry["degree"] += 1
+            if isinstance(lqi, (int, float)):
+                entry["lqi"] = lqi if entry["lqi"] is None else max(entry["lqi"], lqi)
+    return result
+
+
+class CalibrationManager:
+    """Preview/authorize/run lifecycle plus the engine-facing message hooks."""
+
+    def __init__(
+        self,
+        db: Database,
+        publisher: Callable[[str, str], Awaitable[None]],
+        devices: Callable[[str], list[dict]],
+        groups: Callable[[str], list[dict]],
+        instances: Callable[[], list[dict]],
+        topology_latest: Callable[[str], dict],
+        wire_covers: Callable[[str], bool] | None = None,
+        wire_latency_mark: Callable[[str], float] | None = None,
+        wire_latency_since: Callable[[str, float], list[float]] | None = None,
+        wire_delivery_totals: Callable[[str], tuple[int, int]] | None = None,
+        clock: Callable[[], float] = time.time,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ):
+        self._db = db
+        self._publish = publisher
+        self._devices = devices
+        self._groups = groups
+        self._instances = instances
+        self._topology_latest = topology_latest
+        self._wire_covers = wire_covers or (lambda _instance: False)
+        self._wire_latency_mark = wire_latency_mark or (lambda _instance: 0.0)
+        self._wire_latency_since = wire_latency_since or (lambda _instance, _mark: [])
+        self._wire_delivery_totals = wire_delivery_totals or (lambda _instance: (0, 0))
+        self._clock = clock
+        self._sleep = sleep
+        self._authorizations: dict[str, dict] = {}
+        self._active: _ActiveRun | None = None
+        self._task: asyncio.Task | None = None
+        self._cooldown_until = 0.0
+
+    # -- engine-facing hooks (hot path guards on `active`) -----------------------
+
+    @property
+    def active(self) -> bool:
+        return self._active is not None
+
+    def owns_command(self, base: str, target: str, verb: str) -> bool:
+        """True for the run's own reads — the engine skips chain attribution
+        for them because publish() already accounted them as `self` (P4)."""
+        run = self._active
+        return (
+            run is not None
+            and verb == "get"
+            and base == run.plan["instance"]
+            and target == run.plan["target"]
+        )
+
+    def on_state(self, base: str, name: str) -> bool:
+        """Complete one outstanding read on the target's state echo.
+
+        Returns True only when an outstanding read was completed — the engine
+        then classes the echo `self`. A target state publish with nothing
+        outstanding stays an ordinary autonomous report.
+        """
+        run = self._active
+        if run is None or base != run.plan["instance"] or name != run.plan["target"]:
+            return False
+        if not run.outstanding:
+            return False
+        sent_at = run.outstanding.popleft()
+        run.step_echo_rtts.append((self._clock() - sent_at) * 1000.0)
+        if run.current is not None:
+            run.current.completed += 1
+        return True
+
+    def on_availability(self, base: str, suffix: str, payload: bytes) -> None:
+        """Watchdog: any device on the instance going offline aborts the run."""
+        run = self._active
+        if run is None or base != run.plan["instance"]:
+            return
+        name = suffix.rsplit("/", 1)[0]
+        try:
+            data = json.loads(payload)
+            state = data.get("state") if isinstance(data, dict) else None
+        except (ValueError, UnicodeDecodeError):
+            state = payload.decode(errors="replace").strip()
+        if state != "offline":
+            return
+        if name == run.plan["target"]:
+            self._request_abort(f"target {name} went offline")
+        else:
+            self._request_abort(f"uninvolved device {name} went offline during the run")
+
+    def on_bridge_log(self, base: str, payload: bytes) -> None:
+        """Watchdog: an error spike in the Zigbee2MQTT log aborts the run."""
+        run = self._active
+        if run is None or base != run.plan["instance"]:
+            return
+        try:
+            data = json.loads(payload)
+        except (ValueError, UnicodeDecodeError):
+            return
+        if isinstance(data, dict) and data.get("level") == "error":
+            run.bridge_errors += 1
+            if run.bridge_errors >= WATCHDOG_BRIDGE_ERRORS:
+                self._request_abort(
+                    f"{run.bridge_errors} Zigbee2MQTT error log lines during the run"
+                )
+
+    # -- candidates (§11.1) -------------------------------------------------------
+
+    def candidates(self, instance: str) -> dict:
+        devices = self._devices(instance)
+        if not devices:
+            raise ValueError(f"No device registry for {instance}")
+        topology = self._topology_latest(instance) or {}
+        link_stats = _device_lqi_and_degree(topology.get("raw") or {})
+        unresponsive = set(topology.get("unresponsive_nodes") or [])
+        membership: dict[str, int] = {}
+        for group in self._groups(instance):
+            for ieee in group.get("member_ieee", []):
+                membership[ieee] = membership.get(ieee, 0) + 1
+
+        rows = []
+        for device in devices:
+            if device.get("type") != "Router":
+                continue
+            ieee = device.get("ieee_address")
+            stats = link_stats.get(str(ieee), {})
+            reasons: list[str] = []
+            eligible = True
+            if not str(device.get("power_source") or "").startswith("Mains"):
+                eligible = False
+                reasons.append("not mains-powered")
+            if not device.get("get_attribute"):
+                eligible = False
+                reasons.append("no gettable attribute")
+            if device.get("friendly_name") in unresponsive:
+                reasons.append("did not answer the last topology sweep")
+            lqi = stats.get("lqi")
+            binding_count = int(device.get("binding_count") or 0)
+            group_count = membership.get(ieee, 0)
+            score = None
+            if eligible:
+                # Healthy link first, then the least-entangled device: bindings
+                # mean reporting consumers, groups mean groupcast interruptions.
+                score = round(
+                    (lqi if lqi is not None else 0)
+                    - 10 * binding_count
+                    - 5 * group_count
+                    - (50 if device.get("friendly_name") in unresponsive else 0),
+                    1,
+                )
+            rows.append(
+                {
+                    "friendly_name": device.get("friendly_name"),
+                    "ieee_address": ieee,
+                    "vendor": device.get("vendor"),
+                    "model": device.get("model"),
+                    "get_attribute": device.get("get_attribute"),
+                    "published_measurements": device.get("published_measurements") or [],
+                    "binding_count": binding_count,
+                    "group_count": group_count,
+                    "lqi": lqi,
+                    "degree": stats.get("degree", 0),
+                    "eligible": eligible,
+                    "reasons": reasons,
+                    "score": score,
+                }
+            )
+        rows.sort(key=lambda row: (not row["eligible"], -(row["score"] or -1e9)))
+        return {
+            "instance": instance,
+            "candidates": rows,
+            "topology_pulled_at": topology.get("pulled_at"),
+        }
+
+    # -- preview & authorization (§11.2) -------------------------------------------
+
+    def preview(self, instance: str, target: str) -> dict:
+        device = self._find_device(instance, target)
+        info = self._instance_info(instance)
+        wire = self._wire_covers(instance)
+        warnings: list[str] = []
+        measurements = device.get("published_measurements") or []
+        if measurements:
+            warnings.append(
+                f"Each reply republishes the target's state; {target} reports "
+                f"{', '.join(measurements)} — expect state/recorder churn in "
+                "controllers for the run duration."
+            )
+        if not wire:
+            warnings.append(
+                "No wire tap covers this coordinator — RTT falls back to the "
+                "MQTT command→state-echo path (coarser; the knee is tagged accordingly)."
+            )
+        shared = [
+            other["base_topic"]
+            for other in self._instances()
+            if other.get("base_topic") != instance
+            and other.get("channel") is not None
+            and other.get("channel") == (info or {}).get("channel")
+        ]
+        if shared:
+            warnings.append(
+                f"Shares Zigbee channel {info.get('channel')} with {', '.join(shared)} — "
+                "their traffic contends with the benchmark."
+            )
+
+        steps = [
+            {"rate_eps": rate, "duration_s": STEP_SECONDS, "reads": int(rate * STEP_SECONDS)}
+            for rate in RAMP_RATES_EPS
+            if rate <= MAX_RATE_EPS
+        ]
+        now = self._clock()
+        plan = {
+            "instance": instance,
+            "target": target,
+            "target_ieee": device.get("ieee_address"),
+            "get_attribute": device["get_attribute"],
+            "topic": f"{instance}/{target}/get",
+            "payload": json.dumps({device["get_attribute"]: ""}),
+            "traffic": (
+                "Unicast ZCL attribute reads via Zigbee2MQTT's own command path; "
+                "each read is one TX unicast plus the target's reply — nothing is "
+                "written or actuated."
+            ),
+            "steps": steps,
+            "total_reads": sum(step["reads"] for step in steps),
+            "estimated_duration_s": int(len(steps) * (STEP_SECONDS + READ_TIMEOUT_SECONDS)),
+            "read_timeout_s": READ_TIMEOUT_SECONDS,
+            "max_outstanding_rule": (
+                f"max({MIN_OUTSTANDING}, rate × {OUTSTANDING_RTT_ALLOWANCE}s) — a "
+                "stalling mesh throttles the driver"
+            ),
+            "rtt_source": "wire" if wire else "echo",
+            "caps": {
+                "max_rate_eps": MAX_RATE_EPS,
+                "max_run_seconds": MAX_RUN_SECONDS,
+                "max_total_reads": MAX_TOTAL_READS,
+            },
+            "stop_rules": {
+                "rtt_p95": (
+                    f"p95 RTT above max({RTT_BREACH_FACTOR}× step-1 baseline, "
+                    f"{RTT_FLOORS_MS['wire']:.0f} ms wire / {RTT_FLOORS_MS['echo']:.0f} ms echo)"
+                ),
+                "timeout_ratio": TIMEOUT_BREACH_RATIO,
+                "saturation_ratio": SATURATION_RATIO,
+                "delivery_failures_per_step": DELIVERY_FAILURES_PER_STEP,
+            },
+            "watchdog": {
+                "bridge_error_lines": WATCHDOG_BRIDGE_ERRORS,
+                "uninvolved_offline": "any device on the instance going offline aborts",
+                "stall": f"no replies at all after {STALL_MIN_SENT} reads / {STALL_SECONDS:.0f}s",
+                "manual_abort": "always available",
+            },
+            "cooldown_seconds": COOLDOWN_SECONDS,
+            "warnings": warnings,
+            "environment": {
+                "z2m_version": (info or {}).get("version"),
+                "coordinator_type": (info or {}).get("coordinator_type"),
+                "coordinator_revision": (info or {}).get("coordinator_revision"),
+            },
+            "created_at": now,
+        }
+        token = secrets.token_hex(8)
+        self._authorizations[token] = plan
+        for stale in [
+            key
+            for key, value in self._authorizations.items()
+            if now - value["created_at"] > AUTHORIZATION_TTL_SECONDS
+        ]:
+            del self._authorizations[stale]
+        return {
+            **plan,
+            "authorization": token,
+            "authorization_expires_at": now + AUTHORIZATION_TTL_SECONDS,
+        }
+
+    # -- run lifecycle ---------------------------------------------------------------
+
+    async def start(self, instance: str, target: str, authorization: str) -> dict:
+        plan = self._authorizations.get(authorization)
+        if plan is None:
+            raise CalibrationRejected(
+                "Unknown or already-used authorization — request a fresh preview"
+            )
+        if self._clock() - plan["created_at"] > AUTHORIZATION_TTL_SECONDS:
+            self._authorizations.pop(authorization, None)
+            raise CalibrationRejected("Authorization expired — request a fresh preview")
+        if plan["instance"] != instance or plan["target"] != target:
+            raise CalibrationRejected("Authorization does not match this instance/target")
+        self._require_idle()
+        # Re-verify against the live registry: the fleet may have changed
+        # between preview and confirmation.
+        device = self._find_device(instance, target)
+        if device.get("get_attribute") != plan["get_attribute"]:
+            raise CalibrationRejected("Target definition changed since the preview")
+        self._authorizations.pop(authorization, None)  # single-use
+        run = _ActiveRun(
+            run_id=f"cal-{secrets.token_hex(4)}",
+            plan=plan,
+            started_at=self._clock(),
+        )
+        self._active = run
+        self._task = asyncio.get_running_loop().create_task(self._run(run))
+        return self.status()
+
+    def abort(self) -> dict:
+        if self._active is None:
+            raise CalibrationRejected("No calibration run is active")
+        self._request_abort("manual abort")
+        return self.status()
+
+    async def shutdown(self) -> None:
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+
+    def _require_idle(self) -> None:
+        if self._active is not None:
+            raise CalibrationRejected(
+                f"A calibration of {self._active.plan['target']} is already running"
+            )
+        now = self._clock()
+        if now < self._cooldown_until:
+            raise CalibrationRejected(
+                f"Cooling down — next run allowed in {int(self._cooldown_until - now)}s"
+            )
+
+    def _request_abort(self, reason: str) -> None:
+        run = self._active
+        if run is not None and run.abort_reason is None:
+            run.abort_reason = reason
+
+    # -- the ramp ---------------------------------------------------------------------
+
+    async def _run(self, run: _ActiveRun) -> None:
+        status = "completed"
+        try:
+            baselines: dict[str, float] = {}
+            for index, spec in enumerate(run.plan["steps"]):
+                step = StepResult(
+                    rate_eps=spec["rate_eps"],
+                    duration_s=spec["duration_s"],
+                    started_at=self._clock(),
+                )
+                run.step_index = index
+                run.current = step
+                run.step_echo_rtts = []
+                wire_mark = self._wire_latency_mark(run.plan["instance"])
+                delivery_before = self._wire_delivery_totals(run.plan["instance"])
+
+                await self._run_step(run, step)
+                await self._settle(run, step)
+
+                self._finalize_step(run, step, wire_mark, delivery_before)
+                run.steps.append(step)
+                run.current = None
+                if self._evaluate_stop(step, index, baselines):
+                    break
+        except _Abort as exc:
+            status = "aborted"
+            if run.abort_reason is None:
+                run.abort_reason = str(exc)
+            if run.current is not None:  # keep the partial step's curves
+                run.steps.append(run.current)
+                run.current = None
+        except asyncio.CancelledError:
+            status = "aborted"
+            run.abort_reason = run.abort_reason or "collector shutdown"
+            if run.current is not None:
+                run.steps.append(run.current)
+            self._record(run, status)
+            self._cooldown_until = self._clock() + COOLDOWN_SECONDS
+            self._active = None
+            raise
+        except Exception as exc:  # never leave a run half-alive on a bug
+            status = "error"
+            run.abort_reason = f"internal error: {exc}"
+        self._record(run, status)
+        self._cooldown_until = self._clock() + COOLDOWN_SECONDS
+        self._active = None
+
+    async def _run_step(self, run: _ActiveRun, step: StepResult) -> None:
+        interval = 1.0 / step.rate_eps
+        bound = max(MIN_OUTSTANDING, math.ceil(step.rate_eps * OUTSTANDING_RTT_ALLOWANCE))
+        step_end = step.started_at + step.duration_s
+        while self._clock() < step_end:
+            self._check_abort(run)
+            self._expire_timeouts(run, step)
+            self._check_stall(run, step)
+            if run.sent_total >= MAX_TOTAL_READS:
+                raise _Abort("total read cap reached")
+            if self._clock() - run.started_at > MAX_RUN_SECONDS:
+                raise _Abort("run wall-clock cap reached")
+            if len(run.outstanding) < bound:
+                try:
+                    await self._publish(run.plan["topic"], run.plan["payload"])
+                except Exception as exc:
+                    raise _Abort(f"publish failed: {exc}") from exc
+                run.outstanding.append(self._clock())
+                step.sent += 1
+                run.sent_total += 1
+            else:
+                step.deferred += 1
+            await self._sleep(interval)
+
+    async def _settle(self, run: _ActiveRun, step: StepResult) -> None:
+        """Drain in-flight reads so steps don't bleed into each other."""
+        run.state = "settling"
+        deadline = self._clock() + READ_TIMEOUT_SECONDS + 1.0
+        try:
+            while run.outstanding and self._clock() < deadline:
+                self._check_abort(run)
+                self._expire_timeouts(run, step)
+                if run.outstanding:
+                    await self._sleep(SETTLE_TICK_SECONDS)
+            while run.outstanding:  # anything left is past its timeout
+                run.outstanding.popleft()
+                step.timeouts += 1
+        finally:
+            run.state = "running"
+
+    def _finalize_step(
+        self,
+        run: _ActiveRun,
+        step: StepResult,
+        wire_mark: float,
+        delivery_before: tuple[int, int],
+    ) -> None:
+        step.achieved_eps = round(step.sent / step.duration_s, 2)
+        step.echo_p50_ms, step.echo_p95_ms = _percentiles(run.step_echo_rtts)
+        wire_samples = self._wire_latency_since(run.plan["instance"], wire_mark)
+        step.wire_samples = len(wire_samples)
+        step.wire_p50_ms, step.wire_p95_ms = _percentiles(wire_samples)
+        _, failed_after = self._wire_delivery_totals(run.plan["instance"])
+        step.delivery_failed_delta = failed_after - delivery_before[1]
+        step.rtt_source = (
+            "wire"
+            if run.plan["rtt_source"] == "wire" and step.wire_p95_ms is not None
+            else "echo"
+        )
+
+    def _evaluate_stop(
+        self, step: StepResult, index: int, baselines: dict[str, float]
+    ) -> bool:
+        """Apply the §11 stop rules; True ends the ramp (knee found).
+
+        Error-budget rules run before the RTT rule: lost replies inflate the
+        FIFO-paired echo RTT, so when reads go unanswered the timeout ratio is
+        the primary signal and the RTT number is derivative.
+        """
+        if step.sent and step.timeouts / step.sent > TIMEOUT_BREACH_RATIO:
+            step.breach = "timeout_ratio"
+            return True
+        if step.delivery_failed_delta > DELIVERY_FAILURES_PER_STEP:
+            step.breach = "delivery_failures"
+            return True
+        source = step.rtt_source or "echo"
+        p95 = step.wire_p95_ms if source == "wire" else step.echo_p95_ms
+        baseline = baselines.get(source)
+        if p95 is not None and baseline is None:
+            baselines[source] = p95  # first step observed on this source
+        elif p95 is not None and baseline is not None and index > 0:
+            threshold = max(RTT_BREACH_FACTOR * baseline, RTT_FLOORS_MS[source])
+            if p95 > threshold:
+                step.breach = "rtt_p95"
+                return True
+        if step.achieved_eps < SATURATION_RATIO * step.rate_eps:
+            step.breach = "saturated"
+            return True
+        return False
+
+    def _check_abort(self, run: _ActiveRun) -> None:
+        if run.abort_reason is not None:
+            raise _Abort(run.abort_reason)
+
+    def _check_stall(self, run: _ActiveRun, step: StepResult) -> None:
+        if (
+            step.sent >= STALL_MIN_SENT
+            and step.completed == 0
+            and self._clock() - step.started_at > STALL_SECONDS
+        ):
+            raise _Abort("no replies at all — target or pipeline unresponsive")
+
+    def _expire_timeouts(self, run: _ActiveRun, step: StepResult) -> None:
+        now = self._clock()
+        while run.outstanding and now - run.outstanding[0] > READ_TIMEOUT_SECONDS:
+            run.outstanding.popleft()
+            step.timeouts += 1
+
+    # -- record & read side ---------------------------------------------------------
+
+    def _record(self, run: _ActiveRun, status: str) -> None:
+        good = [step for step in run.steps if step.breach is None]
+        breached = [step for step in run.steps if step.breach is not None]
+        knee_eps = None
+        knee = None
+        if status == "completed" and good:
+            knee_eps = good[-1].achieved_eps
+            knee = {
+                "eps": knee_eps,
+                "censored": not breached,  # ramp exhausted without a breach
+                "breach": breached[0].breach if breached else None,
+                "breach_rate_eps": breached[0].rate_eps if breached else None,
+                "rtt_source": good[-1].rtt_source,
+            }
+        detail = {
+            "plan": run.plan,
+            "steps": [asdict(step) for step in run.steps],
+            "knee": knee,
+            "abort_reason": run.abort_reason if status != "completed" else None,
+            "bridge_errors": run.bridge_errors,
+            "environment": run.plan.get("environment", {}),
+        }
+        conn = self._db.connect()
+        conn.execute(
+            "INSERT INTO calibrations (instance, target, started_at, finished_at, "
+            "status, knee_eps, detail) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                run.plan["instance"],
+                run.plan["target"],
+                run.started_at,
+                self._clock(),
+                status,
+                knee_eps,
+                json.dumps(detail),
+            ),
+        )
+        conn.commit()
+
+    def status(self) -> dict:
+        active = None
+        run = self._active
+        if run is not None:
+            active = {
+                "run_id": run.run_id,
+                "instance": run.plan["instance"],
+                "target": run.plan["target"],
+                "state": run.state,
+                "started_at": run.started_at,
+                "step_index": run.step_index,
+                "total_steps": len(run.plan["steps"]),
+                "current": asdict(run.current) if run.current is not None else None,
+                "outstanding": len(run.outstanding),
+                "sent_total": run.sent_total,
+                "steps": [asdict(step) for step in run.steps],
+                "abort_requested": run.abort_reason,
+                "plan": run.plan,
+            }
+        now = self._clock()
+        return {
+            "active": active,
+            "cooldown_until": self._cooldown_until if self._cooldown_until > now else None,
+        }
+
+    def history(self, limit: int = HISTORY_LIMIT) -> list[dict]:
+        rows = self._db.connect().execute(
+            "SELECT id, instance, target, started_at, finished_at, status, knee_eps, "
+            "detail FROM calibrations ORDER BY started_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        result = []
+        for row in rows:
+            detail = json.loads(row["detail"])
+            result.append(
+                {
+                    "id": row["id"],
+                    "instance": row["instance"],
+                    "target": row["target"],
+                    "started_at": row["started_at"],
+                    "finished_at": row["finished_at"],
+                    "status": row["status"],
+                    "knee_eps": row["knee_eps"],
+                    "steps": detail.get("steps", []),
+                    "knee": detail.get("knee"),
+                    "abort_reason": detail.get("abort_reason"),
+                    "environment": detail.get("environment", {}),
+                    "rtt_source": (detail.get("plan") or {}).get("rtt_source"),
+                }
+            )
+        return result
+
+    def view(self) -> dict:
+        return {**self.status(), "history": self.history()}
+
+    # -- helpers -----------------------------------------------------------------------
+
+    def _find_device(self, instance: str, target: str) -> dict:
+        devices = self._devices(instance)
+        if not devices:
+            raise ValueError(f"No device registry for {instance}")
+        for device in devices:
+            if device.get("friendly_name") == target:
+                if device.get("type") != "Router":
+                    raise ValueError(
+                        f"{target} is not a router — benchmarks only target "
+                        "mains-powered routers"
+                    )
+                if not str(device.get("power_source") or "").startswith("Mains"):
+                    raise ValueError(f"{target} is not mains-powered")
+                if not device.get("get_attribute"):
+                    raise ValueError(f"{target} exposes no gettable attribute")
+                return device
+        raise ValueError(f"Unknown device {target} on {instance}")
+
+    def _instance_info(self, instance: str) -> dict | None:
+        for info in self._instances():
+            if info.get("base_topic") == instance:
+                return info
+        return None

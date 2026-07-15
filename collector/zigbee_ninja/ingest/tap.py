@@ -175,6 +175,16 @@ class WireLatency:
             }
         return result
 
+    # -- calibration read side (DESIGN.md §11) ---------------------------------
+    # Marks are pcap-clock timestamps: take one at a ramp-step boundary, then
+    # collect the samples that arrived after it — no cross-clock comparison.
+
+    def latest_ts(self, instance: str) -> float:
+        return self._latest_ts.get(instance, 0.0)
+
+    def samples_since(self, instance: str, mark: float) -> list[float]:
+        return [ms for ts, ms in self._samples.get(instance, ()) if ts > mark]
+
 
 @dataclass
 class DirectionState:
@@ -405,6 +415,26 @@ class TapIngest:
             self.airtime.record(instance, "rx_mesh", airtime.network_status_airtime_us())
         # incomingRouteErrorHandler mirrors incomingNetworkStatusHandler for the
         # same event; counting both would double the error and its airtime.
+
+    def wire_covers(self, instance: str, max_age: float = 60.0) -> bool:
+        """A live tap flow exists for this coordinator (calibration RTT source)."""
+        now = self._clock()
+        return any(
+            flow.instance == instance and now - flow.last_seen < max_age
+            for flow in self._flows.values()
+        )
+
+    def wire_delivery_totals(self, instance: str) -> tuple[int, int]:
+        """(delivery_ok, delivery_failed) summed across the instance's flows.
+
+        Reconnects key new flows, so totals are summed, not read from one flow;
+        callers diff totals across a window (calibration error accounting)."""
+        ok = failed = 0
+        for flow in self._flows.values():
+            if flow.instance == instance:
+                ok += flow.delivery_ok
+                failed += flow.delivery_failed
+        return ok, failed
 
     def _track_pending(self, flow: FlowState, tag: int, ts: float, kind: str) -> None:
         flow.pending[tag] = (ts, kind)

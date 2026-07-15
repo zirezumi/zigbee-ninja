@@ -109,6 +109,19 @@ _MIGRATIONS = [
     );
     CREATE INDEX idx_topology_instance_time ON topology_snapshots (instance, pulled_at);
     """,
+    """
+    CREATE TABLE calibrations (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        instance    TEXT NOT NULL,
+        target      TEXT NOT NULL,
+        started_at  REAL NOT NULL,
+        finished_at REAL,
+        status      TEXT NOT NULL,
+        knee_eps    REAL,
+        detail      TEXT NOT NULL
+    );
+    CREATE INDEX idx_calibrations_instance_time ON calibrations (instance, started_at);
+    """,
 ]
 
 

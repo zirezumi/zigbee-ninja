@@ -462,23 +462,42 @@ drift) without waiting for a re-benchmark.
 
 A guided wizard, per coordinator, per-run authorized (grants never persist):
 
-1. **Target selection** — mains-powered routers ranked by suitability (few
-   bindings/consumers, healthy LQI); the user picks.
-2. **Dry-run preview** — exact traffic to be generated, max rate, duration, abort
-   conditions, shown before anything transmits.
-3. **Ramp** — closed-loop unicast attribute reads (benign `genBasic`) at stepped
-   rates (~20 s per step, geometric ramp), measuring RTT distribution and error
-   onset per step. The knee = the step where p95 RTT breaches threshold or the
-   error budget spends. An optional, separately-authorized groupcast stage
-   against a wizard-created (and wizard-removed) test group calibrates the
-   broadcast retry factor.
-4. **Safety rails** — hard rate/duration caps; watchdog abort on any error spike
-   among *uninvolved* devices or in the bridge log; manual abort always live;
-   cool-down pause after the run.
-5. **Record** — `{knee_eps, RTT curve, error curve, η estimates, date, Z2M
-   version, firmware}`. Benchmark windows are flagged in history and excluded
-   from utilization series (they're attributed `self`). Version/firmware changes
-   trigger a "recalibrate?" suggestion.
+1. **Target selection** — mains-powered routers ranked by suitability (healthy
+   link LQI from the latest topology snapshot, then the least-entangled device:
+   fewer bindings and group memberships); the user picks.
+2. **Dry-run preview** — exact traffic to be generated (topic and payload),
+   the full step schedule, hard caps, stop rules, and watchdog conditions,
+   shown before anything transmits. The preview mints a **single-use,
+   short-TTL authorization token**; starting the run requires echoing it, and
+   nothing persists across runs.
+3. **Ramp** — closed-loop unicast attribute reads through the instance's own
+   MQTT command path (`<base>/<target>/get` of a benign, gettable attribute —
+   the same path controllers use; reads actuate nothing, each reply
+   republishes device state). Stepped geometric rates (~20 s per step), an
+   outstanding-replies bound so a stalling mesh throttles the driver, and a
+   drain pause between steps. Per step: sent/completed/timeouts, achieved
+   rate, RTT percentiles, and instance delivery-failure deltas. RTT prefers
+   the wire-tier `sendUnicast→messageSentHandler` SLI when a tap covers the
+   coordinator and falls back to the command→state-echo path, tagged either
+   way. The knee = the last step sustained before a stop rule fires: p95 RTT
+   breach (vs a multiple of the step-1 baseline with an absolute floor),
+   read-timeout ratio, delivery-failure budget, or **driver saturation** —
+   the closed loop can no longer reach the requested rate, which measures the
+   *pipeline* service ceiling (denominator 3) and bounds the NCP knee from
+   below; the record says which rule ended the ramp, and a ramp that exhausts
+   the schedule cleanly records a censored (lower-bound) knee. An optional,
+   separately-authorized groupcast stage against a wizard-created (and
+   wizard-removed) test group calibrates the broadcast retry factor `avg_tx`.
+4. **Safety rails** — hard rate/duration/total-read caps enforced inside the
+   send loop; watchdog abort on any device on the instance going offline, on
+   an error spike in the Zigbee2MQTT log, or on total reply silence; manual
+   abort always live; cool-down pause after every run.
+5. **Record** — per-step curves (rate, achieved, RTT percentiles per source,
+   timeouts, delivery failures), the knee with its terminating rule and
+   censored flag, date, Z2M version, coordinator firmware. Benchmark windows
+   are flagged in history and excluded from utilization series (the reads and
+   their echoes are attributed `self`). Version/firmware changes trigger a
+   "recalibrate?" suggestion.
 
 ## §12 Storage & data model
 
