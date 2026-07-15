@@ -125,10 +125,16 @@ decrypt path; alert lifecycle proven end to end on live infrastructure
 (agent stopped → open after sustain → GUI banner/chips → restart → clear on
 hysteresis → history); both avg_tx fixes confirmed on live hourly windows
 (3595–3604 s accepted by the widened guard; all residuals 3.16–3.50 →
-discarded as relay-contaminated with visible accounting). **V1 remaining:**
-the §12 Parquet/DuckDB raw-event store + Burst-inspector view were never
-built (scope decision pending), the discovery tile awaits its first
-user grant, and cosign image signing (§15) becomes relevant at release.
+discarded as relay-contaminated with visible accounting).
+**Burst inspector + §12 raw-event store DONE (owner ruled it V1 scope)**:
+bounded buffer → hot DuckDB table on the 10 s flush → hourly ZSTD Parquet
+segments, horizon+quota retention (settings-backed), T0 MQTT + T2 EZSP frame
+capture, /api/burst/{timeline,events,chains}, zoomable uPlot timeline view
+(drag re-queries finer buckets to 10 ms; ≤120 s windows show raw rows) with
+the window's chains as a micro-gantt-lite table — live-validated (both
+sources captured, HA-attributed chains render). Discovery tiles granted by
+the owner on all five instances — entities live in HA. **V1 is
+feature-complete; cosign image signing (§15) at first release.**
 Roadmap: README.md.
 
 ## Hard rules
