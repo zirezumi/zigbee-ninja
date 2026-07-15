@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   AirtimeLive,
+  AlertBrief,
   FleetMessage,
   HeadroomInstance,
   HeadroomView,
@@ -60,6 +61,19 @@ function CoverageMeter({ coverage }: { coverage: Coverage }) {
   );
 }
 
+function alertChip(alerts: AlertBrief[]): { label: string; className: string } | null {
+  if (alerts.length === 0) return null;
+  const worst = alerts.some((alert) => alert.severity === "critical")
+    ? "critical"
+    : alerts.some((alert) => alert.severity === "warning")
+      ? "warning"
+      : "info";
+  return {
+    label: alerts.length === 1 ? (alerts[0].name ?? "1 alert") : `${alerts.length} alerts`,
+    className: worst === "critical" ? "chip bad" : worst === "warning" ? "chip warn" : "chip",
+  };
+}
+
 interface InstanceCardProps {
   instance: InstanceInfo;
   kinds: Record<string, number> | undefined;
@@ -70,6 +84,7 @@ interface InstanceCardProps {
   wireLatency?: WireLatencyStats;
   headroom?: HeadroomInstance;
   coverage: Coverage;
+  alerts: AlertBrief[];
 }
 
 function InstanceCard({
@@ -82,13 +97,20 @@ function InstanceCard({
   wireLatency,
   headroom,
   coverage,
+  alerts,
 }: InstanceCardProps) {
   const online = instance.online;
+  const chip = alertChip(alerts);
   return (
     <div className="instance-card">
       <div className="instance-head">
         <span className={online === false ? "dot off" : online ? "dot on" : "dot unknown"} />
         <span className="instance-name">{instance.base_topic}</span>
+        {chip && (
+          <span className={chip.className} title={alerts.map((a) => a.name).join(", ")}>
+            {chip.label}
+          </span>
+        )}
         <span className="rate-big">
           {totalPerSecond(kinds)}
           <span className="rate-unit">msg/s</span>
@@ -227,6 +249,8 @@ export default function Fleet({ onReconfigure }: FleetProps) {
   const broker = message?.broker;
   const instances = message?.instances ?? [];
   const globalRate = totalPerSecond(message?.rates["*"]);
+  const alerts = message?.alerts ?? [];
+  const globalAlerts = alerts.filter((alert) => alert.instance === "*");
 
   return (
     <>
@@ -240,6 +264,20 @@ export default function Fleet({ onReconfigure }: FleetProps) {
           Reconfigure
         </button>
       </div>
+      {globalAlerts.length > 0 && (
+        <div className="banner warn">
+          <span>
+            {globalAlerts.map((alert) => (
+              <span
+                key={`${alert.instance}/${alert.name}`}
+                className={alert.severity === "critical" ? "chip bad" : "chip warn"}
+              >
+                {alert.name}
+              </span>
+            ))}
+          </span>
+        </div>
+      )}
 
       {instances.length === 0 ? (
         <div className="panel">
@@ -274,6 +312,7 @@ export default function Fleet({ onReconfigure }: FleetProps) {
                   t1: heartbeat != null && now - heartbeat < 120,
                   t2: flow != null && now - flow.last_seen < 60,
                 }}
+                alerts={alerts.filter((alert) => alert.instance === base)}
               />
             );
           })}

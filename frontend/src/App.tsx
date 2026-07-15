@@ -1,6 +1,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api, ApiError, BrokerView } from "./api";
 import type { Health, Me } from "./api";
+import Alerts from "./views/Alerts";
 import Attribution from "./views/Attribution";
 import BrokerSetup from "./views/BrokerSetup";
 import Calibration from "./views/Calibration";
@@ -18,7 +19,8 @@ type View =
   | "headroom"
   | "topology"
   | "calibration"
-  | "footprint";
+  | "footprint"
+  | "alerts";
 
 const NAV_ITEMS: Array<{ label: string; view?: View }> = [
   { label: "Fleet", view: "fleet" },
@@ -29,7 +31,7 @@ const NAV_ITEMS: Array<{ label: string; view?: View }> = [
   { label: "Topology", view: "topology" },
   { label: "Calibration", view: "calibration" },
   { label: "Footprint", view: "footprint" },
-  { label: "Alerts" },
+  { label: "Alerts", view: "alerts" },
   { label: "Settings" },
 ];
 
@@ -41,6 +43,7 @@ const VIEW_TITLES: Record<View, string> = {
   topology: "Topology",
   calibration: "Calibration",
   footprint: "Footprint & permissions",
+  alerts: "Alerts",
 };
 
 interface CredentialsFormProps {
@@ -264,6 +267,8 @@ export default function App() {
           <Topology />
         ) : view === "calibration" ? (
           <Calibration />
+        ) : view === "alerts" ? (
+          <Alerts />
         ) : (
           <Footprint />
         )}

@@ -159,6 +159,12 @@ export interface TopologyView {
   instances: Record<string, TopologySummary>;
 }
 
+export interface AlertBrief {
+  instance: string;
+  severity: string | null;
+  name: string | null;
+}
+
 export interface FleetMessage {
   ts: number;
   broker: BrokerStatus;
@@ -167,6 +173,7 @@ export interface FleetMessage {
   latency: Record<string, LatencyStats>;
   probes: Record<string, ProbeStats>;
   tap: TapStats;
+  alerts: AlertBrief[];
 }
 
 export interface TapView {
@@ -391,6 +398,70 @@ export interface HeadroomInstance {
 export interface HeadroomView {
   window_seconds: number;
   instances: Record<string, HeadroomInstance>;
+}
+
+export interface AlertMetricInfo {
+  metric: string;
+  scope: string;
+  kind: string;
+  unit: string;
+  description: string;
+}
+
+export interface AlertRule {
+  id: number;
+  builtin: string | null;
+  name: string;
+  metric: string;
+  instance: string;
+  op: string;
+  threshold: number;
+  clear_threshold: number | null;
+  sustain_seconds: number;
+  severity: string;
+  enabled: boolean;
+  created_at?: string;
+}
+
+export interface ActiveAlert {
+  event_id: number;
+  rule_id: number;
+  name: string | null;
+  metric: string | null;
+  unit: string | null;
+  instance: string;
+  severity: string | null;
+  opened_at: number | null;
+  value: number | null;
+  peak: number | null;
+  threshold: number | null;
+  op: string | null;
+}
+
+export interface AlertsView {
+  active: ActiveAlert[];
+  rules: AlertRule[];
+  metrics: AlertMetricInfo[];
+}
+
+export interface AlertEventContext {
+  name?: string;
+  metric?: string;
+  op?: string;
+  threshold?: number;
+  severity?: string;
+  value_at_open?: number;
+  closed?: string;
+}
+
+export interface AlertEvent {
+  id: number;
+  rule_id: number;
+  instance: string;
+  opened_at: number;
+  cleared_at: number | null;
+  peak_value: number | null;
+  context: AlertEventContext;
 }
 
 export interface TopTarget {
