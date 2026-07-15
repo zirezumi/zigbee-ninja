@@ -88,11 +88,34 @@ def summarize(
     ).fetchall()
     latency_by_window = {(row["ts"], row["instance"]): row["p95_ms"] for row in latency_rows}
 
+    # Benchmark windows are self-traffic and are excluded from every headroom
+    # aggregate (§11.5) — otherwise each calibration ramp would masquerade as
+    # a natural load peak and flatter the burst numbers. The ramp's own curve
+    # lives in its calibration record; /api/airtime keeps raw physical totals.
+    benchmark_windows: dict[str, list[tuple[float, float]]] = {}
+    for row in conn.execute(
+        "SELECT instance, started_at, finished_at FROM calibrations "
+        "WHERE finished_at IS NOT NULL AND finished_at >= ?",
+        (since,),
+    ).fetchall():
+        benchmark_windows.setdefault(row["instance"], []).append(
+            (row["started_at"] - ROLLUP_SECONDS, row["finished_at"])
+        )
+
+    def in_benchmark(instance: str, ts: int) -> bool:
+        return any(
+            start <= ts <= end for start, end in benchmark_windows.get(instance, ())
+        )
+
     per_instance: dict[str, dict] = {}
     for row in load_rows:
         entry = per_instance.setdefault(
-            row["instance"], {"eps": [], "airtime_us": 0.0, "scatter": []}
+            row["instance"],
+            {"eps": [], "airtime_us": 0.0, "scatter": [], "excluded": 0},
         )
+        if in_benchmark(row["instance"], row["ts"]):
+            entry["excluded"] += 1
+            continue
         eps = row["tx_frames"] / float(ROLLUP_SECONDS)
         entry["eps"].append(eps)
         entry["airtime_us"] += row["airtime_us"]
@@ -108,7 +131,9 @@ def summarize(
 
     instances: dict[str, dict] = {}
     for base in sorted(set(per_instance) | set(knees)):
-        loads = per_instance.get(base, {"eps": [], "airtime_us": 0.0, "scatter": []})
+        loads = per_instance.get(
+            base, {"eps": [], "airtime_us": 0.0, "scatter": [], "excluded": 0}
+        )
         eps_sorted = sorted(loads["eps"])
         rates = None
         if eps_sorted:
@@ -177,5 +202,6 @@ def summarize(
             "scatter": [
                 {"eps": eps, "p95_ms": p95} for _, eps, p95 in scatter
             ],
+            "benchmark_windows_excluded": loads["excluded"],
         }
     return {"window_seconds": seconds, "instances": instances}

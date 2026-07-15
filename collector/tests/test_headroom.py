@@ -52,10 +52,12 @@ def seed(db: Database):
     record("z2m-b", 400, 30.0, None, True, {"z2m_version": "2.9.0",
                                             "coordinator_type": "EmberZNet",
                                             "coordinator_revision": "7.4.4"})
-    # Aborted runs never contribute a knee.
+    # Aborted runs never contribute a knee — but their window (1021–1029,
+    # overlapping the ts=1020 rollup) is still self-traffic and must be
+    # excluded from the headroom aggregates like any benchmark window.
     conn.execute(
         "INSERT INTO calibrations (instance, target, started_at, finished_at, "
-        "status, knee_eps, detail) VALUES ('z2m-a', 'x', 600, 610, 'aborted', NULL, '{}')"
+        "status, knee_eps, detail) VALUES ('z2m-a', 'x', 1021, 1029, 'aborted', NULL, '{}')"
     )
     conn.commit()
 
@@ -81,16 +83,17 @@ def test_summarize_joins_knees_rates_and_scatter(tmp_path):
     assert a["denominators"]["pipeline"] == {"eps": 16.0, "provenance": "measured"}
     assert a["denominators"]["channel_budget"]["pct"] > 0
 
-    # Rates: eps windows are 2, 4, 16 → p50 4, p95/max 16.
-    assert a["rates"] == {"p50_eps": 4.0, "p95_eps": 16.0, "max_eps": 16.0, "windows": 3}
-    assert a["headroom"]["steady_eps"] == 0.0
-    assert a["headroom"]["knee_utilization_pct"] == 100.0
+    # The 16 eps window falls inside the aborted run's benchmark window and is
+    # excluded from every aggregate (§11.5) — rates come from 2 and 4 only.
+    assert a["benchmark_windows_excluded"] == 1
+    assert a["rates"] == {"p50_eps": 4.0, "p95_eps": 4.0, "max_eps": 4.0, "windows": 2}
+    assert a["headroom"]["steady_eps"] == 12.0
+    assert a["headroom"]["knee_utilization_pct"] == 25.0
 
-    # Scatter joins load and latency windows one to one.
+    # Scatter joins load and latency windows one to one (benchmark excluded).
     assert a["scatter"] == [
         {"eps": 2.0, "p95_ms": 50.0},
         {"eps": 4.0, "p95_ms": 60.0},
-        {"eps": 16.0, "p95_ms": 300.0},
     ]
 
     # z2m-b: knee exists but no traffic in the window; censored → lower bound;
@@ -108,8 +111,6 @@ def test_scatter_aggregates_to_minutes_on_wide_windows(tmp_path):
     seed(db)
     view = headroom.summarize(db, 86400, INSTANCES_INFO, clock=lambda: 2000.0)
     scatter = view["instances"]["z2m-a"]["scatter"]
-    # ts 1000+1010 share minute 16 (averaged load, worst p95); 1020 is minute 17.
-    assert scatter == [
-        {"eps": 3.0, "p95_ms": 60.0},
-        {"eps": 16.0, "p95_ms": 300.0},
-    ]
+    # ts 1000+1010 share minute 16 (averaged load, worst p95); the ts=1020
+    # window is a benchmark window and never reaches the scatter.
+    assert scatter == [{"eps": 3.0, "p95_ms": 60.0}]

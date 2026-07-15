@@ -370,6 +370,7 @@ export interface HeadroomInstance {
     granularity: string;
   } | null;
   scatter: Array<{ eps: number; p95_ms: number }>;
+  benchmark_windows_excluded: number;
 }
 
 export interface HeadroomView {
