@@ -242,6 +242,24 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
             view["provenance"] = airtime_model.PROVENANCE
         return {"window_seconds": seconds, "instances": instances}
 
+    @app.get("/api/latency")
+    def latency_series(request: Request, seconds: int = 3600) -> dict:
+        """Wire-latency 10 s rollups — the latency-vs-load axis for continuous
+        knee validation (DESIGN.md §10)."""
+        require_user(request)
+        seconds = max(60, min(seconds, MAX_QUERY_WINDOW_SECONDS))
+        engine.flush_rollups()
+        since = int(time.time()) - seconds
+        rows = db.connect().execute(
+            "SELECT ts, instance, count, p50_ms, p95_ms, max_ms FROM latency_10s "
+            "WHERE ts >= ? ORDER BY ts",
+            (since,),
+        ).fetchall()
+        return {
+            "window_seconds": seconds,
+            "rows": [dict(row) for row in rows],
+        }
+
     @app.get("/api/ha")
     def ha_get(request: Request) -> dict:
         require_user(request)

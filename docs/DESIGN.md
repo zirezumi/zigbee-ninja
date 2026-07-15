@@ -179,6 +179,15 @@ airtime ground-truth input) but not built in V1.
 > and treat *counters − attributed frames* as a measured residual for the
 > stack-housekeeping bucket; otherwise model it from protocol constants (link
 > status ≈ one one-hop broadcast per router per 15 s) with an honest `modeled` tag.
+>
+> **S2 resolution: the access route is passive.** Zigbee2MQTT itself issues
+> `readAndClearCounters`; the wire tap harvests the responses for free — no
+> zigbee-ninja polling, no added NCP work. `decode/counters.py` labels the
+> arrays (clean-room UG100 name order, unknown tail indices degrade to
+> `counter_NN`), provenance `inferred` until live cross-tier validation
+> promotes the map. Beyond the housekeeping residual this also exposes the
+> per-hop MAC retry rate (`mac_tx_unicast_retry`/`_success`) and CCA failures —
+> direct inputs to the §10 retry factor and contention picture.
 
 ## §5 Discovery & onboarding
 
@@ -615,7 +624,7 @@ no big-bang integration.
 | Risk | Impact | Mitigation / spike |
 |---|---|---|
 | ASH/EZSP decode effort or version drift | T2 slips | **S1:** capture ~10 min of a live coordinator flow and decode offline *before* M4 commits; golden fixtures pin the suite; port from MIT herdsman |
-| EmberZNet counter access route impractical from extension context | Stack-housekeeping stays modeled | **S2:** time-boxed; the modeled fallback is designed-in, not a scramble |
+| EmberZNet counter access route impractical from extension context | Stack-housekeeping stays modeled | **S2 (resolved):** Z2M's own `readAndClearCounters` polls are harvested passively at T2 and labeled (§4); labels stay `inferred` until validated live |
 | Z2M extension hook inventory shifts across 2.x releases | T1 fragility | **S3:** enumerate stable hooks; schema handshake; CI matrix against pinned Z2M docker versions |
 | Mosquitto debug-log volume/format drift | T0.5 attribution gaps | Verify format + measure overhead early in M2; version-keyed tolerant parser; feature degrades to client-anonymous cleanly |
 | Series cardinality on small hardware (Pi add-on audience) | Resource blowups | Explicit cardinality budget (§12), quota-driven degradation, Parquet+DuckDB for detail instead of series explosion |

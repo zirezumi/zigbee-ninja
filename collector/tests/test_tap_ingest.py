@@ -79,6 +79,11 @@ def v14_wire_conversation() -> bytes:
                  bytes([0, 0, 0, 0, 0x02, 0x0A, 0x00]) + APS + bytes([0x78, 0x56, 0x00]))
     route_rec = _ext(7, 0x90, 0x0059,
                      bytes.fromhex("2a1b") + bytes(8) + bytes([0x90, 0xB0, 0x01, 0x11, 0x22]))
+    counter_values = [0] * 40
+    counter_values[1] = 82   # mac_tx_broadcast
+    counter_values[3] = 812  # mac_tx_unicast_success
+    counters_rsp = _ext(8, 0x80, 0x0065,
+                        b"".join(v.to_bytes(2, "little") for v in counter_values))
 
     packets = []
     host_seq, coord_seq = 5000, 9000
@@ -104,6 +109,7 @@ def v14_wire_conversation() -> bytes:
     send(200.20, in_radio, False)
     send(200.25, ms_mc, False)     # groupcast confirm — no latency sample
     send(200.30, route_rec, False)
+    send(200.35, counters_rsp, False)  # Z2M's own counter poll, harvested passively
     return build_pcap(packets)
 
 
@@ -131,6 +137,9 @@ def test_wire_telemetry_airtime_latency_and_counters():
     assert wire["pending_sends"] == 0  # both sends were confirmed
     assert wire["lqi_ewma"] == pytest.approx(109.8, abs=0.1)   # 108 then EWMA(144)
     assert wire["rssi_ewma"] == pytest.approx(-73.35, abs=0.1)
+    assert wire["counters"] == {"mac_tx_broadcast": 82, "mac_tx_unicast_success": 812}
+    assert wire["counters_at"] == 1000.0
+    assert wire["counters_provenance"] == "inferred"
 
     latency = stats["latency"]["z2m-test"]
     assert latency["count"] == 1  # unicast only; the groupcast confirm is excluded
@@ -158,6 +167,10 @@ def test_wire_telemetry_airtime_latency_and_counters():
     }
     assert all(row[0] == 1000 for row in rows)
     assert tap.airtime.drain_completed_windows() == []
+
+    latency_rows = tap.latency.drain_completed_windows()
+    assert latency_rows == [(1000, "z2m-test", 1, 50.0, 50.0, 50.0)]
+    assert tap.latency.drain_completed_windows() == []
 
 
 def test_headerless_stream_resets_reader_without_crashing():

@@ -112,6 +112,16 @@ function FlowCard({ flow, airtime, latency, now }: FlowCardProps) {
             <span className="chip warn"> {wire.layout_mismatch} layout mismatches</span>
           )}
         </span>
+        <span>NCP counters</span>
+        <span title="EmberZNet stack counters harvested passively from Z2M's own readAndClearCounters polls; labels are inferred pending live validation">
+          {wire.counters
+            ? Object.entries(wire.counters)
+                .sort(([, a], [, b]) => b - a)
+                .slice(0, 4)
+                .map(([name, value]) => `${name} ${value}`)
+                .join(" · ")
+            : "awaiting a Z2M counter poll"}
+        </span>
       </div>
       <div className="kinds">
         {ezspTop.map(([name, count]) => (

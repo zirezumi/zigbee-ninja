@@ -245,6 +245,18 @@ class Engine:
             )
             written += len(airtime_rows)
 
+        latency_rows = self.tap.latency.drain_completed_windows()
+        if latency_rows:
+            conn.executemany(
+                "INSERT OR REPLACE INTO latency_10s (ts, instance, count, p50_ms, p95_ms, max_ms) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                latency_rows,
+            )
+            conn.execute(
+                "DELETE FROM latency_10s WHERE ts < ?", (now - ROLLUP_RETENTION_SECONDS,)
+            )
+            written += len(latency_rows)
+
         finalized = self.chains.drain_finalized()
         if finalized:
             conn.executemany(

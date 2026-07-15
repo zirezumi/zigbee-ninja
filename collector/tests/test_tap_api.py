@@ -62,6 +62,32 @@ def test_airtime_endpoint_aggregates_stored_windows(client):
     assert instance["provenance"] == "reconstructed"
 
 
+def test_latency_endpoint_returns_stored_windows(client):
+    import time
+
+    authed(client)
+    assert client.get("/api/latency").status_code == 200
+    conn = client.app.state.db.connect()
+    now = int(time.time())
+    conn.execute(
+        "INSERT INTO latency_10s VALUES (?, 'z2m-test', 12, 55.0, 240.0, 260.0)",
+        (now - 20,),
+    )
+    conn.commit()
+
+    data = client.get("/api/latency?seconds=600").json()
+    assert data["rows"] == [
+        {
+            "ts": now - 20,
+            "instance": "z2m-test",
+            "count": 12,
+            "p50_ms": 55.0,
+            "p95_ms": 240.0,
+            "max_ms": 260.0,
+        }
+    ]
+
+
 def test_tap_ws_ingests_pcap_stream(client):
     authed(client)
     engine = client.app.state.engine

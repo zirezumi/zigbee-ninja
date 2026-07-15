@@ -85,6 +85,18 @@ _MIGRATIONS = [
     );
     CREATE INDEX idx_airtime_10s_ts ON airtime_10s (ts);
     """,
+    """
+    CREATE TABLE latency_10s (
+        ts       INTEGER NOT NULL,
+        instance TEXT NOT NULL,
+        count    INTEGER NOT NULL,
+        p50_ms   REAL NOT NULL,
+        p95_ms   REAL NOT NULL,
+        max_ms   REAL NOT NULL,
+        PRIMARY KEY (ts, instance)
+    );
+    CREATE INDEX idx_latency_10s_ts ON latency_10s (ts);
+    """,
 ]
 
 

@@ -22,7 +22,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from ..capacity import airtime
-from ..decode import ezsp_params
+from ..decode import counters, ezsp_params
 from ..decode.ash import AshDecoder
 from ..decode.ezsp import EzspStream
 from ..decode.pcap import StreamBytes
@@ -115,19 +115,50 @@ class AirtimeTracker:
 class WireLatency:
     """sendUnicast→messageSentHandler latency percentiles per instance.
 
-    Timestamps are pcap capture clocks; only differences are used, so no
-    cross-host alignment is needed. Unicast-only by design: broadcast confirms
-    fire on TX (no delivery wait) and would skew the SLI downward.
+    Latencies are differences of pcap capture timestamps, so no cross-host
+    alignment is needed; rollup windows use the collector wall clock like the
+    airtime tracker. Unicast-only by design: broadcast confirms fire on TX (no
+    delivery wait) and would skew the SLI downward. The drained 10 s windows
+    persist to latency_10s — the series continuous knee validation plots
+    against load (DESIGN.md §10).
     """
 
-    def __init__(self):
+    def __init__(self, clock: Callable[[], float] = time.time):
+        self._clock = clock
         self._samples: dict[str, deque[tuple[float, float]]] = {}
         self._latest_ts: dict[str, float] = {}
+        self._windows: dict[tuple[int, str], list[float]] = {}
 
     def add(self, instance: str, ts: float, latency_ms: float) -> None:
         samples = self._samples.setdefault(instance, deque(maxlen=LATENCY_MAX_SAMPLES))
         samples.append((ts, latency_ms))
         self._latest_ts[instance] = max(self._latest_ts.get(instance, 0.0), ts)
+        now = int(self._clock())
+        window = (now - (now % AIRTIME_ROLLUP_SECONDS), instance)
+        bucket = self._windows.setdefault(window, [])
+        if len(bucket) < 2000:
+            bucket.append(latency_ms)
+
+    def drain_completed_windows(self) -> list[tuple[int, str, int, float, float, float]]:
+        """Rows (window_start, instance, count, p50_ms, p95_ms, max_ms)."""
+        now = int(self._clock())
+        current_window = now - (now % AIRTIME_ROLLUP_SECONDS)
+        rows: list[tuple[int, str, int, float, float, float]] = []
+        for (window_start, instance) in sorted(
+            key for key in self._windows if key[0] < current_window
+        ):
+            values = sorted(self._windows.pop((window_start, instance)))
+            rows.append(
+                (
+                    window_start,
+                    instance,
+                    len(values),
+                    round(statistics.median(values), 1),
+                    round(values[min(len(values) - 1, int(len(values) * 0.95))], 1),
+                    round(values[-1], 1),
+                )
+            )
+        return rows
 
     def snapshot(self) -> dict[str, dict]:
         result: dict[str, dict] = {}
@@ -193,7 +224,7 @@ class TapIngest:
         self._flows: dict[tuple, FlowState] = {}
         self.agents: dict[str, dict] = {}
         self.airtime = AirtimeTracker(clock)
-        self.latency = WireLatency()
+        self.latency = WireLatency(clock)
 
     def register_agent(self, agent_id: str, meta: dict) -> None:
         self.agents[agent_id] = {
@@ -420,8 +451,14 @@ class TapIngest:
                         ),
                         "pending_sends": len(flow.pending),
                         # Z2M itself polls readAndClearCounters; we harvest the
-                        # responses passively (spike-S2 groundwork).
+                        # responses passively and label them (spike S2).
                         "counters_at": flow.counters_at,
+                        "counters": (
+                            None
+                            if flow.counters_last is None
+                            else counters.label_counters(flow.counters_last)
+                        ),
+                        "counters_provenance": counters.PROVENANCE,
                     },
                 }
             )

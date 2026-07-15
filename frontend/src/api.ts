@@ -77,6 +77,8 @@ export interface WireStats {
   rssi_ewma: number | null;
   pending_sends: number;
   counters_at: number | null;
+  counters: Record<string, number> | null;
+  counters_provenance: string;
 }
 
 export interface WireFlow {
