@@ -7,6 +7,7 @@ import secrets
 import time
 
 from ..attribution.chains import ChainTracker, parse_command
+from ..calibration.benchmark import CalibrationManager
 from ..store.config import ConfigStore
 from ..store.db import Database
 from ..tiles import CAPABILITY_TOPOLOGY, TileManager
@@ -44,6 +45,20 @@ class Engine:
             db,
             publisher=self.publish,
             granted=lambda base: self.tiles.is_granted(CAPABILITY_TOPOLOGY, base),
+        )
+        self.calibration = CalibrationManager(
+            db,
+            publisher=self.publish,
+            devices=self.registry.devices,
+            groups=self.registry.groups,
+            instances=self.registry.snapshot,
+            topology_latest=lambda base: (
+                self.topology.latest(base, include_raw=True).get(base) or {}
+            ),
+            wire_covers=self.tap.wire_covers,
+            wire_latency_mark=self.tap.latency.latest_ts,
+            wire_latency_since=self.tap.latency.samples_since,
+            wire_delivery_totals=self.tap.wire_delivery_totals,
         )
         self.ha_attr = HaAttribution()
         self._ha_link: HaLink | None = None
@@ -86,6 +101,7 @@ class Engine:
         await self.restart_ha()
 
     async def stop(self) -> None:
+        await self.calibration.shutdown()  # abort any active benchmark run
         for task in (self._ingest_task, self._flush_task, self._ha_task):
             if task is not None:
                 task.cancel()
@@ -186,17 +202,30 @@ class Engine:
         if kind == "bridge" and suffix == "bridge/response/networkmap":
             self.topology.on_response(base, payload)
             return
+        if kind == "bridge" and suffix == "bridge/logging":
+            if self.calibration.active:
+                self.calibration.on_bridge_log(base, payload)
+            return
         if kind == "command":
             command = parse_command(suffix)
             if command is not None:
                 target, verb = command
+                if self.calibration.owns_command(base, target, verb):
+                    # The benchmark's own reads: publish() already accounted
+                    # them as `self`; a chain would misattribute them (P4).
+                    return
                 # HA attribution (automation name) beats broker client-id.
                 client = self.ha_attr.name_for(topic) or self.brokerlog.client_for(topic)
                 self.chains.on_command(base, target, verb, payload, client=client)
                 self.class_rates.record(base, "commanded")
         elif kind == "state":
+            if self.calibration.active and self.calibration.on_state(base, suffix):
+                self.class_rates.record(base, "self")  # reply to a benchmark read
+                return
             klass = self.chains.on_state(base, suffix)
             self.class_rates.record(base, klass)
+        elif kind == "availability" and self.calibration.active:
+            self.calibration.on_availability(base, suffix, payload)
 
     def _attribute_from_log(self, client: str, published_topic: str) -> None:
         base = self.registry.base_for(published_topic)

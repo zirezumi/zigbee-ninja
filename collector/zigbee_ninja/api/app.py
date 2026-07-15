@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from .. import __version__
 from .. import tiles as tiles_module
 from ..attribution import queries as attribution_queries
+from ..calibration.benchmark import CalibrationRejected
 from ..capacity import airtime as airtime_model
 from ..ingest.engine import Engine
 from ..ingest.hacontrol import HaConfig, test_ha
@@ -49,6 +50,17 @@ class TileAction(BaseModel):
 class HaSettings(BaseModel):
     url: str
     token: str
+
+
+class CalibrationPreviewRequest(BaseModel):
+    instance: str
+    target: str
+
+
+class CalibrationRunRequest(BaseModel):
+    instance: str
+    target: str
+    authorization: str
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
@@ -286,6 +298,51 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
             "window_seconds": seconds,
             "rows": [dict(row) for row in rows],
         }
+
+    # -- calibration wizard (DESIGN.md §11): per-run authorized, never a grant --
+
+    @app.get("/api/calibration")
+    def calibration_view(request: Request) -> dict:
+        require_user(request)
+        return engine.calibration.view()
+
+    @app.get("/api/calibration/candidates")
+    def calibration_candidates(request: Request, instance: str) -> dict:
+        require_user(request)
+        try:
+            return engine.calibration.candidates(instance)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/calibration/preview")
+    def calibration_preview(request: Request, settings: CalibrationPreviewRequest) -> dict:
+        """Dry run: the exact traffic, schedule, caps, and stop rules, plus the
+        single-use authorization token — nothing transmits."""
+        require_user(request)
+        try:
+            return engine.calibration.preview(settings.instance, settings.target)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/calibration/run", status_code=202)
+    async def calibration_run(request: Request, settings: CalibrationRunRequest) -> dict:
+        require_user(request)
+        try:
+            return await engine.calibration.start(
+                settings.instance, settings.target, settings.authorization
+            )
+        except CalibrationRejected as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/calibration/abort")
+    def calibration_abort(request: Request) -> dict:
+        require_user(request)
+        try:
+            return engine.calibration.abort()
+        except CalibrationRejected as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/api/ha")
     def ha_get(request: Request) -> dict:
