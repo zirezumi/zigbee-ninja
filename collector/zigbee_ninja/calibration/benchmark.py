@@ -509,16 +509,18 @@ class CalibrationManager:
             run.abort_reason = run.abort_reason or "collector shutdown"
             if run.current is not None:
                 run.steps.append(run.current)
-            self._record(run, status)
-            self._cooldown_until = self._clock() + COOLDOWN_SECONDS
-            self._active = None
-            raise
+            raise  # finally records + releases before this propagates
         except Exception as exc:  # never leave a run half-alive on a bug
             status = "error"
             run.abort_reason = f"internal error: {exc}"
-        self._record(run, status)
-        self._cooldown_until = self._clock() + COOLDOWN_SECONDS
-        self._active = None
+        finally:
+            try:
+                self._record(run, status)
+            finally:
+                # Even a storage failure must release the run and arm the
+                # cooldown — a stuck "running" state would block all runs.
+                self._cooldown_until = self._clock() + COOLDOWN_SECONDS
+                self._active = None
 
     async def _run_step(self, run: _ActiveRun, step: StepResult) -> None:
         interval = 1.0 / step.rate_eps
