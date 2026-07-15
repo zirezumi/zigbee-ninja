@@ -11,6 +11,10 @@ function RetentionPanel({
   const [rollupDays, setRollupDays] = useState(String(settings.retention_rollup_days));
   const [chainHours, setChainHours] = useState(String(settings.retention_chains_hours));
   const [topoKept, setTopoKept] = useState(String(settings.retention_topology_snapshots));
+  const [eventQuota, setEventQuota] = useState(String(settings.raw_event_quota_mb));
+  const [eventHorizon, setEventHorizon] = useState(
+    String(settings.raw_event_horizon_hours),
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -27,6 +31,8 @@ function RetentionPanel({
           retention_rollup_days: Number(rollupDays),
           retention_chains_hours: Number(chainHours),
           retention_topology_snapshots: Number(topoKept),
+          raw_event_quota_mb: Number(eventQuota),
+          raw_event_horizon_hours: Number(eventHorizon),
         }),
       });
       setSaved(true);
@@ -79,6 +85,28 @@ function RetentionPanel({
               max="200"
               value={topoKept}
               onChange={(event) => setTopoKept(event.target.value)}
+              required
+            />
+          </label>
+          <label>
+            Raw events (MB)
+            <input
+              type="number"
+              min="64"
+              max="65536"
+              value={eventQuota}
+              onChange={(event) => setEventQuota(event.target.value)}
+              required
+            />
+          </label>
+          <label>
+            Raw events (hours)
+            <input
+              type="number"
+              min="1"
+              max="720"
+              value={eventHorizon}
+              onChange={(event) => setEventHorizon(event.target.value)}
               required
             />
           </label>

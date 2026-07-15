@@ -4,6 +4,7 @@ import type { Health, Me } from "./api";
 import Alerts from "./views/Alerts";
 import Attribution from "./views/Attribution";
 import BrokerSetup from "./views/BrokerSetup";
+import Burst from "./views/Burst";
 import Calibration from "./views/Calibration";
 import Fleet from "./views/Fleet";
 import Footprint from "./views/Footprint";
@@ -22,14 +23,15 @@ type View =
   | "calibration"
   | "footprint"
   | "alerts"
-  | "settings";
+  | "settings"
+  | "burst";
 
 const NAV_ITEMS: Array<{ label: string; view?: View }> = [
   { label: "Fleet", view: "fleet" },
   { label: "Attribution", view: "attribution" },
   { label: "Wire tap", view: "wire" },
   { label: "Headroom", view: "headroom" },
-  { label: "Burst inspector" },
+  { label: "Burst inspector", view: "burst" },
   { label: "Topology", view: "topology" },
   { label: "Calibration", view: "calibration" },
   { label: "Footprint", view: "footprint" },
@@ -47,6 +49,7 @@ const VIEW_TITLES: Record<View, string> = {
   footprint: "Footprint & permissions",
   alerts: "Alerts",
   settings: "Settings",
+  burst: "Burst inspector",
 };
 
 interface CredentialsFormProps {
@@ -274,6 +277,8 @@ export default function App() {
           <Alerts />
         ) : view === "settings" ? (
           <Settings />
+        ) : view === "burst" ? (
+          <Burst />
         ) : (
           <Footprint />
         )}

@@ -493,7 +493,54 @@ export interface RuntimeSettings {
   retention_rollup_days: number;
   retention_chains_hours: number;
   retention_topology_snapshots: number;
+  raw_event_quota_mb: number;
+  raw_event_horizon_hours: number;
   client_labels: Record<string, string>;
+}
+
+export interface BurstSourceBin {
+  events: number;
+  bytes: number;
+}
+
+export interface BurstBin {
+  bin: number;
+  mqtt?: BurstSourceBin;
+  wire?: BurstSourceBin;
+}
+
+export interface BurstTimeline {
+  start: number;
+  end: number;
+  bucket_ms: number;
+  bins: BurstBin[];
+  store: {
+    buffered: number;
+    dropped: number;
+    hot_rows: number;
+    segments: number;
+    segment_bytes: number;
+  };
+}
+
+export interface BurstEvent {
+  ts: number;
+  source: string;
+  instance: string;
+  kind: string;
+  direction: string;
+  target: string | null;
+  size: number;
+}
+
+export interface BurstChain {
+  target: string;
+  verb: string;
+  opened_at: number;
+  client: string | null;
+  echo_count: number;
+  first_echo_ms: number | null;
+  redundant: number;
 }
 
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
