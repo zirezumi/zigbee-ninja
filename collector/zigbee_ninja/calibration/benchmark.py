@@ -113,6 +113,19 @@ class _ActiveRun:
     abort_reason: str | None = None
 
 
+@dataclass
+class _BulkState:
+    """A sequential queue of authorized runs — one batch, one authorization."""
+
+    batch_id: str
+    queue: list[dict]
+    started_at: float
+    position: int = 0
+    state: str = "starting"  # waiting_cooldown | running
+    skipped: list[dict] = field(default_factory=list)
+    abort_requested: bool = False
+
+
 def _percentiles(values: list[float]) -> tuple[float | None, float | None]:
     if not values:
         return None, None
@@ -169,6 +182,7 @@ class CalibrationManager:
         self._sleep = sleep
         self._authorizations: dict[str, dict] = {}
         self._active: _ActiveRun | None = None
+        self._bulk: _BulkState | None = None
         self._task: asyncio.Task | None = None
         self._cooldown_until = 0.0
 
@@ -312,6 +326,67 @@ class CalibrationManager:
     # -- preview & authorization (§11.2) -------------------------------------------
 
     def preview(self, instance: str, target: str) -> dict:
+        return self._authorize(self._build_plan(instance, target))
+
+    def preview_bulk(
+        self, instances: list[str] | None = None, targets: dict[str, str] | None = None
+    ) -> dict:
+        """One enumerated batch, one authorization: auto-picks each instance's
+        top-ranked eligible router unless a target is pinned; instances with
+        nothing eligible are listed as skipped rather than failing the batch."""
+        bases = instances or [info["base_topic"] for info in self._instances()]
+        if not bases:
+            raise ValueError("No instances discovered")
+        runs: list[dict] = []
+        skipped: list[dict] = []
+        for base in sorted(set(bases)):
+            pinned = (targets or {}).get(base)
+            try:
+                if pinned is None:
+                    ranked = self.candidates(base)["candidates"]
+                    top = next((row for row in ranked if row["eligible"]), None)
+                    if top is None:
+                        skipped.append({"instance": base, "reason": "no eligible router"})
+                        continue
+                    pinned = top["friendly_name"]
+                runs.append(self._build_plan(base, pinned))
+            except ValueError as exc:
+                skipped.append({"instance": base, "reason": str(exc)})
+        if not runs:
+            raise ValueError("No instances with an eligible calibration target")
+        return self._authorize(
+            {
+                "batch": True,
+                "batch_id": f"batch-{secrets.token_hex(4)}",
+                "runs": runs,
+                "skipped": skipped,
+                "total_reads": sum(plan["total_reads"] for plan in runs),
+                "estimated_duration_s": int(
+                    sum(plan["estimated_duration_s"] for plan in runs)
+                    + COOLDOWN_SECONDS * max(len(runs) - 1, 0)
+                ),
+                "cooldown_between_runs_s": COOLDOWN_SECONDS,
+                "created_at": self._clock(),
+            }
+        )
+
+    def _authorize(self, plan: dict) -> dict:
+        token = secrets.token_hex(8)
+        now = self._clock()
+        self._authorizations[token] = plan
+        for stale in [
+            key
+            for key, value in self._authorizations.items()
+            if now - value["created_at"] > AUTHORIZATION_TTL_SECONDS
+        ]:
+            del self._authorizations[stale]
+        return {
+            **plan,
+            "authorization": token,
+            "authorization_expires_at": plan["created_at"] + AUTHORIZATION_TTL_SECONDS,
+        }
+
+    def _build_plan(self, instance: str, target: str) -> dict:
         device = self._find_device(instance, target)
         info = self._instance_info(instance)
         wire = self._wire_covers(instance)
@@ -397,31 +472,12 @@ class CalibrationManager:
             },
             "created_at": now,
         }
-        token = secrets.token_hex(8)
-        self._authorizations[token] = plan
-        for stale in [
-            key
-            for key, value in self._authorizations.items()
-            if now - value["created_at"] > AUTHORIZATION_TTL_SECONDS
-        ]:
-            del self._authorizations[stale]
-        return {
-            **plan,
-            "authorization": token,
-            "authorization_expires_at": now + AUTHORIZATION_TTL_SECONDS,
-        }
+        return plan
 
     # -- run lifecycle ---------------------------------------------------------------
 
     async def start(self, instance: str, target: str, authorization: str) -> dict:
-        plan = self._authorizations.get(authorization)
-        if plan is None:
-            raise CalibrationRejected(
-                "Unknown or already-used authorization — request a fresh preview"
-            )
-        if self._clock() - plan["created_at"] > AUTHORIZATION_TTL_SECONDS:
-            self._authorizations.pop(authorization, None)
-            raise CalibrationRejected("Authorization expired — request a fresh preview")
+        plan = self._take_authorization(authorization, batch=False)
         if plan["instance"] != instance or plan["target"] != target:
             raise CalibrationRejected("Authorization does not match this instance/target")
         self._require_idle()
@@ -440,10 +496,44 @@ class CalibrationManager:
         self._task = asyncio.get_running_loop().create_task(self._run(run))
         return self.status()
 
+    async def start_bulk(self, authorization: str) -> dict:
+        batch = self._take_authorization(authorization, batch=True)
+        self._require_idle()
+        self._authorizations.pop(authorization, None)  # single-use
+        self._bulk = _BulkState(
+            batch_id=batch["batch_id"],
+            queue=list(batch["runs"]),
+            started_at=self._clock(),
+        )
+        self._task = asyncio.get_running_loop().create_task(self._run_bulk())
+        return self.status()
+
+    def _take_authorization(self, authorization: str, batch: bool) -> dict:
+        """Validate (but do not consume) an authorization of the given shape."""
+        value = self._authorizations.get(authorization)
+        if value is None:
+            raise CalibrationRejected(
+                "Unknown or already-used authorization — request a fresh preview"
+            )
+        if self._clock() - value["created_at"] > AUTHORIZATION_TTL_SECONDS:
+            self._authorizations.pop(authorization, None)
+            raise CalibrationRejected("Authorization expired — request a fresh preview")
+        if bool(value.get("batch")) != batch:
+            raise CalibrationRejected(
+                "This authorization is for a batch — start it via the bulk endpoint"
+                if value.get("batch")
+                else "This authorization is for a single run — use /api/calibration/run"
+            )
+        return value
+
     def abort(self) -> dict:
-        if self._active is None:
+        """Abort the active run and, if a batch is in flight, its whole queue."""
+        if self._active is None and self._bulk is None:
             raise CalibrationRejected("No calibration run is active")
-        self._request_abort("manual abort")
+        if self._bulk is not None:
+            self._bulk.abort_requested = True
+        if self._active is not None:
+            self._request_abort("manual abort")
         return self.status()
 
     async def shutdown(self) -> None:
@@ -456,6 +546,10 @@ class CalibrationManager:
             self._task = None
 
     def _require_idle(self) -> None:
+        if self._bulk is not None:
+            raise CalibrationRejected(
+                f"Calibration batch {self._bulk.batch_id} is in progress"
+            )
         if self._active is not None:
             raise CalibrationRejected(
                 f"A calibration of {self._active.plan['target']} is already running"
@@ -521,6 +615,60 @@ class CalibrationManager:
                 # cooldown — a stuck "running" state would block all runs.
                 self._cooldown_until = self._clock() + COOLDOWN_SECONDS
                 self._active = None
+
+    async def _run_bulk(self) -> None:
+        """Execute the batch queue sequentially: same rails per run, the full
+        cooldown between runs, and any abort (manual or watchdog) stops the
+        remainder — a batch never outruns the conditions it was authorized
+        under."""
+        bulk = self._bulk
+        assert bulk is not None
+        try:
+            for index, plan in enumerate(bulk.queue):
+                bulk.position = index
+                bulk.state = "waiting_cooldown"
+                while self._clock() < self._cooldown_until:
+                    if bulk.abort_requested:
+                        return
+                    await self._sleep(1.0)
+                if bulk.abort_requested:
+                    return
+                # Re-verify at its turn in the queue — the fleet may have
+                # changed since the batch was authorized.
+                try:
+                    device = self._find_device(plan["instance"], plan["target"])
+                    if device.get("get_attribute") != plan["get_attribute"]:
+                        raise ValueError("target definition changed since the preview")
+                except ValueError as exc:
+                    bulk.skipped.append(
+                        {
+                            "instance": plan["instance"],
+                            "target": plan["target"],
+                            "reason": str(exc),
+                        }
+                    )
+                    self._record_skip({**plan, "batch_id": bulk.batch_id}, str(exc))
+                    continue
+                bulk.state = "running"
+                run = _ActiveRun(
+                    run_id=f"cal-{secrets.token_hex(4)}",
+                    plan={**plan, "batch_id": bulk.batch_id},
+                    started_at=self._clock(),
+                )
+                self._active = run
+                await self._run(run)
+                if run.abort_reason is not None:
+                    for rest in bulk.queue[index + 1 :]:
+                        bulk.skipped.append(
+                            {
+                                "instance": rest["instance"],
+                                "target": rest["target"],
+                                "reason": f"batch stopped: {run.abort_reason}",
+                            }
+                        )
+                    return
+        finally:
+            self._bulk = None
 
     async def _run_step(self, run: _ActiveRun, step: StepResult) -> None:
         interval = 1.0 / step.rate_eps
@@ -632,6 +780,25 @@ class CalibrationManager:
 
     # -- record & read side ---------------------------------------------------------
 
+    def _record_skip(self, plan: dict, reason: str) -> None:
+        """A batch item that never ran still leaves a durable history row."""
+        now = self._clock()
+        detail = {
+            "plan": plan,
+            "steps": [],
+            "knee": None,
+            "abort_reason": reason,
+            "bridge_errors": 0,
+            "environment": plan.get("environment", {}),
+        }
+        conn = self._db.connect()
+        conn.execute(
+            "INSERT INTO calibrations (instance, target, started_at, finished_at, "
+            "status, knee_eps, detail) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (plan["instance"], plan["target"], now, now, "skipped", None, json.dumps(detail)),
+        )
+        conn.commit()
+
     def _record(self, run: _ActiveRun, status: str) -> None:
         good = [step for step in run.steps if step.breach is None]
         breached = [step for step in run.steps if step.breach is not None]
@@ -689,9 +856,26 @@ class CalibrationManager:
                 "abort_requested": run.abort_reason,
                 "plan": run.plan,
             }
+        bulk = None
+        if self._bulk is not None:
+            state = self._bulk
+            bulk = {
+                "batch_id": state.batch_id,
+                "position": state.position,
+                "total": len(state.queue),
+                "state": state.state,
+                "started_at": state.started_at,
+                "runs": [
+                    {"instance": plan["instance"], "target": plan["target"]}
+                    for plan in state.queue
+                ],
+                "skipped": state.skipped,
+                "abort_requested": state.abort_requested,
+            }
         now = self._clock()
         return {
             "active": active,
+            "bulk": bulk,
             "cooldown_until": self._cooldown_until if self._cooldown_until > now else None,
         }
 
@@ -718,6 +902,7 @@ class CalibrationManager:
                     "abort_reason": detail.get("abort_reason"),
                     "environment": detail.get("environment", {}),
                     "rtt_source": (detail.get("plan") or {}).get("rtt_source"),
+                    "batch_id": (detail.get("plan") or {}).get("batch_id"),
                 }
             )
         return result

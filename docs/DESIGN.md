@@ -469,7 +469,13 @@ A guided wizard, per coordinator, per-run authorized (grants never persist):
    the full step schedule, hard caps, stop rules, and watchdog conditions,
    shown before anything transmits. The preview mints a **single-use,
    short-TTL authorization token**; starting the run requires echoing it, and
-   nothing persists across runs.
+   nothing persists across runs. A **fleet batch** is authorized the same
+   way: one preview enumerates every planned run (auto-picking each
+   instance's top-ranked eligible router unless a target is pinned) and one
+   single-use token covers exactly that list. Batch runs execute one at a
+   time with the full cooldown between them; an abort stops the remainder;
+   an item whose target vanished by its turn is skipped with a durable
+   `skipped` history record rather than run against a changed fleet.
 3. **Ramp** — closed-loop unicast attribute reads through the instance's own
    MQTT command path (`<base>/<target>/get` of a benign, gettable attribute —
    the same path controllers use; reads actuate nothing, each reply
@@ -553,11 +559,13 @@ standalone; HA ingress trust in add-on mode (fast-follow). Default port `8686`.
    degree, per-query sweep answers — a node that answers Mgmt_Lqi but omits
    Mgmt_Rtg is a firmware quirk, not unreachable); the force-directed graph
    rides on the stored raw maps later.
-7. **Calibration** — wizard + history + knee-drift indicators. First slice
-   shipped: ranked target picker, dry-run preview with per-run authorization,
-   live ramp progress with the RTT-vs-rate curve and an ever-present abort,
-   and history with an environment-drift "recalibrate?" chip. The optional
-   groupcast stage (§11) is not yet implemented.
+7. **Calibration** — wizard + history + knee-drift indicators. Shipped:
+   ranked target picker, dry-run preview with per-run authorization, the
+   fleet-batch flow (one authorization per enumerated batch, queue progress,
+   abort-stops-remainder), live ramp progress with the RTT-vs-rate curve and
+   an ever-present abort, and history with batch tags and an
+   environment-drift "recalibrate?" chip. The optional groupcast stage (§11)
+   is not yet implemented.
 8. **Footprint & permissions** — tiles, health, versions, revoke-all; connected
    wire-tap agents.
 9. **Alerts** — rules and notification center (§14).

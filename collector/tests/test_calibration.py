@@ -63,11 +63,62 @@ DEVICES = [
 
 GROUPS = [{"id": 1, "friendly_name": "g1", "member_count": 1, "member_ieee": ["0xa1"]}]
 
+INSTANCE_TWO = "z2m-two"
+
+DEVICES_TWO = [
+    {
+        "ieee_address": "0xe5",
+        "friendly_name": "relay-x",
+        "type": "Router",
+        "power_source": "Mains (single phase)",
+        "vendor": "ExampleCo",
+        "model": "RELAY-2",
+        "network_address": 20,
+        "get_attribute": "state",
+        "published_measurements": [],
+        "binding_count": 0,
+    },
+]
+
+INSTANCE_EMPTY = "z2m-empty"
+
+DEVICES_EMPTY = [
+    {
+        "ieee_address": "0xf6",
+        "friendly_name": "button-f",
+        "type": "EndDevice",
+        "power_source": "Battery",
+        "vendor": "ExampleCo",
+        "model": "BTN-1",
+        "network_address": 30,
+        "get_attribute": None,
+        "published_measurements": [],
+        "binding_count": 0,
+    },
+]
+
 INSTANCES = [
     {
         "base_topic": INSTANCE,
         "version": "2.10.1",
         "channel": 15,
+        "coordinator_type": "EmberZNet",
+        "coordinator_revision": "8.1.0",
+    },
+]
+
+INSTANCES_MULTI = INSTANCES + [
+    {
+        "base_topic": INSTANCE_TWO,
+        "version": "2.10.1",
+        "channel": 25,
+        "coordinator_type": "EmberZNet",
+        "coordinator_revision": "8.1.0",
+    },
+    {
+        "base_topic": INSTANCE_EMPTY,
+        "version": "2.10.1",
+        "channel": 11,
         "coordinator_type": "EmberZNet",
         "coordinator_revision": "8.1.0",
     },
@@ -100,6 +151,7 @@ class Harness:
         answer=None,
         wire_covers=False,
         wire_steps=None,
+        multi=False,
     ):
         self.now = 1000.0
         self.published: list[tuple[str, str]] = []
@@ -110,13 +162,19 @@ class Harness:
         self.on_advance = None
         self.wire_steps = list(wire_steps or [])
         self._wire_calls = 0
+        self.devices_by_base = {INSTANCE: list(DEVICES)}
+        instances = INSTANCES
+        if multi:
+            self.devices_by_base[INSTANCE_TWO] = list(DEVICES_TWO)
+            self.devices_by_base[INSTANCE_EMPTY] = list(DEVICES_EMPTY)
+            instances = INSTANCES_MULTI
         self.db = Database(tmp_path)
         self.manager = CalibrationManager(
             self.db,
             publisher=self._publish,
-            devices=lambda base: DEVICES if base == INSTANCE else [],
+            devices=lambda base: self.devices_by_base.get(base, []),
             groups=lambda base: GROUPS if base == INSTANCE else [],
-            instances=lambda: INSTANCES,
+            instances=lambda: instances,
             topology_latest=lambda base: TOPOLOGY if base == INSTANCE else {},
             wire_covers=(lambda _base: wire_covers),
             wire_latency_mark=lambda _base: 0.0,
@@ -138,9 +196,11 @@ class Harness:
 
     async def _sleep(self, seconds: float) -> None:
         self.now += seconds
+        active = self.manager.status()["active"]
         while self.pending and self.now - self.pending[0] >= self.service_time:
             self.pending.pop(0)
-            self.manager.on_state(INSTANCE, "plug-a")
+            if active is not None:
+                self.manager.on_state(active["instance"], active["target"])
         if self.on_advance is not None:
             self.on_advance(self.now)
 
@@ -443,5 +503,124 @@ def test_hooks_only_engage_during_a_run(tmp_path):
             "set_verb": False,
             "idle_state": False,
         }
+
+    asyncio.run(scenario())
+
+
+# -- bulk batches -------------------------------------------------------------------
+
+
+def test_bulk_preview_auto_picks_pins_and_skips(tmp_path):
+    harness = Harness(tmp_path, multi=True)
+    batch = harness.manager.preview_bulk()
+    picks = {run["instance"]: run["target"] for run in batch["runs"]}
+    # Auto-pick takes each instance's top-ranked eligible router; the
+    # end-device-only instance is skipped with a reason, not an error.
+    assert picks == {INSTANCE: "plug-a", INSTANCE_TWO: "relay-x"}
+    assert batch["skipped"] == [{"instance": INSTANCE_EMPTY, "reason": "no eligible router"}]
+    assert batch["total_reads"] == sum(run["total_reads"] for run in batch["runs"])
+    assert batch["estimated_duration_s"] > 2 * batch["runs"][0]["estimated_duration_s"]
+    assert batch["batch_id"].startswith("batch-")
+    assert batch["authorization"]
+
+    pinned = harness.manager.preview_bulk(
+        instances=[INSTANCE], targets={INSTANCE: "bulb-b"}
+    )
+    assert [run["target"] for run in pinned["runs"]] == ["bulb-b"]
+
+
+def test_bulk_runs_sequentially_with_cooldown_and_batch_id(tmp_path):
+    harness = Harness(tmp_path, multi=True)
+
+    async def scenario():
+        batch = harness.manager.preview_bulk(instances=[INSTANCE, INSTANCE_TWO])
+        await harness.manager.start_bulk(batch["authorization"])
+
+        # A single run (and a second batch) must be refused mid-batch.
+        seen = {}
+
+        def probe(now):
+            if "rejected" in seen:
+                return
+            try:
+                harness.manager._require_idle()
+            except CalibrationRejected as exc:
+                seen["rejected"] = str(exc)
+
+        harness.on_advance = probe
+        await harness.manager._task
+        assert "batch" in seen["rejected"]
+
+        records = harness.manager.history()
+        assert [record["status"] for record in records] == ["completed", "completed"]
+        assert {record["instance"] for record in records} == {INSTANCE, INSTANCE_TWO}
+        assert len({record["batch_id"] for record in records}) == 1
+        # Sequential with the full cooldown between runs (newest first).
+        assert (
+            records[0]["started_at"] - records[1]["finished_at"]
+            >= benchmark.COOLDOWN_SECONDS
+        )
+        assert harness.manager.status()["bulk"] is None
+
+    asyncio.run(scenario())
+
+
+def test_bulk_token_shape_guards(tmp_path):
+    harness = Harness(tmp_path, multi=True)
+
+    async def scenario():
+        single = harness.manager.preview(INSTANCE, "plug-a")
+        with pytest.raises(CalibrationRejected, match="single run"):
+            await harness.manager.start_bulk(single["authorization"])
+        batch = harness.manager.preview_bulk(instances=[INSTANCE])
+        with pytest.raises(CalibrationRejected, match="bulk endpoint"):
+            await harness.manager.start(INSTANCE, "plug-a", batch["authorization"])
+        assert harness.published == []
+
+    asyncio.run(scenario())
+
+
+def test_bulk_abort_stops_the_queue(tmp_path):
+    harness = Harness(tmp_path, multi=True)
+
+    def trip(now):
+        if now > 1030 and harness.manager.active:
+            harness.manager.abort()
+
+    harness.on_advance = trip
+
+    async def scenario():
+        batch = harness.manager.preview_bulk(instances=[INSTANCE, INSTANCE_TWO])
+        await harness.manager.start_bulk(batch["authorization"])
+        await harness.manager._task
+        records = harness.manager.history()
+        assert [record["status"] for record in records] == ["aborted"]
+        assert records[0]["abort_reason"] == "manual abort"
+        # The second queued run never transmitted.
+        assert all(topic.startswith(f"{INSTANCE}/") for topic, _ in harness.published)
+        assert harness.manager.status()["bulk"] is None
+
+    asyncio.run(scenario())
+
+
+def test_bulk_skips_vanished_target_with_history_row(tmp_path):
+    harness = Harness(tmp_path, multi=True)
+
+    def vanish(now):
+        # Remove run 2's target from the registry while run 1 is in flight.
+        if now > 1030:
+            harness.devices_by_base[INSTANCE_TWO] = []
+
+    harness.on_advance = vanish
+
+    async def scenario():
+        batch = harness.manager.preview_bulk(instances=[INSTANCE, INSTANCE_TWO])
+        await harness.manager.start_bulk(batch["authorization"])
+        await harness.manager._task
+        records = harness.manager.history()
+        assert [record["status"] for record in records] == ["skipped", "completed"]
+        assert records[0]["instance"] == INSTANCE_TWO
+        assert "No device registry" in records[0]["abort_reason"]
+        assert records[0]["batch_id"] == records[1]["batch_id"]
 
     asyncio.run(scenario())

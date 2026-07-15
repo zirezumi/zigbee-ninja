@@ -3,6 +3,8 @@ import {
   api,
   ApiError,
   CalibrationActive,
+  CalibrationBulkPreview,
+  CalibrationBulkStatus,
   CalibrationCandidate,
   CalibrationPreview,
   CalibrationRecord,
@@ -241,6 +243,139 @@ function PreviewPanel({
   );
 }
 
+function BulkProgressPanel({
+  bulk,
+  onAbort,
+}: {
+  bulk: CalibrationBulkStatus;
+  onAbort: () => void;
+}) {
+  return (
+    <div className="panel">
+      <div className="toolbar">
+        <p className="panel-kicker">Batch {bulk.batch_id}</p>
+        <span className="chip warn">
+          run {Math.min(bulk.position + 1, bulk.total)}/{bulk.total} ·{" "}
+          {bulk.state === "waiting_cooldown" ? "cooling down" : bulk.state}
+        </span>
+        <button className="small" onClick={onAbort}>
+          Abort batch
+        </button>
+      </div>
+      <table className="table">
+        <tbody>
+          {bulk.runs.map((run, index) => {
+            const skipped = bulk.skipped.find(
+              (item) => item.instance === run.instance && item.target === run.target,
+            );
+            const label = skipped
+              ? "skipped"
+              : index < bulk.position
+                ? "done"
+                : index === bulk.position
+                  ? bulk.state === "waiting_cooldown"
+                    ? "cooldown"
+                    : "running"
+                  : "queued";
+            return (
+              <tr key={`${run.instance}/${run.target}`}>
+                <td>{run.instance}</td>
+                <td>{run.target}</td>
+                <td>
+                  <span
+                    className={
+                      label === "done"
+                        ? "chip ok"
+                        : label === "skipped"
+                          ? "chip bad"
+                          : "chip"
+                    }
+                  >
+                    {label}
+                  </span>
+                  {skipped && <span className="hint"> {skipped.reason}</span>}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {bulk.abort_requested && <p className="error">Abort requested — stopping…</p>}
+    </div>
+  );
+}
+
+function BulkPreviewPanel({
+  preview,
+  busy,
+  onAuthorize,
+  onCancel,
+}: {
+  preview: CalibrationBulkPreview;
+  busy: boolean;
+  onAuthorize: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="panel">
+      <div className="toolbar">
+        <p className="panel-kicker">Dry run — calibrate the fleet, one router each</p>
+        <span className="chip">{preview.runs.length} runs</span>
+      </div>
+      <p>
+        Each run uses the standard schedule, stop rules, and watchdogs of a single
+        calibration; runs execute one at a time with the full{" "}
+        {preview.cooldown_between_runs_s}s cooldown in between, and one abort stops the
+        whole batch.
+      </p>
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Coordinator</th>
+            <th>Target</th>
+            <th>Read</th>
+            <th className="num">Reads</th>
+            <th>RTT</th>
+            <th>Notes</th>
+          </tr>
+        </thead>
+        <tbody>
+          {preview.runs.map((run) => (
+            <tr key={run.instance}>
+              <td>{run.instance}</td>
+              <td>{run.target}</td>
+              <td className="mono">{run.get_attribute}</td>
+              <td className="num">{run.total_reads}</td>
+              <td>{run.rtt_source}</td>
+              <td className="hint">{run.warnings.join(" ") || "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {preview.skipped.length > 0 && (
+        <p className="hint">
+          Skipped: {preview.skipped.map((item) => `${item.instance} (${item.reason})`).join(", ")}
+        </p>
+      )}
+      <p className="hint">
+        {preview.total_reads} reads total · ≈{Math.round(preview.estimated_duration_s / 60)} min
+        including cooldowns
+      </p>
+      <div className="toolbar">
+        <button onClick={onAuthorize} disabled={busy}>
+          {busy ? "Starting…" : "Authorize this batch"}
+        </button>
+        <button className="small" onClick={onCancel} disabled={busy}>
+          Cancel
+        </button>
+        <span className="hint">
+          One single-use authorization covers exactly the runs listed above.
+        </span>
+      </div>
+    </div>
+  );
+}
+
 function CandidatesPanel({
   view,
   busyTarget,
@@ -350,8 +485,11 @@ function HistoryPanel({
                     <span className="chip warn">no knee determined</span>
                   )
                 ) : (
-                  <span className="chip bad">{record.status}</span>
+                  <span className={record.status === "skipped" ? "chip warn" : "chip bad"}>
+                    {record.status}
+                  </span>
                 )}{" "}
+                {record.batch_id && <span className="chip">{record.batch_id}</span>}{" "}
                 {record.knee?.breach && <span className="hint">({record.knee.breach})</span>}
                 {drifted && (
                   <span className="chip warn" title={`ran on ${environment}, now ${current[record.instance]}`}>
@@ -376,6 +514,7 @@ export default function Calibration() {
   const [instance, setInstance] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<CandidatesView | null>(null);
   const [preview, setPreview] = useState<CalibrationPreview | null>(null);
+  const [bulkPreview, setBulkPreview] = useState<CalibrationBulkPreview | null>(null);
   const [busyTarget, setBusyTarget] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -394,12 +533,14 @@ export default function Calibration() {
   }, []);
 
   const active = view?.active ?? null;
+  const bulk = view?.bulk ?? null;
+  const busyRunning = active !== null || bulk !== null;
 
   useEffect(() => {
     void refresh();
-    const interval = window.setInterval(() => void refresh(), active ? 2000 : 15000);
+    const interval = window.setInterval(() => void refresh(), busyRunning ? 2000 : 15000);
     return () => window.clearInterval(interval);
-  }, [refresh, active !== null]);
+  }, [refresh, busyRunning]);
 
   async function loadCandidates(base: string) {
     setInstance(base);
@@ -457,6 +598,41 @@ export default function Calibration() {
     }
   }
 
+  async function loadBulkPreview() {
+    setError(null);
+    setPreview(null);
+    setCandidates(null);
+    setInstance(null);
+    try {
+      setBulkPreview(
+        await api<CalibrationBulkPreview>("/api/calibration/bulk/preview", {
+          method: "POST",
+          body: JSON.stringify({}),
+        }),
+      );
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Batch preview failed");
+    }
+  }
+
+  async function authorizeBulk() {
+    if (!bulkPreview) return;
+    setStarting(true);
+    setError(null);
+    try {
+      await api("/api/calibration/bulk/run", {
+        method: "POST",
+        body: JSON.stringify({ authorization: bulkPreview.authorization }),
+      });
+      setBulkPreview(null);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Batch refused");
+    } finally {
+      setStarting(false);
+    }
+  }
+
   async function abort() {
     try {
       await api("/api/calibration/abort", { method: "POST" });
@@ -479,9 +655,10 @@ export default function Calibration() {
         </span>
       </div>
       {error && <p className="error">{error}</p>}
+      {bulk && <BulkProgressPanel bulk={bulk} onAbort={() => void abort()} />}
       {active ? (
         <ActivePanel active={active} onAbort={() => void abort()} />
-      ) : (
+      ) : bulk ? null : (
         <>
           {cooldown && (
             <p className="hint">
@@ -503,10 +680,24 @@ export default function Calibration() {
                   </button>
                 ))}
               </div>
+              <button className="small" onClick={() => void loadBulkPreview()}>
+                Calibrate fleet…
+              </button>
             </div>
-            {!instance && <p className="hint">Pick the coordinator to calibrate.</p>}
+            {!instance && !bulkPreview && (
+              <p className="hint">
+                Pick the coordinator to calibrate, or preview a fleet batch.
+              </p>
+            )}
           </div>
-          {preview ? (
+          {bulkPreview ? (
+            <BulkPreviewPanel
+              preview={bulkPreview}
+              busy={starting}
+              onAuthorize={() => void authorizeBulk()}
+              onCancel={() => setBulkPreview(null)}
+            />
+          ) : preview ? (
             <PreviewPanel
               preview={preview}
               busy={starting}

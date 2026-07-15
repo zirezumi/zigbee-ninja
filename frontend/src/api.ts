@@ -282,10 +282,36 @@ export interface CalibrationRecord {
   abort_reason: string | null;
   environment: Record<string, string | null>;
   rtt_source: string | null;
+  batch_id: string | null;
+}
+
+export interface CalibrationBulkStatus {
+  batch_id: string;
+  position: number;
+  total: number;
+  state: string;
+  started_at: number;
+  runs: Array<{ instance: string; target: string }>;
+  skipped: Array<{ instance: string; target?: string; reason: string }>;
+  abort_requested: boolean;
+}
+
+export interface CalibrationBulkPreview {
+  batch: boolean;
+  batch_id: string;
+  runs: CalibrationPlan[];
+  skipped: Array<{ instance: string; target?: string; reason: string }>;
+  total_reads: number;
+  estimated_duration_s: number;
+  cooldown_between_runs_s: number;
+  created_at: number;
+  authorization: string;
+  authorization_expires_at: number;
 }
 
 export interface CalibrationView {
   active: CalibrationActive | null;
+  bulk: CalibrationBulkStatus | null;
   cooldown_until: number | null;
   history: CalibrationRecord[];
 }

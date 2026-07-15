@@ -63,6 +63,15 @@ class CalibrationRunRequest(BaseModel):
     authorization: str
 
 
+class CalibrationBulkPreviewRequest(BaseModel):
+    instances: list[str] | None = None
+    targets: dict[str, str] | None = None
+
+
+class CalibrationBulkRunRequest(BaseModel):
+    authorization: str
+
+
 def _set_session_cookie(response: Response, token: str) -> None:
     response.set_cookie(
         SESSION_COOKIE,
@@ -335,6 +344,28 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/calibration/bulk/preview")
+    def calibration_bulk_preview(
+        request: Request, settings: CalibrationBulkPreviewRequest
+    ) -> dict:
+        """Dry run for an enumerated batch: one run per instance (top-ranked
+        eligible router, unless pinned via targets), one single-use token."""
+        require_user(request)
+        try:
+            return engine.calibration.preview_bulk(settings.instances, settings.targets)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/calibration/bulk/run", status_code=202)
+    async def calibration_bulk_run(
+        request: Request, settings: CalibrationBulkRunRequest
+    ) -> dict:
+        require_user(request)
+        try:
+            return await engine.calibration.start_bulk(settings.authorization)
+        except CalibrationRejected as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.post("/api/calibration/abort")
     def calibration_abort(request: Request) -> dict:
