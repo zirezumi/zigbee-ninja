@@ -3,7 +3,10 @@ import { api, ApiError, HaView, TapStats, TapView, Tile } from "../api";
 
 const CAPABILITY_LABELS: Record<string, string> = {
   z2m_extension: "Z2M extension probe (T1)",
+  topology_pull: "Topology pulls (active mesh scans)",
 };
+
+const GRANT_CAPABILITIES = new Set(["topology_pull"]);
 
 function statusChip(tile: Tile): { label: string; className: string } {
   if (tile.status === "deployed" && tile.health === "stale") {
@@ -17,12 +20,17 @@ function statusChip(tile: Tile): { label: string; className: string } {
       return { label: `deployed v${tile.version ?? "?"}`, className: "chip ok" };
     case "deploying":
       return { label: "deploying…", className: "chip warn" };
+    case "granted":
+      return { label: "granted", className: "chip ok" };
     case "error":
       return { label: "error", className: "chip bad" };
     case "revoked":
       return { label: "revoked", className: "chip" };
     default:
-      return { label: "not deployed", className: "chip" };
+      return {
+        label: GRANT_CAPABILITIES.has(tile.capability) ? "not granted" : "not deployed",
+        className: "chip",
+      };
   }
 }
 
@@ -282,10 +290,14 @@ export default function Footprint() {
                         disabled={busy !== null}
                         onClick={() => void act("/api/tiles/deploy", tile)}
                       >
-                        {busy === key ? "…" : "Deploy"}
+                        {busy === key
+                          ? "…"
+                          : GRANT_CAPABILITIES.has(tile.capability)
+                            ? "Grant"
+                            : "Deploy"}
                       </button>
                     )}
-                    {["deployed", "deploying"].includes(tile.status) && (
+                    {["deployed", "deploying", "granted"].includes(tile.status) && (
                       <button
                         className="ghost small"
                         disabled={busy !== null}

@@ -5,17 +5,18 @@ import Attribution from "./views/Attribution";
 import BrokerSetup from "./views/BrokerSetup";
 import Fleet from "./views/Fleet";
 import Footprint from "./views/Footprint";
+import Topology from "./views/Topology";
 import Wire from "./views/Wire";
 
 type Phase = "loading" | "setup" | "login" | "ready" | "error";
-type View = "fleet" | "attribution" | "wire" | "footprint";
+type View = "fleet" | "attribution" | "wire" | "topology" | "footprint";
 
 const NAV_ITEMS: Array<{ label: string; view?: View }> = [
   { label: "Fleet", view: "fleet" },
   { label: "Attribution", view: "attribution" },
   { label: "Wire tap", view: "wire" },
   { label: "Burst inspector" },
-  { label: "Topology" },
+  { label: "Topology", view: "topology" },
   { label: "Calibration" },
   { label: "Footprint", view: "footprint" },
   { label: "Alerts" },
@@ -26,6 +27,7 @@ const VIEW_TITLES: Record<View, string> = {
   fleet: "Fleet",
   attribution: "Attribution",
   wire: "Wire tap",
+  topology: "Topology",
   footprint: "Footprint & permissions",
 };
 
@@ -244,6 +246,8 @@ export default function App() {
           <Attribution />
         ) : view === "wire" ? (
           <Wire />
+        ) : view === "topology" ? (
+          <Topology />
         ) : (
           <Footprint />
         )}

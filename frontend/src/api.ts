@@ -138,6 +138,20 @@ export interface AirtimeWindow {
   instances: Record<string, AirtimeWindowInstance>;
 }
 
+export interface TopologySummary {
+  pulled_at: number;
+  node_count: number;
+  link_count: number;
+  by_type: Record<string, number>;
+  failed_nodes: string[];
+  weak_links: Array<{ source: string; target: string; lqi: number }>;
+  top_degree: Array<{ node: string; links: number }>;
+}
+
+export interface TopologyView {
+  instances: Record<string, TopologySummary>;
+}
+
 export interface FleetMessage {
   ts: number;
   broker: BrokerStatus;

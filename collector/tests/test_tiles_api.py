@@ -25,10 +25,32 @@ def test_tiles_list_synthesizes_from_registry(client):
     engine.registry.handle("z2m-test/bridge/info", b'{"version": "2.3.0"}')
 
     tiles = client.get("/api/tiles").json()["tiles"]
-    assert len(tiles) == 1
-    assert tiles[0]["target"] == "z2m-test"
-    assert tiles[0]["status"] == "available"
-    assert tiles[0]["bundled_version"]
+    assert {(tile["capability"], tile["target"], tile["status"]) for tile in tiles} == {
+        ("z2m_extension", "z2m-test", "available"),
+        ("topology_pull", "z2m-test", "available"),
+    }
+
+
+def test_topology_grant_gate_and_pull_rejection(client):
+    authed(client)
+    action = {"capability": "topology_pull", "target": "z2m-test"}
+
+    # Pull before grant is refused with the reason.
+    response = client.post("/api/topology/pull", json=action)
+    assert response.status_code == 409
+    assert "not granted" in response.json()["detail"]
+
+    granted = client.post("/api/tiles/deploy", json=action).json()
+    assert granted["status"] == "granted"
+
+    # Granted now, but the broker is unconfigured in this app — the publish
+    # failure surfaces as a clean rejection, not a hang or a 500.
+    response = client.post("/api/topology/pull", json=action)
+    assert response.status_code == 409
+    assert "Broker" in response.json()["detail"]
+
+    revoked = client.post("/api/tiles/revoke", json=action).json()
+    assert revoked["status"] == "revoked"
 
 
 def test_deploy_endpoint_flow(client, monkeypatch):

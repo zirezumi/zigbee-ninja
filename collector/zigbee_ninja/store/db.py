@@ -97,6 +97,18 @@ _MIGRATIONS = [
     );
     CREATE INDEX idx_latency_10s_ts ON latency_10s (ts);
     """,
+    """
+    CREATE TABLE topology_snapshots (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        instance   TEXT NOT NULL,
+        pulled_at  REAL NOT NULL,
+        node_count INTEGER NOT NULL,
+        link_count INTEGER NOT NULL,
+        summary    TEXT NOT NULL,
+        raw        TEXT NOT NULL
+    );
+    CREATE INDEX idx_topology_instance_time ON topology_snapshots (instance, pulled_at);
+    """,
 ]
 
 

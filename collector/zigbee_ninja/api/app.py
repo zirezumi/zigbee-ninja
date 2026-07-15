@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .. import __version__
+from .. import tiles as tiles_module
 from ..attribution import queries as attribution_queries
 from ..capacity import airtime as airtime_model
 from ..ingest.engine import Engine
@@ -175,22 +176,26 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
     @app.post("/api/tiles/deploy")
     async def tiles_deploy(request: Request, action: TileAction) -> dict:
         require_user(request)
-        if action.capability != "z2m_extension":
-            raise HTTPException(status_code=400, detail="Unknown tile capability")
-        try:
-            return await engine.tiles.deploy_extension(action.target)
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if action.capability == "z2m_extension":
+            try:
+                return await engine.tiles.deploy_extension(action.target)
+            except RuntimeError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if action.capability in tiles_module.GRANT_CAPABILITIES:
+            return engine.tiles.grant(action.capability, action.target)
+        raise HTTPException(status_code=400, detail="Unknown tile capability")
 
     @app.post("/api/tiles/revoke")
     async def tiles_revoke(request: Request, action: TileAction) -> dict:
         require_user(request)
-        if action.capability != "z2m_extension":
-            raise HTTPException(status_code=400, detail="Unknown tile capability")
-        try:
-            return await engine.tiles.revoke_extension(action.target)
-        except RuntimeError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if action.capability == "z2m_extension":
+            try:
+                return await engine.tiles.revoke_extension(action.target)
+            except RuntimeError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if action.capability in tiles_module.GRANT_CAPABILITIES:
+            return engine.tiles.revoke_grant(action.capability, action.target)
+        raise HTTPException(status_code=400, detail="Unknown tile capability")
 
     @app.post("/api/tiles/revoke_all")
     async def tiles_revoke_all(request: Request) -> dict:
@@ -241,6 +246,28 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
             )
             view["provenance"] = airtime_model.PROVENANCE
         return {"window_seconds": seconds, "instances": instances}
+
+    @app.get("/api/topology")
+    def topology_get(request: Request, instance: str | None = None, full: bool = False) -> dict:
+        require_user(request)
+        return {
+            "instances": engine.topology.latest(instance, include_raw=full),
+        }
+
+    @app.post("/api/topology/pull")
+    async def topology_pull(request: Request, action: TileAction) -> dict:
+        require_user(request)
+        if action.capability != tiles_module.CAPABILITY_TOPOLOGY:
+            raise HTTPException(status_code=400, detail="Unknown capability")
+        try:
+            return await engine.topology.pull(action.target)
+        except TimeoutError as exc:
+            raise HTTPException(
+                status_code=504,
+                detail="Zigbee2MQTT did not answer the networkmap request in time",
+            ) from exc
+        except RuntimeError as exc:  # PullRejected, broker-unconfigured, ...
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     @app.get("/api/latency")
     def latency_series(request: Request, seconds: int = 3600) -> dict:

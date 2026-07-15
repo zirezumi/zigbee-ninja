@@ -528,7 +528,11 @@ standalone; HA ingress trust in add-on mode (fast-follow). Default port `8686`.
 5. **Burst inspector** — event-level timeline over the raw window, zoom to
    milliseconds, chain visualization (command → TX → responses as a micro-gantt).
 6. **Topology** — mesh graph from the latest snapshot (LQI-weighted edges,
-   relay-load-sized routers), freshness-stamped.
+   relay-load-sized routers), freshness-stamped. First slice shipped: per-
+   instance grant-gated on-demand pulls (15 min rate limit, one scan at a
+   time), stored snapshots with summaries (router census, weak links,
+   node degree, unreachable nodes); the force-directed graph rides on the
+   stored raw maps later.
 7. **Calibration** — wizard + history + knee-drift indicators.
 8. **Footprint & permissions** — tiles, health, versions, revoke-all; connected
    wire-tap agents.

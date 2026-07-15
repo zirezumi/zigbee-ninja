@@ -9,7 +9,7 @@ import time
 from ..attribution.chains import ChainTracker, parse_command
 from ..store.config import ConfigStore
 from ..store.db import Database
-from ..tiles import TileManager
+from ..tiles import CAPABILITY_TOPOLOGY, TileManager
 from .brokerlog import LOG_TOPIC_PREFIX, BrokerLogCorrelator
 from .hacontrol import HaAttribution, HaConfig, HaLink
 from .mqtt import BrokerConfig, MqttIngest
@@ -17,6 +17,7 @@ from .probe import ProbeIngest
 from .rates import GLOBAL, ROLLUP_SECONDS, RateTracker, classify
 from .registry import Registry
 from .tap import TapIngest
+from .topology import TopologyPuller
 
 ROLLUP_RETENTION_SECONDS = 14 * 24 * 3600  # 10s tiers keep two weeks (DESIGN.md §12)
 CHAIN_RETENTION_SECONDS = 48 * 3600  # chain detail keeps 48h (DESIGN.md §12)
@@ -38,6 +39,11 @@ class Engine:
         self.tap = TapIngest(
             resolve_instance=self.registry.instance_for_endpoint,
             router_count=self.registry.router_count_for,
+        )
+        self.topology = TopologyPuller(
+            db,
+            publisher=self.publish,
+            granted=lambda base: self.tiles.is_granted(CAPABILITY_TOPOLOGY, base),
         )
         self.ha_attr = HaAttribution()
         self._ha_link: HaLink | None = None
@@ -176,6 +182,9 @@ class Engine:
         if kind == "bridge" and suffix.startswith("bridge/response/extension/"):
             action = suffix.rsplit("/", 1)[-1]
             self.tiles.on_bridge_response(base, action, payload)
+            return
+        if kind == "bridge" and suffix == "bridge/response/networkmap":
+            self.topology.on_response(base, payload)
             return
         if kind == "command":
             command = parse_command(suffix)

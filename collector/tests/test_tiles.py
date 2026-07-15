@@ -87,7 +87,13 @@ def test_revoke_flow_and_revoke_all(tmp_path):
     assert results and results[0]["status"] == "revoked"
 
     tiles = manager.list(bases=["z2m-test"], probe_stats={})
-    assert tiles[0]["status"] == "revoked"
+    assert extension_tile(tiles, "z2m-test")["status"] == "revoked"
+
+
+def extension_tile(tiles: list[dict], target: str) -> dict:
+    return next(
+        t for t in tiles if t["capability"] == "z2m_extension" and t["target"] == target
+    )
 
 
 def test_list_synthesizes_available_and_health(tmp_path):
@@ -97,6 +103,7 @@ def test_list_synthesizes_available_and_health(tmp_path):
 
     tiles = manager.list(bases=["z2m-a", "z2m-b"], probe_stats={})
     assert {t["target"] for t in tiles} == {"z2m-a", "z2m-b"}
+    assert {t["capability"] for t in tiles} == {"z2m_extension", "topology_pull"}
     assert all(t["status"] == "available" for t in tiles)
 
     manager._upsert("z2m_extension", "z2m-a", status="deployed", version=probe_version())
@@ -104,12 +111,12 @@ def test_list_synthesizes_available_and_health(tmp_path):
         bases=["z2m-a"],
         probe_stats={"z2m-a": {"last_heartbeat_at": 1990.0, "version": probe_version()}},
     )
-    tile_a = [t for t in fresh if t["target"] == "z2m-a"][0]
+    tile_a = extension_tile(fresh, "z2m-a")
     assert tile_a["health"] == "ok"
     assert tile_a["drift"] is False
 
     stale = manager.list(bases=["z2m-a"], probe_stats={"z2m-a": {"last_heartbeat_at": 1000.0}})
-    assert [t for t in stale if t["target"] == "z2m-a"][0]["health"] == "stale"
+    assert extension_tile(stale, "z2m-a")["health"] == "stale"
 
 
 def test_heartbeat_promotes_status(tmp_path):
@@ -118,5 +125,5 @@ def test_heartbeat_promotes_status(tmp_path):
     manager._upsert("z2m_extension", "z2m-test", status="error", detail="timeout")
     manager.on_heartbeat("z2m-test", {"version": "0.3.0"})
     tiles = manager.list(bases=["z2m-test"], probe_stats={})
-    assert tiles[0]["status"] == "deployed"
-    assert tiles[0]["version"] == "0.3.0"
+    assert extension_tile(tiles, "z2m-test")["status"] == "deployed"
+    assert extension_tile(tiles, "z2m-test")["version"] == "0.3.0"

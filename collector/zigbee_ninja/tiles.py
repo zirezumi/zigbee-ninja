@@ -19,6 +19,11 @@ from importlib import resources
 from .store.db import Database
 
 CAPABILITY_Z2M_EXTENSION = "z2m_extension"
+# Topology pulls are ACTIVE mesh operations (Mgmt_Lqi/Mgmt_Rtg sweeps): the
+# tile is a pure grant — nothing is installed anywhere — and the puller
+# enforces its own rate limit on top (DESIGN.md §6).
+CAPABILITY_TOPOLOGY = "topology_pull"
+GRANT_CAPABILITIES = (CAPABILITY_TOPOLOGY,)
 PROBE_FILE_NAME = "zigbee-ninja-probe.js"
 RESPONSE_TIMEOUT_SECONDS = 10.0
 HEALTH_STALE_SECONDS = 60.0
@@ -93,19 +98,20 @@ class TileManager:
             for row in conn.execute("SELECT * FROM tiles")
         }
         for base in bases:
-            key = (CAPABILITY_Z2M_EXTENSION, base)
-            if key not in stored:
-                stored[key] = {
-                    "capability": CAPABILITY_Z2M_EXTENSION,
-                    "target": base,
-                    "status": "available",
-                    "granted_at": None,
-                    "deployed_at": None,
-                    "revoked_at": None,
-                    "version": None,
-                    "last_health_at": None,
-                    "detail": None,
-                }
+            for capability in (CAPABILITY_Z2M_EXTENSION, *GRANT_CAPABILITIES):
+                key = (capability, base)
+                if key not in stored:
+                    stored[key] = {
+                        "capability": capability,
+                        "target": base,
+                        "status": "available",
+                        "granted_at": None,
+                        "deployed_at": None,
+                        "revoked_at": None,
+                        "version": None,
+                        "last_health_at": None,
+                        "detail": None,
+                    }
 
         now = self._clock()
         bundled = probe_version()
@@ -162,6 +168,20 @@ class TileManager:
         finally:
             self._pending.pop(transaction, None)
             self._pending.pop(f"{base}:{action}", None)
+
+    # -- pure grants (no remote artifact) ------------------------------------------
+
+    def grant(self, capability: str, base: str) -> dict:
+        self._upsert(capability, base, status="granted", granted_at=self._clock(), detail=None)
+        return self._row(capability, base) or {}
+
+    def revoke_grant(self, capability: str, base: str) -> dict:
+        self._upsert(capability, base, status="revoked", revoked_at=self._clock(), detail=None)
+        return self._row(capability, base) or {}
+
+    def is_granted(self, capability: str, base: str) -> bool:
+        row = self._row(capability, base)
+        return bool(row) and row["status"] == "granted"
 
     # -- lifecycle actions ---------------------------------------------------------
 
@@ -239,6 +259,15 @@ class TileManager:
         results = []
         for target in targets:
             results.append(await self.revoke_extension(target))
+        # Emergency stop also drops pure grants (active-operation permissions).
+        granted = [
+            (row["capability"], row["target"])
+            for row in conn.execute(
+                "SELECT capability, target FROM tiles WHERE status = 'granted'"
+            )
+        ]
+        for capability, target in granted:
+            results.append(self.revoke_grant(capability, target))
         return results
 
     def on_heartbeat(self, base: str, heartbeat: dict) -> None:
