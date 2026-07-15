@@ -41,8 +41,12 @@ host agent covers every coordinator flow; stable). Deep EZSP parameter decode
 (`decode/ezsp_params.py`) pinned EMPIRICALLY against live EZSP v14-era captures
 (32-bit sl_status, 16-bit tags, rx-packet-info); every parser self-checks frame
 length arithmetic and degrades to a `layout_mismatch` counter, never silently
-wrong numbers. Remaining for **M4**: T1/T2 frame fusion; spike S2 counter
-labeling (counter-read responses are already harvested passively off the wire).
+wrong numbers. Spike S2 is resolved passively: Z2M's own readAndClearCounters responses are
+harvested off the wire and labeled (`decode/counters.py`, provenance inferred
+until live validation); wire-latency 10 s windows persist to `latency_10s`
+(`/api/latency`) as the latency-vs-load axis for continuous knee validation.
+Remaining for **M4**: T1/T2 frame fusion (exact matching wants the probe to
+emit APS/ZCL sequence numbers — probe v0.4).
 **M5 (started)**: per-frame airtime model (`capacity/airtime.py`, DESIGN §10)
 with PSDU reconstruction + mesh amplification over the discovered router
 census; per-instance airtime buckets (tx_unicast / tx_groupcast / rx / rx_mesh)
