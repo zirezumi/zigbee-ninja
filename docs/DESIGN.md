@@ -227,6 +227,7 @@ A **tile** is one grantable capability against one named target:
 | Z2M extension (T1) | per Z2M instance | `bridge/request/extension/save` over MQTT | `bridge/request/extension/remove` |
 | Wire tap (T2) | per capture host | Copy-paste one-liner installer (default); SSH-automated (opt-in) | GUI revoke → agent self-uninstalls; or local `ninja-tap uninstall` |
 | Topology pulls | per Z2M instance | Grant + rate limit (networkmap requests load the mesh) | Toggle off |
+| HA entities (MQTT discovery) | per Z2M instance | Grant → standing publisher of retained discovery configs + state topics on the shared broker (§14) | Revoke → every retained topic the tile claimed is deleted (empty retained publish) |
 | Calibration benchmark | per coordinator | Per-run authorization through the wizard (§11) | Abort button; grants never persist across runs |
 | HA integration | HA instance | User-pasted long-lived token | Delete token |
 | Hardware enrichment | per coordinator device | Enable API polling | Toggle off |
@@ -627,10 +628,23 @@ placeholder thresholds — utilization and latency norms are per-installation,
 so the user opts in from the Alerts view.
 
 Delivery: the GUI notification center (active alerts ride the 1 s fleet
-stream), plus an optional **MQTT discovery publisher** that exposes headline
-metrics and alert states as Home Assistant entities — any HA user gets native
+stream), plus the **MQTT discovery publisher** — headline metrics and alert
+states as Home Assistant entities, so any HA user gets native
 notifications/automations for free, tokenless, and it's the natural bridge
-for non-HA consumers too.
+for non-HA consumers too. Because it is a *standing* publisher on the shared
+broker, it is a per-instance grant tile (§6), never on by default. When
+granted it publishes retained discovery configs (one HA device per
+coordinator, `origin`-stamped entities) under the instance's announced
+discovery prefix, then refreshes per-metric state topics (channel budget %,
+knee utilization %, wire p95, message rate) and a `problem` binary_sensor
+(active-alert state, alert names as attributes) every 45 s over the
+collector's own MQTT connection (self-attributed, P4). Sensors carry
+`expire_after`, so a dead collector reads *unavailable* in HA — no
+availability topic or LWT to trust. A metric with no data yet simply skips
+its topic. Revoking the grant publishes empty retained payloads for every
+topic the tile ever claimed (bookkept per instance), removing the entities
+from HA; if the broker is unreachable at revoke time, the publish loop's
+cleanup sweep finishes the job when it returns.
 
 ## §15 Security posture
 

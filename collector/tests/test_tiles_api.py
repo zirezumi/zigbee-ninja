@@ -28,6 +28,7 @@ def test_tiles_list_synthesizes_from_registry(client):
     assert {(tile["capability"], tile["target"], tile["status"]) for tile in tiles} == {
         ("z2m_extension", "z2m-test", "available"),
         ("topology_pull", "z2m-test", "available"),
+        ("mqtt_discovery", "z2m-test", "available"),
     }
 
 

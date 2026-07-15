@@ -97,9 +97,15 @@ clear-on-hysteresis with a 60 s floor, freeze-on-missing-data, counter metrics
 as per-tick deltas with restart rebaselining), open events survive restarts,
 built-ins seed exactly once (self-health enabled / capacity disabled — user
 deletions durable), rule CRUD + active/history API (`/api/alerts*`), active
-alerts on the fleet WS. Remaining M6: Alerts GUI view, MQTT-discovery entity
-publisher (grant tile), secrets-at-rest encryption (§15), retention knobs +
-Settings view.
+alerts on the fleet WS. Alerts GUI view live (rule editor from the metric
+catalog, event history, fleet-card chips + service-wide banner). MQTT
+discovery publisher (§14) as a per-instance GRANT tile (`mqtt_discovery`):
+retained HA discovery configs under the instance's announced prefix +
+per-metric state topics + problem binary_sensor on a 45 s loop, expire_after
+instead of availability/LWT, revoke deletes every claimed retained topic
+(bookkept in settings; loop sweep finishes cleanup if the broker was down).
+Remaining M6: secrets-at-rest encryption (§15), retention knobs + Settings
+view.
 Roadmap: README.md.
 
 ## Hard rules

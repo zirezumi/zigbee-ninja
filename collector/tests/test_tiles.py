@@ -103,7 +103,11 @@ def test_list_synthesizes_available_and_health(tmp_path):
 
     tiles = manager.list(bases=["z2m-a", "z2m-b"], probe_stats={})
     assert {t["target"] for t in tiles} == {"z2m-a", "z2m-b"}
-    assert {t["capability"] for t in tiles} == {"z2m_extension", "topology_pull"}
+    assert {t["capability"] for t in tiles} == {
+        "z2m_extension",
+        "topology_pull",
+        "mqtt_discovery",
+    }
     assert all(t["status"] == "available" for t in tiles)
 
     manager._upsert("z2m_extension", "z2m-a", status="deployed", version=probe_version())

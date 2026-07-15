@@ -232,16 +232,27 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
             except RuntimeError as exc:
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
         if action.capability in tiles_module.GRANT_CAPABILITIES:
-            return engine.tiles.revoke_grant(action.capability, action.target)
+            result = engine.tiles.revoke_grant(action.capability, action.target)
+            if action.capability == tiles_module.CAPABILITY_MQTT_DISCOVERY:
+                try:
+                    await engine.discovery.revoke_cleanup(action.target)
+                except RuntimeError:
+                    pass  # broker offline; the publish loop's sweep finishes it
+            return result
         raise HTTPException(status_code=400, detail="Unknown tile capability")
 
     @app.post("/api/tiles/revoke_all")
     async def tiles_revoke_all(request: Request) -> dict:
         require_user(request)
         try:
-            return {"revoked": await engine.tiles.revoke_all()}
+            revoked = await engine.tiles.revoke_all()
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        try:
+            await engine.discovery.cleanup_revoked()
+        except RuntimeError:
+            pass  # broker offline; the publish loop's sweep finishes it
+        return {"revoked": revoked}
 
     @app.get("/api/attribution/summary")
     def attribution_summary(request: Request, seconds: int = 3600) -> dict:

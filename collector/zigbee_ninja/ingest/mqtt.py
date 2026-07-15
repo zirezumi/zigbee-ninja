@@ -83,11 +83,11 @@ class MqttIngest:
         self.status: dict = {"state": "disconnected", "error": None, "connected_since": None}
         self.handler_errors = 0
 
-    async def publish(self, topic: str, payload: str) -> None:
+    async def publish(self, topic: str, payload: str, retain: bool = False) -> None:
         client = self._client
         if client is None or self.status["state"] != "connected":
             raise RuntimeError("MQTT broker is not connected")
-        await client.publish(topic, payload, qos=0)
+        await client.publish(topic, payload, qos=0, retain=retain)
 
     @staticmethod
     async def _subscribe(client) -> None:

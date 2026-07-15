@@ -121,6 +121,7 @@ class Registry:
                 "coordinator_type": None,
                 "coordinator_ieee": None,
                 "coordinator_revision": None,
+                "discovery_prefix": None,
                 "device_count": 0,
                 "router_count": 0,
                 "end_device_count": 0,
@@ -154,7 +155,17 @@ class Registry:
         network = data.get("network") or {}
         coordinator = data.get("coordinator") or {}
         meta = coordinator.get("meta") or {}
-        serial = (data.get("config") or {}).get("serial") or {}
+        config = data.get("config") or {}
+        serial = config.get("serial") or {}
+        # The HA discovery prefix rides bridge/info (DESIGN.md §5): a dict in
+        # Z2M 2.x ({enabled, discovery_topic, ...}), a bare bool historically.
+        ha_config = config.get("homeassistant")
+        if isinstance(ha_config, dict):
+            discovery_prefix = ha_config.get("discovery_topic") or None
+        elif ha_config is True:
+            discovery_prefix = "homeassistant"
+        else:
+            discovery_prefix = None
         instance = self._instance(base)
         instance.update(
             version=data.get("version"),
@@ -164,6 +175,7 @@ class Registry:
             coordinator_type=coordinator.get("type"),
             coordinator_ieee=meta.get("ieee_address") or coordinator.get("ieee_address"),
             coordinator_revision=meta.get("revision"),
+            discovery_prefix=discovery_prefix,
             last_info_at=time.time(),
         )
 
@@ -256,6 +268,11 @@ class Registry:
         """Router census for the mesh-amplification model (0 until discovered)."""
         instance = self._instances.get(base)
         return int(instance.get("router_count") or 0) if instance else 0
+
+    def discovery_prefix_for(self, base: str) -> str | None:
+        """HA discovery prefix announced by the instance, if any."""
+        instance = self._instances.get(base)
+        return instance.get("discovery_prefix") if instance else None
 
     def instance_for_endpoint(self, ip: str, port: int) -> str | None:
         """Base topic whose coordinator adapter is at tcp://ip:port (for T2 flows)."""

@@ -124,7 +124,7 @@ def test_run_lifecycle_self_attribution_and_cooldown(client, monkeypatch):
     class StubIngest:
         status = {"state": "connected", "error": None, "connected_since": None}
 
-        async def publish(self, topic, payload):
+        async def publish(self, topic, payload, retain=False):
             loop = asyncio.get_running_loop()
             loop.call_soon(engine.on_message, topic, payload.encode())
             loop.call_soon(engine.on_message, "z2m-test/plug-a", b'{"state": "ON"}')

@@ -23,7 +23,11 @@ CAPABILITY_Z2M_EXTENSION = "z2m_extension"
 # tile is a pure grant — nothing is installed anywhere — and the puller
 # enforces its own rate limit on top (DESIGN.md §6).
 CAPABILITY_TOPOLOGY = "topology_pull"
-GRANT_CAPABILITIES = (CAPABILITY_TOPOLOGY,)
+# The HA MQTT-discovery publisher is a STANDING publisher on the shared
+# broker (retained discovery configs + state topics), so it too is a grant;
+# revoking deletes every retained topic it claimed (ha_discovery.py).
+CAPABILITY_MQTT_DISCOVERY = "mqtt_discovery"
+GRANT_CAPABILITIES = (CAPABILITY_TOPOLOGY, CAPABILITY_MQTT_DISCOVERY)
 PROBE_FILE_NAME = "zigbee-ninja-probe.js"
 RESPONSE_TIMEOUT_SECONDS = 10.0
 HEALTH_STALE_SECONDS = 60.0

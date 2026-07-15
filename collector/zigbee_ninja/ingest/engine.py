@@ -6,14 +6,21 @@ import asyncio
 import secrets
 import time
 
+from .. import __version__
 from ..alerts import GLOBAL_INSTANCE, AlertManager
 from ..attribution.chains import ChainTracker, parse_command
 from ..calibration.benchmark import CalibrationManager
 from ..capacity import headroom as headroom_model
 from ..capacity.headroom import TX_BUCKETS
+from ..ha_discovery import PUBLISH_INTERVAL_SECONDS, DiscoveryPublisher
 from ..store.config import ConfigStore
 from ..store.db import Database
-from ..tiles import CAPABILITY_TOPOLOGY, CAPABILITY_Z2M_EXTENSION, TileManager
+from ..tiles import (
+    CAPABILITY_MQTT_DISCOVERY,
+    CAPABILITY_TOPOLOGY,
+    CAPABILITY_Z2M_EXTENSION,
+    TileManager,
+)
 from .brokerlog import LOG_TOPIC_PREFIX, BrokerLogCorrelator
 from .hacontrol import HaAttribution, HaConfig, HaLink
 from .mqtt import BrokerConfig, MqttIngest
@@ -65,12 +72,21 @@ class Engine:
         )
         self.ha_attr = HaAttribution()
         self.alerts = AlertManager(db, config, provider=self._alert_metrics)
+        self.discovery = DiscoveryPublisher(
+            config,
+            publish=self.publish,
+            granted_bases=self._discovery_granted,
+            discovery_prefix=self.registry.discovery_prefix_for,
+            metrics=self._discovery_metrics,
+            version=__version__,
+        )
         self._knees_cache: tuple[float, dict[str, float]] | None = None
         self._ha_link: HaLink | None = None
         self._ha_task: asyncio.Task | None = None
         self._ingest: MqttIngest | None = None
         self._ingest_task: asyncio.Task | None = None
         self._flush_task: asyncio.Task | None = None
+        self._discovery_task: asyncio.Task | None = None
 
     def tap_token(self) -> str:
         """Long-lived token a ninja-tap agent presents to stream (generated once)."""
@@ -86,11 +102,11 @@ class Engine:
     def _on_probe_heartbeat(self, base: str, heartbeat: dict) -> None:
         self.tiles.on_heartbeat(base, heartbeat)
 
-    async def publish(self, topic: str, payload: str) -> None:
+    async def publish(self, topic: str, payload: str, retain: bool = False) -> None:
         """Publish on the ingest connection; self-attributed (DESIGN.md P4)."""
         if self._ingest is None:
             raise RuntimeError("Broker is not configured")
-        await self._ingest.publish(topic, payload)
+        await self._ingest.publish(topic, payload, retain=retain)
         base = self.registry.base_for(topic)
         self.class_rates.record(base or GLOBAL, "self")
 
@@ -102,12 +118,13 @@ class Engine:
 
     async def start(self) -> None:
         self._flush_task = asyncio.create_task(self._flush_loop())
+        self._discovery_task = asyncio.create_task(self._discovery_loop())
         await self.restart_ingest()
         await self.restart_ha()
 
     async def stop(self) -> None:
         await self.calibration.shutdown()  # abort any active benchmark run
-        for task in (self._ingest_task, self._flush_task, self._ha_task):
+        for task in (self._ingest_task, self._flush_task, self._ha_task, self._discovery_task):
             if task is not None:
                 task.cancel()
                 try:
@@ -117,6 +134,7 @@ class Engine:
         self._ingest_task = None
         self._flush_task = None
         self._ha_task = None
+        self._discovery_task = None
 
     async def restart_ingest(self) -> None:
         if self._ingest_task is not None:
@@ -244,6 +262,51 @@ class Engine:
         if self._ingest is None:
             return {"state": "unconfigured", "error": None, "connected_since": None}
         return dict(self._ingest.status)
+
+    # -- HA discovery publisher (DESIGN.md §14) ------------------------------------
+
+    def _discovery_granted(self) -> list[str]:
+        return [
+            instance["base_topic"]
+            for instance in self.registry.snapshot()
+            if self.tiles.is_granted(CAPABILITY_MQTT_DISCOVERY, instance["base_topic"])
+        ]
+
+    def _discovery_metrics(self, base: str) -> dict:
+        """Headline metrics + alert state for one instance's HA entities."""
+        samples = self._alert_metrics(
+            {"budget_pct", "knee_utilization_pct", "wire_p95_ms"}
+        )
+        rates = self.rates.snapshot().get(base)
+        briefs = [
+            alert
+            for alert in self.alerts.active_brief()
+            if alert["instance"] in (base, GLOBAL_INSTANCE)
+        ]
+        severity = None
+        for level in ("critical", "warning", "info"):
+            if any(alert["severity"] == level for alert in briefs):
+                severity = level
+                break
+        return {
+            "budget_pct": (samples.get("budget_pct") or {}).get(base),
+            "knee_utilization_pct": (samples.get("knee_utilization_pct") or {}).get(base),
+            "wire_p95_ms": (samples.get("wire_p95_ms") or {}).get(base),
+            "msg_rate": (
+                None if rates is None else round(rates.get("total_60s", 0) / 60.0, 2)
+            ),
+            "alerts": [alert["name"] for alert in briefs],
+            "severity": severity,
+        }
+
+    async def _discovery_loop(self) -> None:
+        while True:
+            await asyncio.sleep(PUBLISH_INTERVAL_SECONDS)
+            try:
+                await self.discovery.publish_cycle()
+            except Exception:
+                # Broker down or reconnecting; the next cycle retries.
+                pass
 
     # -- alert metrics (DESIGN.md §14) -------------------------------------------
 

@@ -4,9 +4,10 @@ import { api, ApiError, HaView, TapStats, TapView, Tile } from "../api";
 const CAPABILITY_LABELS: Record<string, string> = {
   z2m_extension: "Z2M extension probe (T1)",
   topology_pull: "Topology pulls (active mesh scans)",
+  mqtt_discovery: "HA entities via MQTT discovery (standing publisher)",
 };
 
-const GRANT_CAPABILITIES = new Set(["topology_pull"]);
+const GRANT_CAPABILITIES = new Set(["topology_pull", "mqtt_discovery"]);
 
 function statusChip(tile: Tile): { label: string; className: string } {
   if (tile.status === "deployed" && tile.health === "stale") {
