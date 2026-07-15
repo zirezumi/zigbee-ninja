@@ -118,8 +118,17 @@ And `mac_tx_broadcast` provably includes relayed foreign NWK broadcasts
 (live windows exceed the passive-ack ×3 maximum even at full retry), so
 residuals > 3 are discarded as relay-contaminated (counted, shown in Wire
 view) instead of clamping to a fake 3.0 — on busy meshes avg_tx honestly
-stays modeled 1.3. **M6 code complete → V1 pending live validation** (GUI
-review, discovery-tile grant is the owner's call).
+stays modeled 1.3.
+**M6 DEPLOYED + LIVE-VALIDATED**: migration + seeded rules on the persisted
+volume; secrets upgraded in place with broker/HA reconnecting through the
+decrypt path; alert lifecycle proven end to end on live infrastructure
+(agent stopped → open after sustain → GUI banner/chips → restart → clear on
+hysteresis → history); both avg_tx fixes confirmed on live hourly windows
+(3595–3604 s accepted by the widened guard; all residuals 3.16–3.50 →
+discarded as relay-contaminated with visible accounting). **V1 remaining:**
+the §12 Parquet/DuckDB raw-event store + Burst-inspector view were never
+built (scope decision pending), the discovery tile awaits its first
+user grant, and cosign image signing (§15) becomes relevant at release.
 Roadmap: README.md.
 
 ## Hard rules
