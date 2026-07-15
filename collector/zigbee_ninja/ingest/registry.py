@@ -17,12 +17,77 @@ _SUFFIX_HANDLERS = {
     "/bridge/state": "_on_state",
 }
 
+# Published properties whose values move on their own (metering, environment).
+# Reading such a device republishes them — the §11 preview warns about the
+# resulting state churn in downstream controllers.
+_MEASUREMENT_HINTS = (
+    "power",
+    "energy",
+    "current",
+    "voltage",
+    "temperature",
+    "humidity",
+    "illuminance",
+    "pressure",
+    "co2",
+    "pm25",
+)
+
+_ACCESS_PUBLISHED = 1
+_ACCESS_GETTABLE = 4
+
 
 def _json_or_none(payload: bytes):
     try:
         return json.loads(payload)
     except (ValueError, UnicodeDecodeError):
         return None
+
+
+def _walk_exposes(exposes):
+    """Yield leaf expose entries, flattening composite features (light, switch…)."""
+    for item in exposes or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("features"):
+            yield from _walk_exposes(item["features"])
+        elif item.get("property"):
+            yield item
+
+
+def _expose_capabilities(definition) -> tuple[str | None, list[str]]:
+    """(preferred gettable property, published measurement-ish properties).
+
+    Access is Zigbee2MQTT's exposes bitfield: 1 published, 2 settable, 4
+    gettable via `<base>/<name>/get {"<property>": ""}`.
+    """
+    leaves = [
+        leaf
+        for leaf in _walk_exposes((definition or {}).get("exposes"))
+        if isinstance(leaf.get("access"), int)
+    ]
+    gettable = [leaf["property"] for leaf in leaves if leaf["access"] & _ACCESS_GETTABLE]
+    get_attribute = "state" if "state" in gettable else (gettable[0] if gettable else None)
+    measurements = sorted(
+        {
+            str(leaf["property"])
+            for leaf in leaves
+            if leaf["access"] & _ACCESS_PUBLISHED
+            and any(hint in str(leaf["property"]) for hint in _MEASUREMENT_HINTS)
+        }
+    )
+    return get_attribute, measurements
+
+
+def _binding_count(entry: dict) -> int:
+    endpoints = entry.get("endpoints")
+    if not isinstance(endpoints, dict):
+        return 0
+    return sum(
+        len(endpoint.get("bindings") or [])
+        for endpoint in endpoints.values()
+        if isinstance(endpoint, dict)
+    )
 
 
 class Registry:
@@ -44,6 +109,7 @@ class Registry:
                 "adapter_port": None,
                 "coordinator_type": None,
                 "coordinator_ieee": None,
+                "coordinator_revision": None,
                 "device_count": 0,
                 "router_count": 0,
                 "end_device_count": 0,
@@ -86,6 +152,7 @@ class Registry:
             adapter_port=serial.get("port"),
             coordinator_type=coordinator.get("type"),
             coordinator_ieee=meta.get("ieee_address") or coordinator.get("ieee_address"),
+            coordinator_revision=meta.get("revision"),
             last_info_at=time.time(),
         )
 
@@ -104,6 +171,7 @@ class Registry:
             elif device_type == "EndDevice":
                 end_devices += 1
             definition = entry.get("definition") or {}
+            get_attribute, measurements = _expose_capabilities(definition)
             devices.append(
                 {
                     "ieee_address": entry.get("ieee_address"),
@@ -112,6 +180,10 @@ class Registry:
                     "power_source": entry.get("power_source"),
                     "vendor": definition.get("vendor"),
                     "model": definition.get("model"),
+                    "network_address": entry.get("network_address"),
+                    "get_attribute": get_attribute,
+                    "published_measurements": measurements,
+                    "binding_count": _binding_count(entry),
                 }
             )
         self._devices[base] = devices
