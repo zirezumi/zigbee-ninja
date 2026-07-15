@@ -82,8 +82,16 @@ denominators side by side, steady/burst headroom vs the knee (10 s
 granularity), and the latency-vs-load knee-validation scatter — with
 benchmark windows excluded from every aggregate (§11.5); the Headroom view
 (uPlot) draws the scatter with the knee overlay and Fleet cards carry a knee
-line. Remaining M5 tail: optional groupcast stage (calibrates avg_tx),
-multi-target NCP-knee ramp. Then M6.
+line. **M5 tail complete**: avg_tx is measured passively from the
+coordinator's own broadcast TX counters (the groupcast stage is superseded —
+see §10), and **spread mode** round-robins reads across the top routers to
+probe the NCP/global-pipeline knee (denominator 2; knees stored per mode,
+headroom prefers the spread measurement). Reference fleet fully calibrated in
+both modes; the five instances show a uniform ~2× spread-over-single knee
+with the wire RTT inflating as the global ceiling approaches — the shared
+Z2M/EZSP stack, not the radio, is the binding constraint there.
+**M5 is done.** Next: M6 — alerting + MQTT-discovery entities (§14),
+retention hardening, secrets-at-rest encryption (§15).
 Roadmap: README.md.
 
 ## Hard rules
