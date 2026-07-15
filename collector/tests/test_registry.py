@@ -41,6 +41,10 @@ DEVICES = [
                 },
                 {"property": "power", "access": 1},
                 {"property": "linkquality", "access": 1},
+                # Config enum sharing the "power" stem — NOT a measurement.
+                {"property": "power_on_behavior", "access": 7},
+                # Underscore-bounded stem match — IS a measurement.
+                {"property": "device_temperature", "access": 1},
             ],
         },
         "endpoints": {
@@ -93,7 +97,7 @@ def test_discovery_from_bridge_topics():
     devices = {device["friendly_name"]: device for device in registry.devices("z2m-test")}
     light = devices["kitchen_light"]
     assert light["get_attribute"] == "state"  # preferred over brightness
-    assert light["published_measurements"] == ["power"]
+    assert light["published_measurements"] == ["device_temperature", "power"]
     assert light["binding_count"] == 2
     assert light["network_address"] == 4711
     sensor = devices["door_sensor"]

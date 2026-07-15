@@ -32,9 +32,21 @@ _MEASUREMENT_HINTS = (
     "co2",
     "pm25",
 )
+# ...but config enums are not measurements even when they share a stem
+# (power_on_behavior, power_outage_memory, current_heating_setpoint).
+_MEASUREMENT_EXCLUDED_SUFFIXES = ("_behavior", "_memory", "_mode", "_type", "_setpoint")
 
 _ACCESS_PUBLISHED = 1
 _ACCESS_GETTABLE = 4
+
+
+def _is_measurement(prop: str) -> bool:
+    if prop.endswith(_MEASUREMENT_EXCLUDED_SUFFIXES):
+        return False
+    return any(
+        prop == hint or prop.startswith(hint + "_") or prop.endswith("_" + hint)
+        for hint in _MEASUREMENT_HINTS
+    )
 
 
 def _json_or_none(payload: bytes):
@@ -72,8 +84,7 @@ def _expose_capabilities(definition) -> tuple[str | None, list[str]]:
         {
             str(leaf["property"])
             for leaf in leaves
-            if leaf["access"] & _ACCESS_PUBLISHED
-            and any(hint in str(leaf["property"]) for hint in _MEASUREMENT_HINTS)
+            if leaf["access"] & _ACCESS_PUBLISHED and _is_measurement(str(leaf["property"]))
         }
     )
     return get_attribute, measurements
