@@ -68,11 +68,13 @@ spike, total silence, manual, hard caps), cooldown, `calibrations` table
 (migration 8) with per-step curves, self-attributed traffic end to end,
 candidates ranking from topology LQI − bindings/groups, and the Calibration
 GUI view (preview/authorize/live-ramp/history + recalibrate-on-drift chip).
-NOT yet run against a live coordinator — every run needs the owner's explicit
-per-run authorization. Remaining for **M5**: first live calibration run
-(owner-authorized), utilization/headroom dashboards + continuous knee
-validation scatter, optional groupcast stage (calibrates avg_tx), knee → §10
-denominator-2 wiring in `capacity/`.
+First live run completed (owner-authorized): clean ramp, knee found via the
+saturation rule with wire RTT flat throughout — single-target runs measure the
+Zigbee2MQTT per-device request-queue ceiling (denominator 3, ~1/RTT) and bound
+the NCP knee from below; driving the NCP itself needs a multi-target spread
+(future refinement). Remaining for **M5**: utilization/headroom dashboards +
+continuous knee validation scatter, optional groupcast stage (calibrates
+avg_tx), knee → §10 denominator wiring in `capacity/`.
 Roadmap: README.md.
 
 ## Hard rules
