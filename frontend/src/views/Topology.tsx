@@ -46,12 +46,30 @@ function InstancePanel({ base, summary, granted, busy, onPull }: InstancePanelPr
             {Object.entries(summary.by_type)
               .map(([kind, count]) => `${count} ${kind.toLowerCase()}`)
               .join(" · ")}
-            {summary.failed_nodes.length > 0 && (
-              <span className="chip bad"> {summary.failed_nodes.length} unreachable</span>
+            {summary.unresponsive_nodes.length > 0 && (
+              <span className="chip bad">
+                {" "}
+                {summary.unresponsive_nodes.length} unanswered sweep
+              </span>
             )}
           </p>
-          {summary.failed_nodes.length > 0 && (
-            <p className="hint">Unreachable during the sweep: {summary.failed_nodes.join(", ")}</p>
+          {summary.unresponsive_nodes.length > 0 && (
+            <p className="hint">
+              No answer to the neighbor-table query (possibly unreachable):{" "}
+              {summary.unresponsive_nodes.join(", ")}
+            </p>
+          )}
+          {summary.query_failures.filter(
+            (failure) => !summary.unresponsive_nodes.includes(failure.node),
+          ).length > 0 && (
+            <p className="hint">
+              Answered the sweep but omitted{" "}
+              {summary.query_failures
+                .filter((failure) => !summary.unresponsive_nodes.includes(failure.node))
+                .map((failure) => `${failure.node} (${failure.failed.join(", ")})`)
+                .join(", ")}{" "}
+              — a firmware omission on those devices, not a reachability problem.
+            </p>
           )}
           <div className="panel-grid">
             <div>

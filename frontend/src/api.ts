@@ -144,6 +144,8 @@ export interface TopologySummary {
   link_count: number;
   by_type: Record<string, number>;
   failed_nodes: string[];
+  query_failures: Array<{ node: string; failed: string[] }>;
+  unresponsive_nodes: string[];
   weak_links: Array<{ source: string; target: string; lqi: number }>;
   top_degree: Array<{ node: string; links: number }>;
 }

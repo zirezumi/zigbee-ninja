@@ -43,12 +43,14 @@ def summarize(value: dict) -> dict:
         str(node.get("ieeeAddr")): node_name(node) for node in nodes if node.get("ieeeAddr")
     }
     by_type: dict[str, int] = {}
-    failed: list[str] = []
+    failures: list[dict] = []
     for node in nodes:
         kind = str(node.get("type") or "Unknown")
         by_type[kind] = by_type.get(kind, 0) + 1
         if node.get("failed"):
-            failed.append(node_name(node))
+            failures.append(
+                {"node": node_name(node), "failed": [str(item) for item in node["failed"]]}
+            )
 
     degrees: dict[str, int] = {}
     weak_links: list[dict] = []
@@ -73,7 +75,15 @@ def summarize(value: dict) -> dict:
         "node_count": len(nodes),
         "link_count": len(links),
         "by_type": by_type,
-        "failed_nodes": failed,
+        # A node that answered the LQI query but not e.g. Mgmt_Rtg is present
+        # and healthy — several router firmwares simply omit the routing-table
+        # ZDO endpoint (live example: Third Reality 3RSP02028BZ plugs). Only a
+        # node that failed the LQI query itself counts as possibly unreachable.
+        "failed_nodes": [failure["node"] for failure in failures],
+        "query_failures": failures,
+        "unresponsive_nodes": [
+            failure["node"] for failure in failures if "lqi" in failure["failed"]
+        ],
         "weak_links": weak_links[:15],
         "top_degree": sorted(
             ({"node": names[ieee], "links": count} for ieee, count in degrees.items()),
@@ -178,20 +188,24 @@ class TopologyPuller:
     def latest(self, base: str | None = None, include_raw: bool = False) -> dict:
         conn = self._db.connect()
         rows = conn.execute(
-            "SELECT instance, pulled_at, node_count, link_count, summary"
-            + (", raw" if include_raw else "")
-            + " FROM topology_snapshots WHERE id IN ("
+            "SELECT instance, pulled_at, node_count, link_count, summary, raw "
+            "FROM topology_snapshots WHERE id IN ("
             "SELECT MAX(id) FROM topology_snapshots GROUP BY instance)"
             + (" AND instance = ?" if base else ""),
             (base,) if base else (),
         ).fetchall()
         result = {}
         for row in rows:
+            summary = json.loads(row["summary"])
+            if "query_failures" not in summary:
+                # Snapshot predates the failure-detail split — recompute from
+                # the retained raw map instead of serving the stale shape.
+                summary = summarize(json.loads(row["raw"]))
             entry = {
                 "pulled_at": row["pulled_at"],
                 "node_count": row["node_count"],
                 "link_count": row["link_count"],
-                **json.loads(row["summary"]),
+                **summary,
             }
             if include_raw:
                 entry["raw"] = json.loads(row["raw"])

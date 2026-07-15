@@ -11,7 +11,10 @@ RAW_MAP = {
     "nodes": [
         {"ieeeAddr": "0x01", "friendlyName": "coordinator", "type": "Coordinator"},
         {"ieeeAddr": "0x02", "friendlyName": "lamp-a", "type": "Router"},
-        {"ieeeAddr": "0x03", "friendlyName": "lamp-b", "type": "Router"},
+        # Answered LQI but omitted the routing table — present and healthy,
+        # the firmware just lacks the Mgmt_Rtg endpoint (3RSP02028BZ pattern).
+        {"ieeeAddr": "0x03", "friendlyName": "lamp-b", "type": "Router",
+         "failed": ["routingTable"]},
         {"ieeeAddr": "0x04", "friendlyName": "button", "type": "EndDevice", "failed": ["lqi"]},
     ],
     "links": [
@@ -28,7 +31,14 @@ def test_summarize_counts_weak_links_and_degrees():
     assert summary["node_count"] == 4
     assert summary["link_count"] == 4
     assert summary["by_type"] == {"Coordinator": 1, "Router": 2, "EndDevice": 1}
-    assert summary["failed_nodes"] == ["button"]
+    assert summary["failed_nodes"] == ["lamp-b", "button"]
+    assert summary["query_failures"] == [
+        {"node": "lamp-b", "failed": ["routingTable"]},
+        {"node": "button", "failed": ["lqi"]},
+    ]
+    # Only the LQI no-show counts as possibly unreachable; a missing routing
+    # table alone is a firmware omission, not absence.
+    assert summary["unresponsive_nodes"] == ["button"]
     # Weak links sorted ascending, resolving names, reading lqi or linkquality.
     assert summary["weak_links"] == [
         {"source": "lamp-b", "target": "lamp-a", "lqi": 30},
