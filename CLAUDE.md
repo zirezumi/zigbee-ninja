@@ -104,8 +104,11 @@ retained HA discovery configs under the instance's announced prefix +
 per-metric state topics + problem binary_sensor on a 45 s loop, expire_after
 instead of availability/LWT, revoke deletes every claimed retained topic
 (bookkept in settings; loop sweep finishes cleanup if the broker was down).
-Remaining M6: secrets-at-rest encryption (§15), retention knobs + Settings
-view.
+Secrets-at-rest (§15) done: Fernet key `secret.key` (0600) in the data
+volume, `enc:`-marked ciphertext, idempotent startup upgrade of plaintext
+broker password / HA token, undecryptable → unconfigured (re-enter in GUI);
+`cryptography` dependency (Apache/BSD, license-gate clean). Remaining M6:
+retention knobs + Settings view.
 Roadmap: README.md.
 
 ## Hard rules

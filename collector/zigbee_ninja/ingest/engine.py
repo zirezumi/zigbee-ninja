@@ -15,6 +15,7 @@ from ..capacity.headroom import TX_BUCKETS
 from ..ha_discovery import PUBLISH_INTERVAL_SECONDS, DiscoveryPublisher
 from ..store.config import ConfigStore
 from ..store.db import Database
+from ..store.secrets import SecretBox, is_encrypted
 from ..tiles import (
     CAPABILITY_MQTT_DISCOVERY,
     CAPABILITY_TOPOLOGY,
@@ -35,9 +36,11 @@ CHAIN_RETENTION_SECONDS = 48 * 3600  # chain detail keeps 48h (DESIGN.md §12)
 
 
 class Engine:
-    def __init__(self, db: Database, config: ConfigStore):
+    def __init__(self, db: Database, config: ConfigStore, secrets: SecretBox):
         self._db = db
         self._config = config
+        self._secrets = secrets
+        self._upgrade_secrets()
         self.registry = Registry()
         self.rates = RateTracker()
         self.class_rates = RateTracker()
@@ -112,9 +115,22 @@ class Engine:
 
     # -- lifecycle -----------------------------------------------------------
 
+    def _upgrade_secrets(self) -> None:
+        """Encrypt any plaintext secrets stored before §15 landed (idempotent)."""
+        for key, field in (("broker", "password"), ("ha", "token")):
+            data = self._config.get(key)
+            if data and data.get(field) and not is_encrypted(data[field]):
+                data = dict(data)
+                data[field] = self._secrets.encrypt(data[field])
+                self._config.set(key, data)
+
     def broker_config(self) -> BrokerConfig | None:
         data = self._config.get("broker")
-        return BrokerConfig.from_dict(data) if data else None
+        if not data:
+            return None
+        data = dict(data)
+        data["password"] = self._secrets.decrypt(data.get("password"))
+        return BrokerConfig.from_dict(data)
 
     async def start(self) -> None:
         self._flush_task = asyncio.create_task(self._flush_loop())
@@ -151,15 +167,23 @@ class Engine:
             self._ingest_task = asyncio.create_task(self._ingest.run())
 
     async def apply_broker_config(self, data: dict) -> None:
-        # TODO(DESIGN.md §15): encrypt secrets at rest before the M6 hardening pass.
-        self._config.set("broker", data)
+        stored = dict(data)
+        if stored.get("password"):
+            stored["password"] = self._secrets.encrypt(stored["password"])
+        self._config.set("broker", stored)
         await self.restart_ingest()
 
     # -- HA integration (per-automation attribution) ---------------------------
 
     def ha_config(self) -> HaConfig | None:
         data = self._config.get("ha")
-        return HaConfig.from_dict(data) if data else None
+        if not data:
+            return None
+        data = dict(data)
+        data["token"] = self._secrets.decrypt(data.get("token"))
+        if not data["token"]:
+            return None  # undecryptable token (key replaced): re-enter in the GUI
+        return HaConfig.from_dict(data)
 
     async def restart_ha(self) -> None:
         if self._ha_task is not None:
@@ -176,8 +200,10 @@ class Engine:
             self._ha_task = asyncio.create_task(self._ha_link.run())
 
     async def apply_ha_config(self, data: dict) -> None:
-        # TODO(DESIGN.md §15): encrypt secrets at rest before the M6 hardening pass.
-        self._config.set("ha", data)
+        stored = dict(data)
+        if stored.get("token"):
+            stored["token"] = self._secrets.encrypt(stored["token"])
+        self._config.set("ha", stored)
         await self.restart_ha()
 
     def ha_status(self) -> dict:

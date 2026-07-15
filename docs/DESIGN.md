@@ -651,10 +651,16 @@ cleanup sweep finishes the job when it returns.
 - **The product never requires host credentials.** Default probe deployment is
   reviewable one-liner installers; agents authenticate with per-agent scoped
   tokens, outbound-only. SSH automation is a strictly optional convenience tile.
-- **Secrets** (broker creds, HA token, opt-in SSH key) are encrypted at rest with
-  a key held in the data volume (0600). Honest threat model: volume compromise =
-  secrets compromise; a passphrase-locked mode is a later hardening step,
-  documented as such.
+- **Secrets** (broker creds, HA token, opt-in SSH key) are encrypted at rest:
+  Fernet under a key generated on first boot in the data volume (`secret.key`,
+  mode 0600, re-tightened on every boot). Ciphertext carries an `enc:` marker;
+  plaintext rows from before this landed are upgraded in place at startup,
+  idempotently. A ciphertext that no longer decrypts (key replaced) resolves
+  to "unconfigured" and is repaired by re-entering the secret in the GUI.
+  Honest threat model: the key sits beside the database, so volume compromise
+  = secrets compromise — this protects the DB file alone (backups, exports,
+  casual inspection), nothing more; a passphrase-locked mode is a later
+  hardening step, documented as such.
 - **Blast radius:** read-only by default (P1); every active operation is
   server-side rate-limited; benchmarks are double-confirmed per run and
   wizard-supervised.

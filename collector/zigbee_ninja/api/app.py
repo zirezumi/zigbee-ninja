@@ -25,6 +25,7 @@ from ..ingest.hacontrol import HaConfig, test_ha
 from ..ingest.mqtt import BrokerConfig, test_connection
 from ..store.config import ConfigStore
 from ..store.db import Database
+from ..store.secrets import SecretBox
 from . import auth
 
 MAX_QUERY_WINDOW_SECONDS = 14 * 24 * 3600
@@ -106,7 +107,7 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
 
     db = Database(data_dir)
     config = ConfigStore(db)
-    engine = Engine(db, config)
+    engine = Engine(db, config, SecretBox(data_dir))
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
