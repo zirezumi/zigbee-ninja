@@ -9,12 +9,15 @@ commands, device reporting, housekeeping, retry overhead), models mesh airtime
 amplification for group/broadcast traffic, and calibrates each coordinator's real
 capacity knee with a guided benchmark.
 
-**Status: pre-alpha — mid-M5.** The architecture is fully specified in
-[docs/DESIGN.md](docs/DESIGN.md). Broker onboarding, discovery, live fleet
-rates, command-chain attribution, the Z2M extension probe, the passive wire
-tap with full ASH/EZSP decode, per-frame airtime accounting, and the wire-tier
-latency SLI all work; calibration, dashboards, and alerting are still ahead.
-Not yet generally usable.
+**Status: pre-alpha — V1 feature-complete, hardening.** The architecture is
+fully specified in [docs/DESIGN.md](docs/DESIGN.md). Broker onboarding,
+discovery, live fleet rates, command-chain attribution, the Z2M extension
+probe, the passive wire tap with full ASH/EZSP decode, per-frame airtime
+accounting, the wire-tier latency SLI, the calibration wizard (single, spread,
+and fleet-batch modes), headroom dashboards, threshold alerting, HA entities
+via MQTT discovery, secrets-at-rest encryption, and settings-backed retention
+all work. The raw-event burst inspector is not built yet. Not yet generally
+usable.
 
 ## Principles
 
@@ -45,8 +48,8 @@ Not yet generally usable.
 | M2 ✓ | Attribution v1 (command chains, client attribution, redundant detector) |
 | M3 ✓ | Z2M extension probe + permission tiles + queue latency |
 | M4 ◐ | Wire tap agent + ASH/EZSP decode live; T1/T2 fusion pending |
-| **M5 ← current** | Airtime/capacity model (per-frame airtime + wire latency live) + calibration wizard + headroom dashboards |
-| M6 | Alerting + MQTT-discovery entities → **V1** |
+| M5 ✓ | Airtime/capacity model + calibration wizard (single/spread/bulk) + headroom dashboards |
+| **M6 ← current** | Alerting + MQTT-discovery entities + secrets-at-rest + settings → **V1** |
 | follow-ups | Home Assistant add-on packaging, ZHA support, what-if rebalancing advisor |
 
 ## Development
