@@ -194,6 +194,9 @@ def test_passive_avg_tx_from_counter_windows():
     mc = _ext(4, 0x00, 0x0038,
               APS[:8] + bytes([0x0A, 0x00, 0x55]) + bytes.fromhex("0c0000ffff00")
               + bytes([0x78, 0x56, 0x02, 0xAA, 0xBB]))
+    # Residual beyond the passive-ack maximum (raw 9.8): relay-contaminated —
+    # discarded and counted, never clamped into the EWMA.
+    c4 = counters_frame(5, mac_tx=2000, aps_tx=180, mtorr=20)
 
     packets = []
     host_seq, coord_seq = 5000, 9000
@@ -216,9 +219,11 @@ def test_passive_avg_tx_from_counter_windows():
     send(700.0, c2, False)
     send(1300.0, c3, False)
     send(1300.1, mc, True)
+    send(1900.0, c4, False)
 
     prefix_a = build_pcap(packets[:1])
     prefix_b = build_pcap(packets[:2])
+    prefix_c = build_pcap(packets[:4])
     full = build_pcap(packets)
 
     now = [1000.0]
@@ -230,7 +235,7 @@ def test_passive_avg_tx_from_counter_windows():
     now[0] = 1600.0
     tap.feed("agent-1", prefix_b[len(prefix_a):])  # second harvest → sample 2.1
     now[0] = 2200.0
-    tap.feed("agent-1", full[len(prefix_b):])  # guarded harvest + groupcast send
+    tap.feed("agent-1", prefix_c[len(prefix_b):])  # guarded harvest + groupcast send
 
     now[0] = 2202.0
     stats = tap.stats()
@@ -238,6 +243,7 @@ def test_passive_avg_tx_from_counter_windows():
     assert wire["avg_tx"] == 2.1
     assert wire["avg_tx_samples"] == 1  # c1 seeds, c2 samples, c3 is guarded out
     assert wire["avg_tx_last"]["sample"] == 2.1
+    assert wire["avg_tx_last"]["accepted"] is True
     assert wire["avg_tx_last"]["window_seconds"] == 600.0
     assert wire["avg_tx_provenance"].startswith("measured")
 
@@ -245,6 +251,57 @@ def test_passive_avg_tx_from_counter_windows():
     assert buckets["tx_groupcast"]["airtime_us_60s"] == pytest.approx(
         airtime.groupcast_airtime_us(2, n_routers=4, avg_tx=2.1)
     )
+
+    now[0] = 2800.0
+    tap.feed("agent-1", full[len(prefix_c):])  # contaminated harvest (raw 9.8)
+    wire = tap.stats()["flows"][0]["wire"]
+    assert wire["avg_tx"] == 2.1  # EWMA untouched
+    assert wire["avg_tx_samples"] == 1
+    assert wire["avg_tx_rejected"] == 1
+    assert wire["avg_tx_last"]["accepted"] is False
+    assert wire["avg_tx_last"]["reason"] == "relay_contaminated"
+    assert wire["avg_tx_last"]["raw"] == pytest.approx(9.8, abs=0.01)
+
+
+def test_avg_tx_accepts_hourly_counter_windows():
+    """Z2M's ember watchdog polls counters on a fixed 1 h setInterval, so real
+    windows are ~3600 s plus jitter — the old 3600 s ceiling rejected nearly
+    every live sample (observed gaps: 3599–3615 s)."""
+    from zigbee_ninja.decode.ash import encode_data_frame
+
+    def counters_frame(seq: int, mac_tx: int, aps_tx: int, mtorr: int) -> bytes:
+        values = [0] * 40
+        values[1] = mac_tx
+        values[7] = aps_tx
+        values[12] = mtorr
+        return _ext(seq, 0x80, 0x0065, b"".join(v.to_bytes(2, "little") for v in values))
+
+    c1 = counters_frame(1, mac_tx=100, aps_tx=50, mtorr=10)
+    # 3615 s window → link estimate 241 → (901 − 241) / (240 + 60) = 2.2
+    c2 = counters_frame(2, mac_tx=901, aps_tx=240, mtorr=60)
+
+    packets = []
+    coord_seq = 9000
+    for index, (ts, frame) in enumerate(((100.0, c1), (3715.0, c2))):
+        wire = encode_data_frame(frame, frm_num=index, ack_num=0)
+        packets.append((ts, tcp_packet(COORD, HOST, coord_seq, wire)))
+        coord_seq += len(wire)
+
+    prefix = build_pcap(packets[:1])
+    full = build_pcap(packets)
+    now = [1000.0]
+    tap = TapIngest(
+        resolve_instance=resolve, router_count=lambda _base: 4, clock=lambda: now[0]
+    )
+    tap.register_agent("agent-1", {})
+    tap.feed("agent-1", prefix)
+    now[0] = 1000.0 + 3615.0
+    tap.feed("agent-1", full[len(prefix):])
+
+    wire_stats = tap.stats()["flows"][0]["wire"]
+    assert wire_stats["avg_tx_samples"] == 1
+    assert wire_stats["avg_tx_last"]["window_seconds"] == 3615.0
+    assert wire_stats["avg_tx"] == pytest.approx(2.2, abs=0.01)
 
 
 def test_headerless_stream_resets_reader_without_crashing():

@@ -160,7 +160,10 @@ export default function Attribution() {
             <tbody>
               {(summary?.top_clients ?? []).map((row) => (
                 <tr key={row.client}>
-                  <td className="mono">{row.client}</td>
+                  <td className="mono">
+                    {row.client}
+                    {row.label && <span className="hint"> · {row.label}</span>}
+                  </td>
                   <td className="num">{row.commands}</td>
                 </tr>
               ))}

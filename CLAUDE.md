@@ -107,8 +107,19 @@ instead of availability/LWT, revoke deletes every claimed retained topic
 Secrets-at-rest (§15) done: Fernet key `secret.key` (0600) in the data
 volume, `enc:`-marked ciphertext, idempotent startup upgrade of plaintext
 broker password / HA token, undecryptable → unconfigured (re-enter in GUI);
-`cryptography` dependency (Apache/BSD, license-gate clean). Remaining M6:
-retention knobs + Settings view.
+`cryptography` dependency (Apache/BSD, license-gate clean). Settings view +
+retention knobs (§12) done: settings-backed rollup-days / chain-hours /
+topology-snapshots-kept (clamped server-side), client labels annotating the
+Attribution explorer, tap-token reveal. **avg_tx live fixes**: Z2M's ember
+watchdog polls counters HOURLY (setInterval 3600000 — live-verified in
+herdsman source + observed gaps 3599–3615 s), so the old 60–3600 s window
+guard rejected nearly every sample; ceiling now 7500 s (one fused window).
+And `mac_tx_broadcast` provably includes relayed foreign NWK broadcasts
+(live windows exceed the passive-ack ×3 maximum even at full retry), so
+residuals > 3 are discarded as relay-contaminated (counted, shown in Wire
+view) instead of clamping to a fake 3.0 — on busy meshes avg_tx honestly
+stays modeled 1.3. **M6 code complete → V1 pending live validation** (GUI
+review, discovery-tile grant is the owner's call).
 Roadmap: README.md.
 
 ## Hard rules

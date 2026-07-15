@@ -434,12 +434,19 @@ coordinator TX, but it rides an NWK broadcast that every router relays — with 
 to 3 transmissions each under passive-ack retry rules, and no MAC ACKs. Model:
 `(1 + N_routers) × frame_airtime × avg_tx`, with `avg_tx ∈ [1, 3]` (default
 1.3). **avg_tx is measured passively, per coordinator**, from the harvested
-`readAndClearCounters` windows: `mac_tx_broadcast` counts the coordinator's own
-broadcast transmissions *including* its passive-ack retries, so
-`(mac_tx_broadcast − modeled radius-1 link-status TXs) / (APS broadcasts +
-MTORR route discoveries)` is its retransmission factor directly — provenance
-`measured (coordinator tx, generalized to relays)`, EWMA'd across windows,
-replacing the default as samples arrive. This supersedes the groupcast
+`readAndClearCounters` windows (Zigbee2MQTT's ember watchdog polls them on a
+fixed hourly interval, so windows are ~3600 s; the acceptance guard admits up
+to two fused windows): `(mac_tx_broadcast − modeled radius-1 link-status TXs)
+/ (APS broadcasts + MTORR route discoveries)` is the coordinator's own
+passive-ack retransmission factor — provenance `measured (coordinator tx,
+generalized to relays)`, EWMA'd across windows, replacing the default as
+samples arrive. One honesty gate applies: `mac_tx_broadcast` also counts the
+coordinator's *relays* of other nodes' NWK broadcasts (route requests and the
+like), traffic that never crosses the EZSP boundary and cannot be subtracted —
+so a window whose residual exceeds the passive-ack maximum of 3 is provably
+relay-contaminated and is **discarded and counted** (visible in the GUI), never
+clamped into a fake ceiling value. On meshes with steady relay traffic the
+modeled default simply stays in force, visibly. This supersedes the groupcast
 calibration stage originally specified in §11 (passive by default, P1). The
 amplification term is what explains why "one more group" costs far more
 airtime than coordinator counters suggest.
@@ -539,7 +546,12 @@ Everything embedded, no external services (P7):
 
 **Retention tiers:** events + 1 s series ~48 h → 10 s for 2 weeks → 1 min for 90
 days → 1 h indefinitely, under a disk quota with a GUI knob; the quota manager
-degrades oldest/finest first. **Cardinality budget is explicit:** per-instance
+degrades oldest/finest first. The V1 knobs are settings-backed and editable in
+the Settings view: 10 s rollup window (default 14 d, clamped 1–365), chain
+detail window (default 48 h, clamped 1–720 h), and topology snapshots kept per
+instance (default 20, clamped 1–200); alert-event history is fixed at 90 days.
+The coarser 1 min/1 h tiers and the disk-quota degradation manager ride with
+the Parquet/DuckDB raw-event store. **Cardinality budget is explicit:** per-instance
 headline series at 1 s; per-device at 10 s+; per-(device × bucket) at 1 min+.
 Rough sizing at a busy reference load (~150 events/s aggregate): ~13 M events/day
 ≈ 1.3 GB/day of Parquet — a 4–8 GB default quota holds the 48 h detail window
@@ -594,7 +606,8 @@ standalone; HA ingress trust in add-on mode (fast-follow). Default port `8686`.
 8. **Footprint & permissions** — tiles, health, versions, revoke-all; connected
    wire-tap agents.
 9. **Alerts** — rules and notification center (§14).
-10. **Settings** — retention/quota, client labels, tokens.
+10. **Settings** — retention knobs (§12), client labels for the Attribution
+    explorer, and the wire-tap agent token (revealed on demand).
 
 ## §14 Alerting
 

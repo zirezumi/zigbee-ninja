@@ -46,9 +46,18 @@ _EWMA_ALPHA = 0.05
 # link-status transmissions, measures its passive-ack retransmission factor
 # directly — generalized to router relays on the same mesh.
 AVG_TX_MIN_WINDOW_SECONDS = 60.0
-AVG_TX_MAX_WINDOW_SECONDS = 3600.0
+# Zigbee2MQTT's ember adapter polls readAndClearCounters on a fixed 1 h
+# setInterval (herdsman WATCHDOG_COUNTERS_FEED_INTERVAL), so real windows are
+# ~3600 s plus scheduling jitter; the ceiling admits that plus exactly one
+# missed harvest (two fused windows). A 3600 s ceiling rejected essentially
+# every live sample.
+AVG_TX_MAX_WINDOW_SECONDS = 7500.0
 AVG_TX_MIN_BROADCASTS = 20  # denominator floor for a usable sample
 AVG_TX_EWMA_ALPHA = 0.2  # samples arrive once per counter window, not per frame
+# Passive-ack broadcast retransmission is capped at 3 transmissions total, so
+# a residual above 3 per originated broadcast proves the window is
+# contaminated by relayed foreign NWK broadcasts (see _update_avg_tx).
+AVG_TX_PROTOCOL_MAX = 3.0
 LINK_STATUS_INTERVAL_SECONDS = 15.0
 _IDX_MAC_TX_BROADCAST = 1
 _IDX_APS_TX_BROADCAST = 7
@@ -234,6 +243,7 @@ class FlowState:
     counters_at: float | None = None
     avg_tx_ewma: float | None = None
     avg_tx_samples: int = 0
+    avg_tx_rejected: int = 0
     avg_tx_last: dict | None = None
 
 
@@ -496,9 +506,17 @@ class TapIngest:
         Link status is a radius-1 broadcast on a ~15 s cadence, transmitted
         once (no passive-ack retry), so it inflates the MAC count without
         belonging to the retried population. A missed harvest stretches the
-        apparent window and over-subtracts slightly; the clamp and EWMA damp
-        it. Measured for the coordinator's own transmissions and generalized
-        to router relays on the same mesh.
+        apparent window and over-subtracts slightly; the EWMA damps it.
+
+        mac_tx_broadcast also counts the coordinator's *relays* of other
+        nodes' NWK broadcasts (route requests and the like) — traffic that
+        never crosses the EZSP boundary, so it cannot be subtracted. A window
+        whose residual exceeds the passive-ack maximum of 3 transmissions per
+        originated broadcast is therefore provably relay-contaminated and is
+        discarded rather than clamped: a pinned ceiling would silently
+        inflate every groupcast airtime figure. Quiet windows (residual ≤ 3)
+        remain honest retry-factor samples; on meshes with steady relay
+        traffic the modeled default simply stays in force, visibly.
         """
         if not AVG_TX_MIN_WINDOW_SECONDS <= window <= AVG_TX_MAX_WINDOW_SECONDS:
             return
@@ -509,20 +527,30 @@ class TapIngest:
         link_status_est = window / LINK_STATUS_INTERVAL_SECONDS
         if originated < AVG_TX_MIN_BROADCASTS or mac_tx <= link_status_est:
             return
-        sample = min(3.0, max(1.0, (mac_tx - link_status_est) / originated))
-        if flow.avg_tx_ewma is None:
-            flow.avg_tx_ewma = sample
-        else:
-            flow.avg_tx_ewma += AVG_TX_EWMA_ALPHA * (sample - flow.avg_tx_ewma)
-        flow.avg_tx_samples += 1
-        flow.avg_tx_last = {
-            "sample": round(sample, 3),
+        raw = (mac_tx - link_status_est) / originated
+        detail = {
+            "raw": round(raw, 3),
             "mac_tx_broadcast": mac_tx,
             "aps_tx_broadcast": values[_IDX_APS_TX_BROADCAST],
             "route_discoveries": values[_IDX_ROUTE_DISCOVERY],
             "link_status_estimate": round(link_status_est, 1),
             "window_seconds": round(window, 1),
         }
+        if raw > AVG_TX_PROTOCOL_MAX:
+            flow.avg_tx_rejected += 1
+            flow.avg_tx_last = {
+                **detail,
+                "accepted": False,
+                "reason": "relay_contaminated",
+            }
+            return
+        sample = max(1.0, raw)
+        if flow.avg_tx_ewma is None:
+            flow.avg_tx_ewma = sample
+        else:
+            flow.avg_tx_ewma += AVG_TX_EWMA_ALPHA * (sample - flow.avg_tx_ewma)
+        flow.avg_tx_samples += 1
+        flow.avg_tx_last = {**detail, "sample": round(sample, 3), "accepted": True}
 
     def _track_pending(self, flow: FlowState, tag: int, ts: float, kind: str) -> None:
         flow.pending[tag] = (ts, kind)
@@ -584,11 +612,18 @@ class TapIngest:
                             None if flow.avg_tx_ewma is None else round(flow.avg_tx_ewma, 2)
                         ),
                         "avg_tx_samples": flow.avg_tx_samples,
+                        "avg_tx_rejected": flow.avg_tx_rejected,
                         "avg_tx_last": flow.avg_tx_last,
                         "avg_tx_provenance": (
                             "measured (coordinator tx, generalized to relays)"
                             if flow.avg_tx_ewma is not None
                             else f"modeled (default {airtime.DEFAULT_AVG_TX})"
+                            + (
+                                f"; {flow.avg_tx_rejected} relay-contaminated "
+                                "windows discarded"
+                                if flow.avg_tx_rejected
+                                else ""
+                            )
                         ),
                     },
                 }

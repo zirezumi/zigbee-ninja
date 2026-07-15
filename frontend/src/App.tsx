@@ -8,6 +8,7 @@ import Calibration from "./views/Calibration";
 import Fleet from "./views/Fleet";
 import Footprint from "./views/Footprint";
 import Headroom from "./views/Headroom";
+import Settings from "./views/Settings";
 import Topology from "./views/Topology";
 import Wire from "./views/Wire";
 
@@ -20,7 +21,8 @@ type View =
   | "topology"
   | "calibration"
   | "footprint"
-  | "alerts";
+  | "alerts"
+  | "settings";
 
 const NAV_ITEMS: Array<{ label: string; view?: View }> = [
   { label: "Fleet", view: "fleet" },
@@ -32,7 +34,7 @@ const NAV_ITEMS: Array<{ label: string; view?: View }> = [
   { label: "Calibration", view: "calibration" },
   { label: "Footprint", view: "footprint" },
   { label: "Alerts", view: "alerts" },
-  { label: "Settings" },
+  { label: "Settings", view: "settings" },
 ];
 
 const VIEW_TITLES: Record<View, string> = {
@@ -44,6 +46,7 @@ const VIEW_TITLES: Record<View, string> = {
   calibration: "Calibration",
   footprint: "Footprint & permissions",
   alerts: "Alerts",
+  settings: "Settings",
 };
 
 interface CredentialsFormProps {
@@ -269,6 +272,8 @@ export default function App() {
           <Calibration />
         ) : view === "alerts" ? (
           <Alerts />
+        ) : view === "settings" ? (
+          <Settings />
         ) : (
           <Footprint />
         )}

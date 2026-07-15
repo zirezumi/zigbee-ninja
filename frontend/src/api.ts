@@ -82,7 +82,8 @@ export interface WireStats {
   counters_provenance: string;
   avg_tx: number | null;
   avg_tx_samples: number;
-  avg_tx_last: Record<string, number> | null;
+  avg_tx_rejected: number;
+  avg_tx_last: Record<string, number | boolean | string> | null;
   avg_tx_provenance: string;
 }
 
@@ -476,7 +477,7 @@ export interface AttributionSummary {
   window_seconds: number;
   classes: Record<string, Record<string, number>>;
   top_targets: TopTarget[];
-  top_clients: { client: string; commands: number }[];
+  top_clients: { client: string; commands: number; label?: string }[];
   totals: { chains: number; redundant: number; avg_first_echo_ms: number | null };
 }
 
@@ -485,6 +486,14 @@ export interface RedundantRow {
   target: string;
   count: number;
   client: string;
+  label?: string;
+}
+
+export interface RuntimeSettings {
+  retention_rollup_days: number;
+  retention_chains_hours: number;
+  retention_topology_snapshots: number;
+  client_labels: Record<string, string>;
 }
 
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {

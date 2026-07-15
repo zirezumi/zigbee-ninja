@@ -90,6 +90,13 @@ class AlertRuleBody(BaseModel):
     enabled: bool = True
 
 
+class SettingsBody(BaseModel):
+    retention_rollup_days: int | None = None
+    retention_chains_hours: int | None = None
+    retention_topology_snapshots: int | None = None
+    client_labels: dict[str, str] | None = None
+
+
 def _set_session_cookie(response: Response, token: str) -> None:
     response.set_cookie(
         SESSION_COOKIE,
@@ -255,19 +262,43 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
             pass  # broker offline; the publish loop's sweep finishes it
         return {"revoked": revoked}
 
+    def _label_clients(rows: list[dict]) -> list[dict]:
+        labels = engine.runtime_settings()["client_labels"]
+        if labels:
+            for row in rows:
+                label = labels.get(row.get("client") or "")
+                if label:
+                    row["label"] = label
+        return rows
+
     @app.get("/api/attribution/summary")
     def attribution_summary(request: Request, seconds: int = 3600) -> dict:
         require_user(request)
         seconds = max(60, min(seconds, MAX_QUERY_WINDOW_SECONDS))
         engine.flush_rollups()  # fold in anything pending so short windows are fresh
-        return attribution_queries.summary(db, seconds)
+        summary = attribution_queries.summary(db, seconds)
+        _label_clients(summary.get("top_clients") or [])
+        return summary
 
     @app.get("/api/attribution/redundant")
     def attribution_redundant(request: Request, seconds: int = 3600) -> dict:
         require_user(request)
         seconds = max(60, min(seconds, MAX_QUERY_WINDOW_SECONDS))
         engine.flush_rollups()
-        return {"redundant": attribution_queries.redundant(db, seconds)}
+        return {"redundant": _label_clients(attribution_queries.redundant(db, seconds))}
+
+    @app.get("/api/settings")
+    def settings_get(request: Request) -> dict:
+        require_user(request)
+        return engine.runtime_settings()
+
+    @app.post("/api/settings")
+    def settings_set(request: Request, body: SettingsBody) -> dict:
+        require_user(request)
+        try:
+            return engine.apply_settings(body.model_dump(exclude_none=True))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/airtime")
     def airtime_series(request: Request, seconds: int = 3600) -> dict:

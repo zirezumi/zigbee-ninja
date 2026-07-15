@@ -105,10 +105,12 @@ function FlowCard({ flow, airtime, latency, now }: FlowCardProps) {
             : "—"}
         </span>
         <span>Broadcast retry</span>
-        <span title="avg_tx, the §10 mesh-amplification retry factor: measured passively from the coordinator's own broadcast TX counters and generalized to router relays">
+        <span title="avg_tx, the §10 mesh-amplification retry factor: measured passively from the coordinator's own broadcast TX counters and generalized to router relays. Windows whose residual exceeds the passive-ack maximum are relay-contaminated and discarded.">
           {wire.avg_tx != null
             ? `avg_tx ${wire.avg_tx} (${wire.avg_tx_samples} windows, measured)`
-            : "avg_tx 1.3 (modeled default — awaiting counter windows)"}
+            : wire.avg_tx_rejected > 0
+              ? `avg_tx 1.3 (modeled — ${wire.avg_tx_rejected} contaminated windows discarded)`
+              : "avg_tx 1.3 (modeled default — awaiting counter windows)"}
         </span>
         <span>Link</span>
         <span>

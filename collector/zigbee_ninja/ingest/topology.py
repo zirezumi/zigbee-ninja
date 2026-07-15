@@ -101,6 +101,7 @@ class TopologyPuller:
         clock: Callable[[], float] = time.time,
         timeout: float = PULL_TIMEOUT_SECONDS,
         min_interval: float = MIN_PULL_INTERVAL_SECONDS,
+        snapshots_kept: Callable[[], int] | None = None,
     ):
         self._db = db
         self._publish = publisher
@@ -108,6 +109,7 @@ class TopologyPuller:
         self._clock = clock
         self._timeout = timeout
         self._min_interval = min_interval
+        self._snapshots_kept = snapshots_kept or (lambda: SNAPSHOTS_KEPT_PER_INSTANCE)
         self._pending: dict[str, asyncio.Future] = {}
         self._scanning: str | None = None
 
@@ -178,7 +180,7 @@ class TopologyPuller:
             "DELETE FROM topology_snapshots WHERE instance = ? AND id NOT IN "
             "(SELECT id FROM topology_snapshots WHERE instance = ? "
             "ORDER BY pulled_at DESC LIMIT ?)",
-            (base, base, SNAPSHOTS_KEPT_PER_INSTANCE),
+            (base, base, max(1, int(self._snapshots_kept()))),
         )
         conn.commit()
         return {"instance": base, "pulled_at": pulled_at, **summary}

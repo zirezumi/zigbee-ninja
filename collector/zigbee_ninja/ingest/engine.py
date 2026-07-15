@@ -31,8 +31,10 @@ from .registry import Registry
 from .tap import TapIngest
 from .topology import TopologyPuller
 
-ROLLUP_RETENTION_SECONDS = 14 * 24 * 3600  # 10s tiers keep two weeks (DESIGN.md §12)
-CHAIN_RETENTION_SECONDS = 48 * 3600  # chain detail keeps 48h (DESIGN.md §12)
+# Retention defaults (DESIGN.md §12); settings-backed knobs override at runtime.
+DEFAULT_ROLLUP_RETENTION_DAYS = 14  # 10s tiers
+DEFAULT_CHAIN_RETENTION_HOURS = 48  # chain detail
+DEFAULT_TOPOLOGY_SNAPSHOTS = 20  # per instance
 
 
 class Engine:
@@ -58,6 +60,7 @@ class Engine:
             db,
             publisher=self.publish,
             granted=lambda base: self.tiles.is_granted(CAPABILITY_TOPOLOGY, base),
+            snapshots_kept=lambda: self.runtime_settings()["retention_topology_snapshots"],
         )
         self.calibration = CalibrationManager(
             db,
@@ -289,6 +292,52 @@ class Engine:
             return {"state": "unconfigured", "error": None, "connected_since": None}
         return dict(self._ingest.status)
 
+    # -- runtime settings (DESIGN.md §12) ------------------------------------------
+
+    def _setting_int(self, key: str, default: int, low: int, high: int) -> int:
+        try:
+            value = int(self._config.get(key, default))
+        except (TypeError, ValueError):
+            return default
+        return max(low, min(high, value))
+
+    def runtime_settings(self) -> dict:
+        return {
+            "retention_rollup_days": self._setting_int(
+                "retention_rollup_days", DEFAULT_ROLLUP_RETENTION_DAYS, 1, 365
+            ),
+            "retention_chains_hours": self._setting_int(
+                "retention_chains_hours", DEFAULT_CHAIN_RETENTION_HOURS, 1, 720
+            ),
+            "retention_topology_snapshots": self._setting_int(
+                "retention_topology_snapshots", DEFAULT_TOPOLOGY_SNAPSHOTS, 1, 200
+            ),
+            "client_labels": dict(self._config.get("client_labels") or {}),
+        }
+
+    def apply_settings(self, data: dict) -> dict:
+        for key in (
+            "retention_rollup_days",
+            "retention_chains_hours",
+            "retention_topology_snapshots",
+        ):
+            if key in data and data[key] is not None:
+                try:
+                    self._config.set(key, int(data[key]))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"{key} must be an integer") from exc
+        if data.get("client_labels") is not None:
+            labels = data["client_labels"]
+            if not isinstance(labels, dict):
+                raise ValueError("client_labels must be a mapping")
+            cleaned = {
+                str(client).strip(): str(label).strip()
+                for client, label in labels.items()
+                if str(client).strip() and str(label).strip()
+            }
+            self._config.set("client_labels", cleaned)
+        return self.runtime_settings()
+
     # -- HA discovery publisher (DESIGN.md §14) ------------------------------------
 
     def _discovery_granted(self) -> list[str]:
@@ -447,6 +496,9 @@ class Engine:
         conn = self._db.connect()
         now = int(time.time())
         written = 0
+        settings = self.runtime_settings()
+        rollup_cutoff = now - settings["retention_rollup_days"] * 86400
+        chain_cutoff = now - settings["retention_chains_hours"] * 3600
 
         rows = self.rates.drain_completed_windows()
         if rows:
@@ -455,9 +507,7 @@ class Engine:
                 "VALUES (?, ?, ?, ?)",
                 rows,
             )
-            conn.execute(
-                "DELETE FROM series_10s WHERE ts < ?", (now - ROLLUP_RETENTION_SECONDS,)
-            )
+            conn.execute("DELETE FROM series_10s WHERE ts < ?", (rollup_cutoff,))
             written += len(rows)
 
         class_rows = self.class_rates.drain_completed_windows()
@@ -467,9 +517,7 @@ class Engine:
                 "VALUES (?, ?, ?, ?)",
                 class_rows,
             )
-            conn.execute(
-                "DELETE FROM attribution_10s WHERE ts < ?", (now - ROLLUP_RETENTION_SECONDS,)
-            )
+            conn.execute("DELETE FROM attribution_10s WHERE ts < ?", (rollup_cutoff,))
             written += len(class_rows)
 
         airtime_rows = self.tap.airtime.drain_completed_windows()
@@ -479,9 +527,7 @@ class Engine:
                 "VALUES (?, ?, ?, ?, ?)",
                 airtime_rows,
             )
-            conn.execute(
-                "DELETE FROM airtime_10s WHERE ts < ?", (now - ROLLUP_RETENTION_SECONDS,)
-            )
+            conn.execute("DELETE FROM airtime_10s WHERE ts < ?", (rollup_cutoff,))
             written += len(airtime_rows)
 
         latency_rows = self.tap.latency.drain_completed_windows()
@@ -491,9 +537,7 @@ class Engine:
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 latency_rows,
             )
-            conn.execute(
-                "DELETE FROM latency_10s WHERE ts < ?", (now - ROLLUP_RETENTION_SECONDS,)
-            )
+            conn.execute("DELETE FROM latency_10s WHERE ts < ?", (rollup_cutoff,))
             written += len(latency_rows)
 
         finalized = self.chains.drain_finalized()
@@ -517,9 +561,7 @@ class Engine:
                     for chain in finalized
                 ],
             )
-            conn.execute(
-                "DELETE FROM chains WHERE opened_at < ?", (now - CHAIN_RETENTION_SECONDS,)
-            )
+            conn.execute("DELETE FROM chains WHERE opened_at < ?", (chain_cutoff,))
             written += len(finalized)
 
         if written:
