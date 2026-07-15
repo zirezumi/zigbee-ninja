@@ -15,6 +15,7 @@ from ..capacity.headroom import TX_BUCKETS
 from ..ha_discovery import PUBLISH_INTERVAL_SECONDS, DiscoveryPublisher
 from ..store.config import ConfigStore
 from ..store.db import Database
+from ..store.events import RawEventLog
 from ..store.secrets import SecretBox, is_encrypted
 from ..tiles import (
     CAPABILITY_MQTT_DISCOVERY,
@@ -38,10 +39,13 @@ DEFAULT_TOPOLOGY_SNAPSHOTS = 20  # per instance
 
 
 class Engine:
-    def __init__(self, db: Database, config: ConfigStore, secrets: SecretBox):
+    def __init__(
+        self, db: Database, config: ConfigStore, secrets: SecretBox, events: RawEventLog
+    ):
         self._db = db
         self._config = config
         self._secrets = secrets
+        self.events = events
         self._upgrade_secrets()
         self.registry = Registry()
         self.rates = RateTracker()
@@ -55,6 +59,9 @@ class Engine:
         self.tap = TapIngest(
             resolve_instance=self.registry.instance_for_endpoint,
             router_count=self.registry.router_count_for,
+            on_event=lambda ts, instance, name, direction, size: self.events.record(
+                ts, "wire", instance, name, direction, None, size
+            ),
         )
         self.topology = TopologyPuller(
             db,
@@ -115,6 +122,10 @@ class Engine:
         await self._ingest.publish(topic, payload, retain=retain)
         base = self.registry.base_for(topic)
         self.class_rates.record(base or GLOBAL, "self")
+        if base is not None:
+            self.events.record(
+                time.time(), "mqtt", base, "self", "out", topic[len(base) + 1 :], len(payload)
+            )
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -244,6 +255,7 @@ class Engine:
         self.rates.record(GLOBAL, kind)
 
         suffix = topic[len(base) + 1 :]
+        self.events.record(time.time(), "mqtt", base, kind, "in", suffix, len(payload))
         if kind == "probe":
             self.probes.handle(base, suffix, payload)
             return
@@ -312,6 +324,10 @@ class Engine:
             "retention_topology_snapshots": self._setting_int(
                 "retention_topology_snapshots", DEFAULT_TOPOLOGY_SNAPSHOTS, 1, 200
             ),
+            "raw_event_quota_mb": self._setting_int("raw_event_quota_mb", 4096, 64, 65536),
+            "raw_event_horizon_hours": self._setting_int(
+                "raw_event_horizon_hours", 48, 1, 720
+            ),
             "client_labels": dict(self._config.get("client_labels") or {}),
         }
 
@@ -320,6 +336,8 @@ class Engine:
             "retention_rollup_days",
             "retention_chains_hours",
             "retention_topology_snapshots",
+            "raw_event_quota_mb",
+            "raw_event_horizon_hours",
         ):
             if key in data and data[key] is not None:
                 try:
@@ -578,5 +596,13 @@ class Engine:
                 pass
             try:
                 self.alerts.tick()
+            except Exception:
+                pass
+            try:
+                settings = self.runtime_settings()
+                self.events.flush(
+                    quota_mb=settings["raw_event_quota_mb"],
+                    horizon_hours=settings["raw_event_horizon_hours"],
+                )
             except Exception:
                 pass

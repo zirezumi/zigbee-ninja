@@ -6,6 +6,7 @@ import os
 from zigbee_ninja.ingest.engine import Engine
 from zigbee_ninja.store.config import ConfigStore
 from zigbee_ninja.store.db import Database
+from zigbee_ninja.store.events import RawEventLog
 from zigbee_ninja.store.secrets import KEY_FILE_NAME, SecretBox, is_encrypted
 
 
@@ -47,7 +48,7 @@ def test_engine_upgrades_plaintext_secrets_in_place(tmp_path):
                           "username": "zn", "password": "plain-pw"})
     config.set("ha", {"url": "http://ha.local:8123", "token": "plain-token"})
 
-    engine = Engine(db, config, SecretBox(tmp_path))
+    engine = Engine(db, config, SecretBox(tmp_path), RawEventLog(tmp_path))
 
     stored_broker = config.get("broker")
     stored_ha = config.get("ha")
@@ -57,14 +58,14 @@ def test_engine_upgrades_plaintext_secrets_in_place(tmp_path):
     assert engine.ha_config().token == "plain-token"
 
     # Idempotent: a second engine must not double-encrypt.
-    Engine(db, config, SecretBox(tmp_path))
+    Engine(db, config, SecretBox(tmp_path), RawEventLog(tmp_path))
     assert config.get("broker")["password"] == stored_broker["password"]
 
 
 def test_apply_paths_store_ciphertext_and_read_back(tmp_path):
     db = Database(tmp_path)
     config = ConfigStore(db)
-    engine = Engine(db, config, SecretBox(tmp_path))
+    engine = Engine(db, config, SecretBox(tmp_path), RawEventLog(tmp_path))
 
     async def scenario():
         await engine.apply_broker_config(

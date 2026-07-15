@@ -25,6 +25,7 @@ from ..ingest.hacontrol import HaConfig, test_ha
 from ..ingest.mqtt import BrokerConfig, test_connection
 from ..store.config import ConfigStore
 from ..store.db import Database
+from ..store.events import RawEventLog
 from ..store.secrets import SecretBox
 from . import auth
 
@@ -94,6 +95,8 @@ class SettingsBody(BaseModel):
     retention_rollup_days: int | None = None
     retention_chains_hours: int | None = None
     retention_topology_snapshots: int | None = None
+    raw_event_quota_mb: int | None = None
+    raw_event_horizon_hours: int | None = None
     client_labels: dict[str, str] | None = None
 
 
@@ -114,7 +117,7 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
 
     db = Database(data_dir)
     config = ConfigStore(db)
-    engine = Engine(db, config, SecretBox(data_dir))
+    engine = Engine(db, config, SecretBox(data_dir), RawEventLog(data_dir))
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -492,6 +495,56 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
         if not engine.alerts.delete_rule(rule_id):
             raise HTTPException(status_code=404, detail="No such alert rule")
         return {"ok": True}
+
+    # -- burst inspector (DESIGN.md §12, §13 view 5) -------------------------------
+
+    @app.get("/api/burst/timeline")
+    def burst_timeline(
+        request: Request,
+        instance: str,
+        seconds: int = 900,
+        end: float | None = None,
+        bucket_ms: int = 1000,
+    ) -> dict:
+        require_user(request)
+        seconds = max(10, min(seconds, 48 * 3600))
+        bucket_ms = max(10, min(bucket_ms, 3_600_000))
+        end_ts = end if end is not None else time.time()
+        view = engine.events.timeline(instance, end_ts - seconds, end_ts, bucket_ms)
+        view["store"] = engine.events.stats()
+        return view
+
+    @app.get("/api/burst/events")
+    def burst_events(
+        request: Request,
+        instance: str,
+        start: float,
+        end: float,
+        limit: int = 2000,
+    ) -> dict:
+        require_user(request)
+        limit = max(1, min(limit, 10_000))
+        if end <= start or end - start > 48 * 3600:
+            raise HTTPException(status_code=400, detail="Invalid window")
+        return {"events": engine.events.events(instance, start, end, limit)}
+
+    @app.get("/api/burst/chains")
+    def burst_chains(
+        request: Request, instance: str, start: float, end: float
+    ) -> dict:
+        """Command chains inside the window, for the micro-gantt overlay:
+        each span runs opened_at → opened_at + first_echo_ms."""
+        require_user(request)
+        if end <= start or end - start > 48 * 3600:
+            raise HTTPException(status_code=400, detail="Invalid window")
+        engine.flush_rollups()
+        rows = db.connect().execute(
+            "SELECT target, verb, opened_at, client, echo_count, first_echo_ms, redundant "
+            "FROM chains WHERE instance = ? AND opened_at >= ? AND opened_at < ? "
+            "ORDER BY opened_at LIMIT 500",
+            (instance, start, end),
+        ).fetchall()
+        return {"chains": [dict(row) for row in rows]}
 
     @app.get("/api/ha")
     def ha_get(request: Request) -> dict:

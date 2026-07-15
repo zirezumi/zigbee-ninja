@@ -22,6 +22,8 @@ def test_defaults_and_partial_update(client):
         "retention_rollup_days": 14,
         "retention_chains_hours": 48,
         "retention_topology_snapshots": 20,
+        "raw_event_quota_mb": 4096,
+        "raw_event_horizon_hours": 48,
         "client_labels": {},
     }
 

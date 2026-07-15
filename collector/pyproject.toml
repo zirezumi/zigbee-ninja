@@ -16,6 +16,7 @@ dependencies = [
     "aiomqtt>=2.1",
     "websockets>=13",
     "cryptography>=42",
+    "duckdb>=1.0",
 ]
 
 [project.optional-dependencies]

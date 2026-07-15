@@ -253,11 +253,15 @@ class TapIngest:
         resolve_instance: Callable[[str, int], str | None],
         router_count: Callable[[str], int] | None = None,
         clock: Callable[[], float] = time.time,
+        on_event: Callable[[float, str, str, str, int], None] | None = None,
     ):
         # resolve_instance(ip, port) -> base topic, from discovery adapter endpoints.
         self._resolve_instance = resolve_instance
         self._router_count = router_count or (lambda _instance: 0)
         self._clock = clock
+        # on_event(pcap_ts, instance, frame_name, direction, size): every decoded
+        # EZSP frame, for the raw event store (DESIGN.md §12).
+        self._on_event = on_event
         self._readers: dict[str, StreamingPcapReader] = {}
         self._flows: dict[tuple, FlowState] = {}
         self.agents: dict[str, dict] = {}
@@ -337,6 +341,8 @@ class TapIngest:
             return
         params = payload[5 if ezsp_frame.header_format == "extended" else 3 :]
         name = ezsp_frame.name
+        if self._on_event is not None:
+            self._on_event(ts, instance, name, "out" if to_coord else "in", len(payload))
 
         if to_coord and not ezsp_frame.is_response:
             if name == "sendUnicast":

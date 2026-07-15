@@ -542,7 +542,16 @@ Everything embedded, no external services (P7):
   rollup series.
 - **Hourly Parquet segments** — raw event stream for the burst-inspector window
   (~48 h, quota-capped), queried in place by **embedded DuckDB** (MIT) for ad-hoc
-  forensics without a series-cardinality explosion.
+  forensics without a series-cardinality explosion. Implementation: events
+  buffer in memory (bounded; overflow drops are counted, never block ingest),
+  flush into a hot DuckDB table on the 10 s cadence, and closed hours export
+  to ZSTD Parquet segments; queries union the hot table with the overlapping
+  segments. Retention deletes segments past the horizon (default 48 h), then
+  oldest-first until the directory fits the quota (default 4 GB) — both
+  settings-backed. V1 captures the T0 MQTT stream (including zigbee-ninja's
+  own publishes, tagged `self`) and every decoded T2 EZSP frame on pcap
+  timestamps; T1 probe batches already appear at T0 granularity, and
+  per-event probe capture is a later refinement.
 
 **Retention tiers:** events + 1 s series ~48 h → 10 s for 2 weeks → 1 min for 90
 days → 1 h indefinitely, under a disk quota with a GUI knob; the quota manager
@@ -587,8 +596,10 @@ standalone; HA ingress trust in add-on mode (fast-follow). Default port `8686`.
    SLI, delivery statuses, and mesh-health counters. The first slice of
    Coordinator detail, delivered as its own view while the stacked-series
    panes are pending.
-5. **Burst inspector** — event-level timeline over the raw window, zoom to
-   milliseconds, chain visualization (command → TX → responses as a micro-gantt).
+5. **Burst inspector** — event-level timeline over the raw window (§12 store),
+   zoom to milliseconds by re-querying tighter windows at finer buckets, an
+   event table at the zoomed range, and the window's command chains as spans
+   (opened → first echo) — the micro-gantt in its V1 form.
 6. **Topology** — mesh graph from the latest snapshot (LQI-weighted edges,
    relay-load-sized routers), freshness-stamped. First slice shipped: per-
    instance grant-gated on-demand pulls (15 min rate limit, one scan at a
