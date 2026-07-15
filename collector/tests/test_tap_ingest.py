@@ -173,6 +173,80 @@ def test_wire_telemetry_airtime_latency_and_counters():
     assert tap.latency.drain_completed_windows() == []
 
 
+def test_passive_avg_tx_from_counter_windows():
+    """readAndClearCounters responses are per-window deltas: the coordinator's
+    own broadcast TX counters yield avg_tx passively (supersedes the §11
+    groupcast stage), and groupcast airtime switches to the measured value."""
+    from zigbee_ninja.decode.ash import encode_data_frame
+
+    def counters_frame(seq: int, mac_tx: int, aps_tx: int, mtorr: int) -> bytes:
+        values = [0] * 40
+        values[1] = mac_tx  # mac_tx_broadcast
+        values[7] = aps_tx  # aps_data_tx_broadcast
+        values[12] = mtorr  # route_discovery_initiated (MTORR)
+        return _ext(seq, 0x80, 0x0065, b"".join(v.to_bytes(2, "little") for v in values))
+
+    # window 600 s → link-status estimate 40 → (460 − 40) / (180 + 20) = 2.1
+    c1 = counters_frame(1, mac_tx=82, aps_tx=60, mtorr=10)
+    c2 = counters_frame(2, mac_tx=460, aps_tx=180, mtorr=20)
+    # Too few originated broadcasts for a sample — must not move the EWMA.
+    c3 = counters_frame(3, mac_tx=100, aps_tx=5, mtorr=2)
+    mc = _ext(4, 0x00, 0x0038,
+              APS[:8] + bytes([0x0A, 0x00, 0x55]) + bytes.fromhex("0c0000ffff00")
+              + bytes([0x78, 0x56, 0x02, 0xAA, 0xBB]))
+
+    packets = []
+    host_seq, coord_seq = 5000, 9000
+    frm_to = frm_from = 0
+
+    def send(ts: float, payload: bytes, to_coord: bool):
+        nonlocal host_seq, coord_seq, frm_to, frm_from
+        if to_coord:
+            wire = encode_data_frame(payload, frm_num=frm_to, ack_num=frm_from)
+            frm_to = (frm_to + 1) % 8
+            packets.append((ts, tcp_packet(HOST, COORD, host_seq, wire)))
+            host_seq += len(wire)
+        else:
+            wire = encode_data_frame(payload, frm_num=frm_from, ack_num=frm_to)
+            frm_from = (frm_from + 1) % 8
+            packets.append((ts, tcp_packet(COORD, HOST, coord_seq, wire)))
+            coord_seq += len(wire)
+
+    send(100.0, c1, False)
+    send(700.0, c2, False)
+    send(1300.0, c3, False)
+    send(1300.1, mc, True)
+
+    prefix_a = build_pcap(packets[:1])
+    prefix_b = build_pcap(packets[:2])
+    full = build_pcap(packets)
+
+    now = [1000.0]
+    tap = TapIngest(
+        resolve_instance=resolve, router_count=lambda _base: 4, clock=lambda: now[0]
+    )
+    tap.register_agent("agent-1", {})
+    tap.feed("agent-1", prefix_a)  # first harvest: timestamp only, no sample
+    now[0] = 1600.0
+    tap.feed("agent-1", prefix_b[len(prefix_a):])  # second harvest → sample 2.1
+    now[0] = 2200.0
+    tap.feed("agent-1", full[len(prefix_b):])  # guarded harvest + groupcast send
+
+    now[0] = 2202.0
+    stats = tap.stats()
+    wire = stats["flows"][0]["wire"]
+    assert wire["avg_tx"] == 2.1
+    assert wire["avg_tx_samples"] == 1  # c1 seeds, c2 samples, c3 is guarded out
+    assert wire["avg_tx_last"]["sample"] == 2.1
+    assert wire["avg_tx_last"]["window_seconds"] == 600.0
+    assert wire["avg_tx_provenance"].startswith("measured")
+
+    buckets = stats["airtime"]["z2m-test"]["buckets"]
+    assert buckets["tx_groupcast"]["airtime_us_60s"] == pytest.approx(
+        airtime.groupcast_airtime_us(2, n_routers=4, avg_tx=2.1)
+    )
+
+
 def test_headerless_stream_resets_reader_without_crashing():
     # A reconnect that skips the pcap global header (bad magic) must not crash
     # the handler; the reader resets and later re-syncs on a fresh header.

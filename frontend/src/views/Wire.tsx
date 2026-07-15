@@ -104,6 +104,12 @@ function FlowCard({ flow, airtime, latency, now }: FlowCardProps) {
             ? `LQI ${Math.round(wire.lqi_ewma)} · RSSI ${Math.round(wire.rssi_ewma ?? 0)} dBm`
             : "—"}
         </span>
+        <span>Broadcast retry</span>
+        <span title="avg_tx, the §10 mesh-amplification retry factor: measured passively from the coordinator's own broadcast TX counters and generalized to router relays">
+          {wire.avg_tx != null
+            ? `avg_tx ${wire.avg_tx} (${wire.avg_tx_samples} windows, measured)`
+            : "avg_tx 1.3 (modeled default — awaiting counter windows)"}
+        </span>
         <span>Link</span>
         <span>
           {flow.data_frames} frames · {flow.crc_errors} CRC · {flow.retransmits} reTx ·{" "}

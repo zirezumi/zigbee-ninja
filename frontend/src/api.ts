@@ -80,6 +80,10 @@ export interface WireStats {
   counters_at: number | null;
   counters: Record<string, number> | null;
   counters_provenance: string;
+  avg_tx: number | null;
+  avg_tx_samples: number;
+  avg_tx_last: Record<string, number> | null;
+  avg_tx_provenance: string;
 }
 
 export interface WireFlow {

@@ -39,6 +39,21 @@ PENDING_TTL_SECONDS = 30.0
 
 _EWMA_ALPHA = 0.05
 
+# Passive avg_tx (§10 broadcast retry factor, superseding the §11 groupcast
+# stage): readAndClearCounters responses are per-window deltas, so the
+# coordinator's own mac_tx_broadcast over the broadcasts it originated
+# (APS groupcasts + MTORR route discoveries), less the modeled radius-1
+# link-status transmissions, measures its passive-ack retransmission factor
+# directly — generalized to router relays on the same mesh.
+AVG_TX_MIN_WINDOW_SECONDS = 60.0
+AVG_TX_MAX_WINDOW_SECONDS = 3600.0
+AVG_TX_MIN_BROADCASTS = 20  # denominator floor for a usable sample
+AVG_TX_EWMA_ALPHA = 0.2  # samples arrive once per counter window, not per frame
+LINK_STATUS_INTERVAL_SECONDS = 15.0
+_IDX_MAC_TX_BROADCAST = 1
+_IDX_APS_TX_BROADCAST = 7
+_IDX_ROUTE_DISCOVERY = 12
+
 
 class AirtimeTracker:
     """1 s airtime buckets per (instance, bucket) with watermarked 10 s drains."""
@@ -217,6 +232,9 @@ class FlowState:
     rssi_ewma: float | None = None
     counters_last: list[int] | None = None
     counters_at: float | None = None
+    avg_tx_ewma: float | None = None
+    avg_tx_samples: int = 0
+    avg_tx_last: dict | None = None
 
 
 class TapIngest:
@@ -330,7 +348,9 @@ class TapIngest:
                     instance,
                     "tx_groupcast",
                     airtime.groupcast_airtime_us(
-                        sent.payload_len, self._router_count(instance)
+                        sent.payload_len,
+                        self._router_count(instance),
+                        avg_tx=flow.avg_tx_ewma or airtime.DEFAULT_AVG_TX,
                     ),
                 )
             elif name == "sendBroadcast":
@@ -341,17 +361,24 @@ class TapIngest:
                     instance,
                     "tx_groupcast",
                     airtime.groupcast_airtime_us(
-                        sent.payload_len, self._router_count(instance)
+                        sent.payload_len,
+                        self._router_count(instance),
+                        avg_tx=flow.avg_tx_ewma or airtime.DEFAULT_AVG_TX,
                     ),
                 )
             return
 
         if not ezsp_frame.is_callback:
             if name in ("readAndClearCounters", "readCounters") and ezsp_frame.is_response:
-                counters = ezsp_params.parse_counters(params)
-                if counters is not None:
-                    flow.counters_last = counters
-                    flow.counters_at = self._clock()
+                counter_values = ezsp_params.parse_counters(params)
+                if counter_values is not None:
+                    now = self._clock()
+                    if name == "readAndClearCounters" and flow.counters_at is not None:
+                        # Clearing reads make each response a per-window delta;
+                        # the window length is the gap between harvests.
+                        self._update_avg_tx(flow, counter_values, now - flow.counters_at)
+                    flow.counters_last = counter_values
+                    flow.counters_at = now
             return
 
         if name == "messageSentHandler":
@@ -436,6 +463,43 @@ class TapIngest:
                 failed += flow.delivery_failed
         return ok, failed
 
+    def _update_avg_tx(self, flow: FlowState, values: list[int], window: float) -> None:
+        """One avg_tx sample per counter window (§10 broadcast retry factor).
+
+        avg_tx = (mac_tx_broadcast − modeled link-status TXs)
+                 / (APS broadcasts + MTORR route discoveries)
+
+        Link status is a radius-1 broadcast on a ~15 s cadence, transmitted
+        once (no passive-ack retry), so it inflates the MAC count without
+        belonging to the retried population. A missed harvest stretches the
+        apparent window and over-subtracts slightly; the clamp and EWMA damp
+        it. Measured for the coordinator's own transmissions and generalized
+        to router relays on the same mesh.
+        """
+        if not AVG_TX_MIN_WINDOW_SECONDS <= window <= AVG_TX_MAX_WINDOW_SECONDS:
+            return
+        if len(values) <= _IDX_ROUTE_DISCOVERY:
+            return
+        mac_tx = values[_IDX_MAC_TX_BROADCAST]
+        originated = values[_IDX_APS_TX_BROADCAST] + values[_IDX_ROUTE_DISCOVERY]
+        link_status_est = window / LINK_STATUS_INTERVAL_SECONDS
+        if originated < AVG_TX_MIN_BROADCASTS or mac_tx <= link_status_est:
+            return
+        sample = min(3.0, max(1.0, (mac_tx - link_status_est) / originated))
+        if flow.avg_tx_ewma is None:
+            flow.avg_tx_ewma = sample
+        else:
+            flow.avg_tx_ewma += AVG_TX_EWMA_ALPHA * (sample - flow.avg_tx_ewma)
+        flow.avg_tx_samples += 1
+        flow.avg_tx_last = {
+            "sample": round(sample, 3),
+            "mac_tx_broadcast": mac_tx,
+            "aps_tx_broadcast": values[_IDX_APS_TX_BROADCAST],
+            "route_discoveries": values[_IDX_ROUTE_DISCOVERY],
+            "link_status_estimate": round(link_status_est, 1),
+            "window_seconds": round(window, 1),
+        }
+
     def _track_pending(self, flow: FlowState, tag: int, ts: float, kind: str) -> None:
         flow.pending[tag] = (ts, kind)
         if len(flow.pending) > PENDING_MAX:
@@ -489,6 +553,19 @@ class TapIngest:
                             else counters.label_counters(flow.counters_last)
                         ),
                         "counters_provenance": counters.PROVENANCE,
+                        # §10 broadcast retry factor, measured passively from
+                        # the coordinator's own TX counters (supersedes the
+                        # §11 groupcast stage).
+                        "avg_tx": (
+                            None if flow.avg_tx_ewma is None else round(flow.avg_tx_ewma, 2)
+                        ),
+                        "avg_tx_samples": flow.avg_tx_samples,
+                        "avg_tx_last": flow.avg_tx_last,
+                        "avg_tx_provenance": (
+                            "measured (coordinator tx, generalized to relays)"
+                            if flow.avg_tx_ewma is not None
+                            else f"modeled (default {airtime.DEFAULT_AVG_TX})"
+                        ),
                     },
                 }
             )

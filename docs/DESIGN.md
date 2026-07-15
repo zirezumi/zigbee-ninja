@@ -431,9 +431,17 @@ conservative 1–2 hops, tagged accordingly.
 **Groupcast/broadcast cost (mesh amplification):** a group command is a single
 coordinator TX, but it rides an NWK broadcast that every router relays — with up
 to 3 transmissions each under passive-ack retry rules, and no MAC ACKs. Model:
-`(1 + N_routers) × frame_airtime × avg_tx`, with `avg_tx ∈ [1, 3]` (default 1.3,
-calibrated per mesh in §11). This is the term that explains why "one more group"
-costs far more airtime than coordinator counters suggest.
+`(1 + N_routers) × frame_airtime × avg_tx`, with `avg_tx ∈ [1, 3]` (default
+1.3). **avg_tx is measured passively, per coordinator**, from the harvested
+`readAndClearCounters` windows: `mac_tx_broadcast` counts the coordinator's own
+broadcast transmissions *including* its passive-ack retries, so
+`(mac_tx_broadcast − modeled radius-1 link-status TXs) / (APS broadcasts +
+MTORR route discoveries)` is its retransmission factor directly — provenance
+`measured (coordinator tx, generalized to relays)`, EWMA'd across windows,
+replacing the default as samples arrive. This supersedes the groupcast
+calibration stage originally specified in §11 (passive by default, P1). The
+amplification term is what explains why "one more group" costs far more
+airtime than coordinator counters suggest.
 
 **Topology snapshots** (router census, parent/route tables, depth estimates)
 come from permission-gated, rate-limited networkmap pulls — they load the mesh,
@@ -495,9 +503,11 @@ A guided wizard, per coordinator, per-run authorized (grants never persist):
    the closed loop can no longer reach the requested rate, which measures the
    *pipeline* service ceiling (denominator 3) and bounds the NCP knee from
    below; the record says which rule ended the ramp, and a ramp that exhausts
-   the schedule cleanly records a censored (lower-bound) knee. An optional,
-   separately-authorized groupcast stage against a wizard-created (and
-   wizard-removed) test group calibrates the broadcast retry factor `avg_tx`.
+   the schedule cleanly records a censored (lower-bound) knee. (An earlier
+   revision specified an optional groupcast stage against a wizard-created
+   test group to calibrate the broadcast retry factor `avg_tx`; that stage is
+   superseded — avg_tx is now measured passively and continuously from the
+   coordinator's own broadcast counters, §10.)
 4. **Safety rails** — hard rate/duration/total-read caps enforced inside the
    send loop; watchdog abort on any device on the instance going offline, on
    an error spike in the Zigbee2MQTT log, or on total reply silence; manual
@@ -572,8 +582,8 @@ standalone; HA ingress trust in add-on mode (fast-follow). Default port `8686`.
    fleet-batch flow (one authorization per enumerated batch, queue progress,
    abort-stops-remainder), live ramp progress with the RTT-vs-rate curve and
    an ever-present abort, and history with batch tags and an
-   environment-drift "recalibrate?" chip. The optional groupcast stage (§11)
-   is not yet implemented.
+   environment-drift "recalibrate?" chip. (The groupcast stage is superseded
+   by passive avg_tx measurement — §10.)
 8. **Footprint & permissions** — tiles, health, versions, revoke-all; connected
    wire-tap agents.
 9. **Alerts** — rules and notification center (§14).
