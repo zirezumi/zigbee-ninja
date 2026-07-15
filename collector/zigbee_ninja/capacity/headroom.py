@@ -35,7 +35,7 @@ def _percentile(ordered: list[float], fraction: float) -> float:
     return ordered[min(len(ordered) - 1, int(len(ordered) * fraction))]
 
 
-def _latest_knees(db: Database) -> dict[str, dict[str, dict]]:
+def latest_knees(db: Database) -> dict[str, dict[str, dict]]:
     """Latest knee per (instance, calibration mode) — the modes measure
     different denominators: a single-target ramp finds the per-device pipeline
     ceiling, a spread ramp probes the NCP/global pipeline knee."""
@@ -132,7 +132,7 @@ def summarize(
         info["base_topic"]: (info.get("version"), info.get("coordinator_revision"))
         for info in instances_info
     }
-    knees = _latest_knees(db)
+    knees = latest_knees(db)
 
     instances: dict[str, dict] = {}
     for base in sorted(set(per_instance) | set(knees)):

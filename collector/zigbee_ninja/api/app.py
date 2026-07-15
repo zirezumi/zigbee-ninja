@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .. import __version__
+from .. import alerts as alerts_module
 from .. import tiles as tiles_module
 from ..attribution import queries as attribution_queries
 from ..calibration.benchmark import CalibrationRejected
@@ -74,6 +75,18 @@ class CalibrationBulkPreviewRequest(BaseModel):
 
 class CalibrationBulkRunRequest(BaseModel):
     authorization: str
+
+
+class AlertRuleBody(BaseModel):
+    name: str
+    metric: str
+    instance: str = "*"
+    op: str = ">"
+    threshold: float
+    clear_threshold: float | None = None
+    sustain_seconds: int = 60
+    severity: str = "warning"
+    enabled: bool = True
 
 
 def _set_session_cookie(response: Response, token: str) -> None:
@@ -394,6 +407,49 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
         except CalibrationRejected as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
+    # -- alerting (DESIGN.md §14) ------------------------------------------------
+
+    @app.get("/api/alerts")
+    def alerts_view(request: Request) -> dict:
+        require_user(request)
+        return {
+            "active": engine.alerts.active(),
+            "rules": engine.alerts.rules(),
+            "metrics": alerts_module.metric_catalog(),
+        }
+
+    @app.get("/api/alerts/history")
+    def alerts_history(request: Request, seconds: int = 86400) -> dict:
+        require_user(request)
+        seconds = max(60, min(seconds, alerts_module.EVENT_RETENTION_SECONDS))
+        return {"events": engine.alerts.history(seconds)}
+
+    @app.post("/api/alerts/rules", status_code=201)
+    def alerts_rule_create(request: Request, body: AlertRuleBody) -> dict:
+        require_user(request)
+        try:
+            return engine.alerts.create_rule(body.model_dump())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.put("/api/alerts/rules/{rule_id}")
+    def alerts_rule_update(request: Request, rule_id: int, body: AlertRuleBody) -> dict:
+        require_user(request)
+        try:
+            updated = engine.alerts.update_rule(rule_id, body.model_dump())
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if updated is None:
+            raise HTTPException(status_code=404, detail="No such alert rule")
+        return updated
+
+    @app.delete("/api/alerts/rules/{rule_id}")
+    def alerts_rule_delete(request: Request, rule_id: int) -> dict:
+        require_user(request)
+        if not engine.alerts.delete_rule(rule_id):
+            raise HTTPException(status_code=404, detail="No such alert rule")
+        return {"ok": True}
+
     @app.get("/api/ha")
     def ha_get(request: Request) -> dict:
         require_user(request)
@@ -478,6 +534,7 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
                         "latency": engine.probes.latency.snapshot(),
                         "probes": engine.probes.stats(),
                         "tap": engine.tap.stats(),
+                        "alerts": engine.alerts.active_brief(),
                     }
                 )
                 await asyncio.sleep(1)

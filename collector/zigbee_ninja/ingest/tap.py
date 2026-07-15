@@ -463,6 +463,30 @@ class TapIngest:
                 failed += flow.delivery_failed
         return ok, failed
 
+    def instance_wire_totals(self) -> dict[str, dict]:
+        """Per-instance cumulative wire health counters plus the current avg_tx.
+
+        Counters are summed across an instance's flows (monotonic within a
+        collector lifetime); avg_tx comes from the most recently seen flow —
+        the EWMA lives per flow, and reconnects start a fresh one."""
+        out: dict[str, dict] = {}
+        freshest: dict[str, float] = {}
+        for flow in self._flows.values():
+            if flow.instance is None:
+                continue
+            entry = out.setdefault(
+                flow.instance,
+                {"delivery_failed": 0, "layout_mismatch": 0, "avg_tx": None},
+            )
+            entry["delivery_failed"] += flow.delivery_failed
+            entry["layout_mismatch"] += flow.layout_mismatch
+            if flow.avg_tx_ewma is not None and flow.last_seen >= freshest.get(
+                flow.instance, 0.0
+            ):
+                entry["avg_tx"] = round(flow.avg_tx_ewma, 2)
+                freshest[flow.instance] = flow.last_seen
+        return out
+
     def _update_avg_tx(self, flow: FlowState, values: list[int], window: float) -> None:
         """One avg_tx sample per counter window (§10 broadcast retry factor).
 

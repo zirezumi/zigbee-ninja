@@ -6,11 +6,14 @@ import asyncio
 import secrets
 import time
 
+from ..alerts import GLOBAL_INSTANCE, AlertManager
 from ..attribution.chains import ChainTracker, parse_command
 from ..calibration.benchmark import CalibrationManager
+from ..capacity import headroom as headroom_model
+from ..capacity.headroom import TX_BUCKETS
 from ..store.config import ConfigStore
 from ..store.db import Database
-from ..tiles import CAPABILITY_TOPOLOGY, TileManager
+from ..tiles import CAPABILITY_TOPOLOGY, CAPABILITY_Z2M_EXTENSION, TileManager
 from .brokerlog import LOG_TOPIC_PREFIX, BrokerLogCorrelator
 from .hacontrol import HaAttribution, HaConfig, HaLink
 from .mqtt import BrokerConfig, MqttIngest
@@ -61,6 +64,8 @@ class Engine:
             wire_delivery_totals=self.tap.wire_delivery_totals,
         )
         self.ha_attr = HaAttribution()
+        self.alerts = AlertManager(db, config, provider=self._alert_metrics)
+        self._knees_cache: tuple[float, dict[str, float]] | None = None
         self._ha_link: HaLink | None = None
         self._ha_task: asyncio.Task | None = None
         self._ingest: MqttIngest | None = None
@@ -240,6 +245,113 @@ class Engine:
             return {"state": "unconfigured", "error": None, "connected_since": None}
         return dict(self._ingest.status)
 
+    # -- alert metrics (DESIGN.md §14) -------------------------------------------
+
+    def _alert_knees(self) -> dict[str, float]:
+        """Headline knee eps per instance (spread preferred over single, like
+        the headroom view), cached ~60 s — knees only change when a
+        calibration completes."""
+        now = time.time()
+        if self._knees_cache is None or now - self._knees_cache[0] > 60.0:
+            knees: dict[str, float] = {}
+            for instance, modes in headroom_model.latest_knees(self._db).items():
+                knee = modes.get("spread") or modes.get("single")
+                if knee and knee.get("eps"):
+                    knees[instance] = float(knee["eps"])
+            self._knees_cache = (now, knees)
+        return self._knees_cache[1]
+
+    def _alert_metrics(self, names: set[str]) -> dict[str, dict[str, float | None]]:
+        """Samples for the alert evaluator. Global metrics report under '*';
+        counter-kind metrics report cumulative totals (the evaluator
+        differences ticks). An unconfigured link reports nothing at all, so
+        its rules stay frozen rather than alerting on a feature never set up."""
+        out: dict[str, dict[str, float | None]] = {}
+        if "broker_connected" in names:
+            state = self.ingest_status()["state"]
+            if state != "unconfigured":
+                out["broker_connected"] = {
+                    GLOBAL_INSTANCE: 1.0 if state == "connected" else 0.0
+                }
+        if "ha_connected" in names:
+            state = self.ha_status()["state"]
+            if state != "unconfigured":
+                out["ha_connected"] = {GLOBAL_INSTANCE: 1.0 if state == "connected" else 0.0}
+        if "tap_agents" in names:
+            out["tap_agents"] = {GLOBAL_INSTANCE: float(len(self.tap.agents))}
+        if "probe_heartbeat_age_s" in names:
+            now = time.time()
+            probe_stats = self.probes.stats()
+            ages: dict[str, float | None] = {}
+            rows = self._db.connect().execute(
+                "SELECT target, last_health_at, deployed_at FROM tiles "
+                "WHERE capability = ? AND status = 'deployed'",
+                (CAPABILITY_Z2M_EXTENSION,),
+            ).fetchall()
+            for row in rows:
+                # In-memory heartbeat first; the persisted last_health_at
+                # covers the stretch right after a collector restart.
+                beat = probe_stats.get(row["target"], {}).get("last_heartbeat_at")
+                beat = beat or row["last_health_at"] or row["deployed_at"]
+                ages[row["target"]] = max(0.0, now - beat) if beat else None
+            out["probe_heartbeat_age_s"] = ages
+        if "seq_gaps_delta" in names:
+            out["seq_gaps_delta"] = {
+                base: float(stat.get("seq_gaps", 0))
+                for base, stat in self.probes.stats().items()
+            }
+        if {"layout_mismatch_delta", "delivery_failed_delta", "avg_tx"} & names:
+            totals = self.tap.instance_wire_totals()
+            if "layout_mismatch_delta" in names:
+                out["layout_mismatch_delta"] = {
+                    instance: float(t["layout_mismatch"]) for instance, t in totals.items()
+                }
+            if "delivery_failed_delta" in names:
+                out["delivery_failed_delta"] = {
+                    instance: float(t["delivery_failed"]) for instance, t in totals.items()
+                }
+            if "avg_tx" in names:
+                out["avg_tx"] = {
+                    instance: t["avg_tx"]
+                    for instance, t in totals.items()
+                    if t["avg_tx"] is not None
+                }
+        if "wire_p95_ms" in names:
+            out["wire_p95_ms"] = {
+                instance: float(view["p95_ms"])
+                for instance, view in self.tap.latency.snapshot().items()
+            }
+        if {"budget_pct", "load_eps", "knee_utilization_pct", "steady_headroom_eps"} & names:
+            snapshot = self.tap.airtime.snapshot()
+            loads = {
+                instance: sum(
+                    view["buckets"].get(bucket, {}).get("frames_60s", 0)
+                    for bucket in TX_BUCKETS
+                )
+                / 60.0
+                for instance, view in snapshot.items()
+            }
+            if "budget_pct" in names:
+                out["budget_pct"] = {
+                    instance: view["budget_pct_60s"] for instance, view in snapshot.items()
+                }
+            if "load_eps" in names:
+                out["load_eps"] = {instance: round(v, 2) for instance, v in loads.items()}
+            if {"knee_utilization_pct", "steady_headroom_eps"} & names:
+                # Iterate calibrated instances: an instance with a knee but no
+                # recent TX is at zero load, not unknown.
+                utilization: dict[str, float | None] = {}
+                headroom: dict[str, float | None] = {}
+                for instance, knee in self._alert_knees().items():
+                    load = loads.get(instance, 0.0)
+                    utilization[instance] = round(load / knee * 100.0, 1)
+                    headroom[instance] = round(knee - load, 2)
+                if "knee_utilization_pct" in names:
+                    out["knee_utilization_pct"] = utilization
+                if "steady_headroom_eps" in names:
+                    out["steady_headroom_eps"] = headroom
+        return out
+
     # -- rollups & persistence -------------------------------------------------
 
     def flush_rollups(self) -> int:
@@ -332,4 +444,8 @@ class Engine:
                 self.flush_rollups()
             except Exception:
                 # Never let a storage hiccup kill the loop; next tick retries.
+                pass
+            try:
+                self.alerts.tick()
+            except Exception:
                 pass

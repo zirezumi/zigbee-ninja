@@ -122,6 +122,33 @@ _MIGRATIONS = [
     );
     CREATE INDEX idx_calibrations_instance_time ON calibrations (instance, started_at);
     """,
+    """
+    CREATE TABLE alert_rules (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        builtin         TEXT UNIQUE,
+        name            TEXT NOT NULL,
+        metric          TEXT NOT NULL,
+        instance        TEXT NOT NULL DEFAULT '*',
+        op              TEXT NOT NULL DEFAULT '>',
+        threshold       REAL NOT NULL,
+        clear_threshold REAL,
+        sustain_seconds INTEGER NOT NULL DEFAULT 60,
+        severity        TEXT NOT NULL DEFAULT 'warning',
+        enabled         INTEGER NOT NULL DEFAULT 1,
+        created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE alert_events (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        rule_id    INTEGER NOT NULL,
+        instance   TEXT NOT NULL,
+        opened_at  REAL NOT NULL,
+        cleared_at REAL,
+        peak_value REAL,
+        context    TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX idx_alert_events_cleared ON alert_events (cleared_at);
+    CREATE INDEX idx_alert_events_opened ON alert_events (opened_at);
+    """,
 ]
 
 

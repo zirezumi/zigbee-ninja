@@ -597,12 +597,40 @@ standalone; HA ingress trust in add-on mode (fast-follow). Default port `8686`.
 
 ## §14 Alerting
 
-Threshold rules over any first-class metric (utilization, headroom, latency SLI,
-error rate, probe health, data-quality) with sustain windows and hysteresis.
-Delivery: the GUI notification center, plus an optional **MQTT discovery
-publisher** that exposes headline metrics and alert states as Home Assistant
-entities — any HA user gets native notifications/automations for free, tokenless,
-and it's the natural bridge for non-HA consumers too.
+Threshold rules over first-class metrics, evaluated on the collector's 10 s
+rollup cadence. A rule is (metric, instance or `*`, operator, threshold,
+sustain window, optional clear threshold, severity); each (rule, instance)
+pair runs an independent state machine:
+
+- **open** — the condition holds continuously for the sustain window;
+- **clear** — the value stays on the OK side of the clear threshold (default:
+  the open threshold) for max(sustain, 60 s); the floor keeps zero-sustain
+  counter rules from flapping tick to tick;
+- **freeze** — missing data (an undeployed probe, an unconfigured HA link,
+  no tap coverage) neither opens nor clears anything.
+
+Metrics span capacity (knee-utilization %, steady headroom, channel budget %,
+load), latency (wire p95), reliability (delivery-failure / EZSP
+layout-mismatch / probe sequence-gap deltas), link health (broker and HA
+connectivity, tap agent count, probe heartbeat age), and data quality
+(avg_tx). Counter-style metrics evaluate as per-tick deltas: first sight
+baselines silently and a cumulative decrease rebaselines, so collector
+restarts never alert retroactively. Rules and events persist (event history
+keeps 90 days); open events survive restarts and still require a sustained OK
+reading to clear.
+
+Built-in rules seed exactly once — user edits and deletions are durable.
+Self-health rules (probe heartbeat stale, tap agent down, broker/HA link
+down, layout mismatch) ship **enabled**: they only fire when something the
+user deployed stops reporting. Capacity rules ship **disabled** with
+placeholder thresholds — utilization and latency norms are per-installation,
+so the user opts in from the Alerts view.
+
+Delivery: the GUI notification center (active alerts ride the 1 s fleet
+stream), plus an optional **MQTT discovery publisher** that exposes headline
+metrics and alert states as Home Assistant entities — any HA user gets native
+notifications/automations for free, tokenless, and it's the natural bridge
+for non-HA consumers too.
 
 ## §15 Security posture
 

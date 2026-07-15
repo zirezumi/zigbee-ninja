@@ -90,8 +90,16 @@ headroom prefers the spread measurement). Reference fleet fully calibrated in
 both modes; the five instances show a uniform ~2× spread-over-single knee
 with the wire RTT inflating as the global ceiling approaches — the shared
 Z2M/EZSP stack, not the radio, is the binding constraint there.
-**M5 is done.** Next: M6 — alerting + MQTT-discovery entities (§14),
-retention hardening, secrets-at-rest encryption (§15).
+**M5 is done.**
+**M6 (started)**: alerting engine (§14) — migration 9 `alert_rules`/`alert_events`,
+evaluator ticking with the engine's 10 s flush loop (sustain-before-open,
+clear-on-hysteresis with a 60 s floor, freeze-on-missing-data, counter metrics
+as per-tick deltas with restart rebaselining), open events survive restarts,
+built-ins seed exactly once (self-health enabled / capacity disabled — user
+deletions durable), rule CRUD + active/history API (`/api/alerts*`), active
+alerts on the fleet WS. Remaining M6: Alerts GUI view, MQTT-discovery entity
+publisher (grant tile), secrets-at-rest encryption (§15), retention knobs +
+Settings view.
 Roadmap: README.md.
 
 ## Hard rules
