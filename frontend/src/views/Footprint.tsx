@@ -1,5 +1,5 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
-import { api, ApiError, HaView, Tile } from "../api";
+import { api, ApiError, HaView, TapStats, TapView, Tile } from "../api";
 
 const CAPABILITY_LABELS: Record<string, string> = {
   z2m_extension: "Z2M extension probe (T1)",
@@ -129,8 +129,69 @@ function HaCard() {
   );
 }
 
+function describeAgent(meta: Record<string, unknown>): string {
+  const parts: string[] = [];
+  for (const key of ["agent", "host", "iface", "filter", "version"]) {
+    const value = meta[key];
+    if (typeof value === "string" && value) parts.push(`${key} ${value}`);
+  }
+  return parts.length > 0 ? parts.join(" · ") : "(no hello metadata)";
+}
+
+function TapAgentsPanel({ tap }: { tap: TapStats | null }) {
+  const now = Date.now() / 1000;
+  const flows = tap?.flows ?? [];
+  return (
+    <div className="panel">
+      <p className="panel-kicker">Wire tap agents (T2)</p>
+      <p className="hint">
+        A ninja-tap agent is a dumb capture process: it streams filtered pcap of the
+        coordinator links outbound to this collector over a scoped token, and all decoding
+        happens here. Uninstall on the capture host with <code>ninja-tap uninstall</code>{" "}
+        (GUI-managed lifecycle arrives with the T2 tile).
+      </p>
+      {!tap || tap.agents === 0 ? (
+        <p className="hint">No agents connected.</p>
+      ) : (
+        <>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Agent</th>
+                <th className="num">Streamed</th>
+                <th className="num">Segments</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tap.agent_details.map((agent, index) => (
+                <tr key={index}>
+                  <td className="mono">{describeAgent(agent.meta)}</td>
+                  <td className="num">{(agent.bytes / 1_000_000).toFixed(1)} MB</td>
+                  <td className="num">{agent.segments}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="hint">
+            Coordinator flows:{" "}
+            {flows.map((flow) => (
+              <span
+                key={flow.coordinator}
+                className={now - flow.last_seen < 120 ? "chip ok" : "chip warn"}
+              >
+                {flow.instance ?? flow.coordinator}
+              </span>
+            ))}
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function Footprint() {
   const [tiles, setTiles] = useState<Tile[]>([]);
+  const [tap, setTap] = useState<TapStats | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -138,6 +199,8 @@ export default function Footprint() {
     try {
       const data = await api<{ tiles: Tile[] }>("/api/tiles");
       setTiles(data.tiles);
+      const tapView = await api<TapView>("/api/tap");
+      setTap(tapView.stats);
     } catch {
       setError("Failed to load footprint");
     }
@@ -245,6 +308,7 @@ export default function Footprint() {
           </tbody>
         </table>
       </div>
+      <TapAgentsPanel tap={tap} />
       {anyDeployed && (
         <div className="panel">
           <p className="panel-kicker">Emergency</p>

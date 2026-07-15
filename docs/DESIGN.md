@@ -223,6 +223,11 @@ A **tile** is one grantable capability against one named target:
 | Hardware enrichment | per coordinator device | Enable API polling | Toggle off |
 | SSH convenience | per host | User-supplied key, encrypted at rest; used only to automate deploy/remove of other tiles | Delete key |
 
+The wire-tap tile's GUI-managed lifecycle (deploy/revoke) is not yet
+implemented: until it lands, the footprint page lists connected tap agents
+read-only (hello metadata, bytes streamed, covered flows) and removal is the
+local `ninja-tap uninstall`.
+
 Tile state machine: `available → granted → deployed → (degraded) → revoked`.
 Every deployed artifact is version-stamped and heartbeats to the collector; the
 **footprint page** shows each one with health, version drift (probe schema ≠
@@ -506,14 +511,20 @@ standalone; HA ingress trust in add-on mode (fast-follow). Default port `8686`.
    airtime, and latency panes; error overlay; shared-channel pooling note.
 3. **Attribution explorer** — pivotable bucket × device-class × commander matrix;
    top-N devices/automations; the redundant-command report.
-4. **Burst inspector** — event-level timeline over the raw window, zoom to
+4. **Wire tap** — per-coordinator wire-tier telemetry: agent/flow health
+   (CRC, retransmits), airtime buckets with amplification, the wire latency
+   SLI, delivery statuses, and mesh-health counters. The first slice of
+   Coordinator detail, delivered as its own view while the stacked-series
+   panes are pending.
+5. **Burst inspector** — event-level timeline over the raw window, zoom to
    milliseconds, chain visualization (command → TX → responses as a micro-gantt).
-5. **Topology** — mesh graph from the latest snapshot (LQI-weighted edges,
+6. **Topology** — mesh graph from the latest snapshot (LQI-weighted edges,
    relay-load-sized routers), freshness-stamped.
-6. **Calibration** — wizard + history + knee-drift indicators.
-7. **Footprint & permissions** — tiles, health, versions, revoke-all.
-8. **Alerts** — rules and notification center (§14).
-9. **Settings** — retention/quota, client labels, tokens.
+7. **Calibration** — wizard + history + knee-drift indicators.
+8. **Footprint & permissions** — tiles, health, versions, revoke-all; connected
+   wire-tap agents.
+9. **Alerts** — rules and notification center (§14).
+10. **Settings** — retention/quota, client labels, tokens.
 
 ## §14 Alerting
 

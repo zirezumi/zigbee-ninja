@@ -242,6 +242,7 @@ main h1 {
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 20px 24px;
+  overflow-x: auto; /* wide tables scroll inside the panel instead of clipping */
 }
 
 .panel.narrow {
@@ -559,6 +560,33 @@ main h1 {
 
 .seg-self {
   background: color-mix(in srgb, var(--ink-2) 40%, transparent);
+}
+
+/* ---- wire tap (airtime buckets + coverage) ---- */
+.seg-tx_unicast {
+  background: var(--accent);
+}
+
+.seg-tx_groupcast {
+  background: var(--amber); /* mesh-amplified — the term worth watching */
+}
+
+.seg-rx {
+  background: color-mix(in srgb, var(--accent) 45%, var(--panel));
+}
+
+.seg-rx_mesh {
+  background: var(--ink-2);
+}
+
+.coverage {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.chip + .chip {
+  margin-left: 4px;
 }
 
 .table {

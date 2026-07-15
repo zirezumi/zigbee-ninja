@@ -64,6 +64,78 @@ export interface ProbeStats {
   seq_gaps: number;
 }
 
+export interface WireStats {
+  delivery_ok: number;
+  delivery_failed: number;
+  statuses: Record<string, number>;
+  route_records: number;
+  route_errors: Record<string, number>;
+  loopbacks: number;
+  layout_mismatch: number;
+  incoming_trailing: Record<string, number>;
+  lqi_ewma: number | null;
+  rssi_ewma: number | null;
+  pending_sends: number;
+  counters_at: number | null;
+}
+
+export interface WireFlow {
+  instance: string | null;
+  coordinator: string;
+  protocol_version: number | null;
+  data_frames: number;
+  ezsp_frames: Record<string, number>;
+  to_coord_ash: Record<string, number>;
+  from_coord_ash: Record<string, number>;
+  crc_errors: number;
+  retransmits: number;
+  last_seen: number;
+  wire: WireStats;
+}
+
+export interface AirtimeLive {
+  buckets: Record<string, { airtime_us_60s: number; frames_60s: number }>;
+  us_per_s_60s: number;
+  airtime_pct_60s: number;
+  budget_pct_60s: number;
+  provenance: string;
+}
+
+export interface WireLatencyStats {
+  count: number;
+  p50_ms: number;
+  p95_ms: number;
+  max_ms: number;
+}
+
+export interface TapAgent {
+  meta: Record<string, unknown>;
+  connected_at: number;
+  bytes: number;
+  segments: number;
+}
+
+export interface TapStats {
+  agents: number;
+  agent_details: TapAgent[];
+  flows: WireFlow[];
+  airtime: Record<string, AirtimeLive>;
+  latency: Record<string, WireLatencyStats>;
+}
+
+export interface AirtimeWindowInstance {
+  buckets: Record<string, { airtime_us: number; frames: number }>;
+  us_per_s: number;
+  airtime_pct: number;
+  budget_pct: number;
+  provenance: string;
+}
+
+export interface AirtimeWindow {
+  window_seconds: number;
+  instances: Record<string, AirtimeWindowInstance>;
+}
+
 export interface FleetMessage {
   ts: number;
   broker: BrokerStatus;
@@ -71,6 +143,12 @@ export interface FleetMessage {
   rates: RatesSnapshot;
   latency: Record<string, LatencyStats>;
   probes: Record<string, ProbeStats>;
+  tap: TapStats;
+}
+
+export interface TapView {
+  token: string;
+  stats: TapStats;
 }
 
 export interface HaView {

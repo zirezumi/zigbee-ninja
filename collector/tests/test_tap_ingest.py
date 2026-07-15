@@ -19,6 +19,7 @@ def test_tap_decodes_stream_to_ezsp_frames():
 
     stats = tap.stats()
     assert stats["agents"] == 1
+    assert stats["agent_details"][0]["meta"]["iface"] == "vmbr0"
     assert len(stats["flows"]) == 1
     flow = stats["flows"][0]
     assert flow["instance"] == "z2m-test"

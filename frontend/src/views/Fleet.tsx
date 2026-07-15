@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import { FleetMessage, InstanceInfo, LatencyStats, ProbeStats, fleetSocketUrl } from "../api";
+import {
+  AirtimeLive,
+  FleetMessage,
+  InstanceInfo,
+  LatencyStats,
+  ProbeStats,
+  WireLatencyStats,
+  fleetSocketUrl,
+} from "../api";
 
 const KIND_ORDER = ["command", "state", "bridge", "availability", "probe", "other"];
 const HISTORY_LENGTH = 60;
@@ -26,15 +34,50 @@ function Sparkline({ values }: { values: number[] }) {
   );
 }
 
+interface Coverage {
+  t0: boolean;
+  t1: boolean;
+  t2: boolean;
+}
+
+function CoverageMeter({ coverage }: { coverage: Coverage }) {
+  const tiers: Array<[label: string, live: boolean, title: string]> = [
+    ["T0", coverage.t0, "MQTT firehose (broker connection)"],
+    ["T1", coverage.t1, "Z2M extension probe (heartbeating)"],
+    ["T2", coverage.t2, "Passive wire tap (flow streaming)"],
+  ];
+  return (
+    <span className="coverage">
+      {tiers.map(([label, live, title]) => (
+        <span key={label} className={live ? "chip ok" : "chip"} title={title}>
+          {label} {live ? "✓" : "—"}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 interface InstanceCardProps {
   instance: InstanceInfo;
   kinds: Record<string, number> | undefined;
   history: number[];
   latency?: LatencyStats;
   probe?: ProbeStats;
+  airtime?: AirtimeLive;
+  wireLatency?: WireLatencyStats;
+  coverage: Coverage;
 }
 
-function InstanceCard({ instance, kinds, history, latency, probe }: InstanceCardProps) {
+function InstanceCard({
+  instance,
+  kinds,
+  history,
+  latency,
+  probe,
+  airtime,
+  wireLatency,
+  coverage,
+}: InstanceCardProps) {
   const online = instance.online;
   return (
     <div className="instance-card">
@@ -70,13 +113,26 @@ function InstanceCard({ instance, kinds, history, latency, probe }: InstanceCard
             ? `v${probe.version}${probe.enabled === false ? " (paused)" : ""}`
             : "not deployed"}
         </span>
-        <span>Cmd RTT</span>
-        <span>
+        <span>Airtime</span>
+        <span title="Share of the CSMA-discounted channel budget, trailing 60 s (wire tier)">
+          {airtime
+            ? `${airtime.budget_pct_60s.toFixed(2)}% of budget · ${Math.round(airtime.us_per_s_60s)} µs/s`
+            : "—"}
+        </span>
+        <span>Wire RTT</span>
+        <span title="sendUnicast → delivery confirmation at the NCP boundary (T2, authoritative)">
+          {wireLatency
+            ? `p50 ${wireLatency.p50_ms} ms · p95 ${wireLatency.p95_ms} ms (${wireLatency.count})`
+            : "—"}
+        </span>
+        <span>Z2M echo</span>
+        <span title="Command → state-echo proxy at the Z2M boundary (T1, approximate)">
           {latency
             ? `p50 ${latency.p50_ms} ms · p95 ${latency.p95_ms} ms (${latency.count})`
             : "—"}
         </span>
       </div>
+      <CoverageMeter coverage={coverage} />
       <div className="kinds">
         {KIND_ORDER.map((kind) => (
           <span key={kind} className="kind">
@@ -162,16 +218,30 @@ export default function Fleet({ onReconfigure }: FleetProps) {
         </div>
       ) : (
         <div className="cards">
-          {instances.map((instance) => (
-            <InstanceCard
-              key={instance.base_topic}
-              instance={instance}
-              kinds={message?.rates[instance.base_topic]}
-              history={historyRef.current[instance.base_topic] ?? []}
-              latency={message?.latency[instance.base_topic]}
-              probe={message?.probes[instance.base_topic]}
-            />
-          ))}
+          {instances.map((instance) => {
+            const base = instance.base_topic;
+            const probe = message?.probes[base];
+            const heartbeat = probe?.last_heartbeat_at;
+            const flow = message?.tap.flows.find((candidate) => candidate.instance === base);
+            const now = message?.ts ?? 0;
+            return (
+              <InstanceCard
+                key={base}
+                instance={instance}
+                kinds={message?.rates[base]}
+                history={historyRef.current[base] ?? []}
+                latency={message?.latency[base]}
+                probe={probe}
+                airtime={message?.tap.airtime[base]}
+                wireLatency={message?.tap.latency[base]}
+                coverage={{
+                  t0: broker?.state === "connected",
+                  t1: heartbeat != null && now - heartbeat < 120,
+                  t2: flow != null && now - flow.last_seen < 60,
+                }}
+              />
+            );
+          })}
         </div>
       )}
     </>

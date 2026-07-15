@@ -167,8 +167,9 @@ export default function Attribution() {
             </tbody>
           </table>
           <p className="hint">
-            Client identity needs the broker-telemetry tile (Mosquitto{" "}
-            <code>log_dest topic</code>); without it, commands show as (unattributed).
+            Commander identity comes from the Home Assistant integration (Footprint page):
+            a read-only HA connection names the automation or script behind each{" "}
+            <code>mqtt.publish</code>. Without it, commands show as (unattributed).
           </p>
         </div>
 

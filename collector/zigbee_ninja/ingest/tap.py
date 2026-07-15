@@ -427,6 +427,17 @@ class TapIngest:
             )
         return {
             "agents": len(self.agents),
+            # The footprint page lists every foothold (DESIGN.md P2) — tap
+            # agents included, with the hello metadata they self-reported.
+            "agent_details": [
+                {
+                    "meta": agent["meta"],
+                    "connected_at": agent["connected_at"],
+                    "bytes": agent["bytes"],
+                    "segments": agent["segments"],
+                }
+                for agent in self.agents.values()
+            ],
             "flows": flows,
             "airtime": self.airtime.snapshot(),
             "latency": self.latency.snapshot(),
