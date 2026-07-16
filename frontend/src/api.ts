@@ -438,6 +438,42 @@ export interface HeadroomView {
   instances: Record<string, HeadroomInstance>;
 }
 
+export interface EnvelopeBurst {
+  at: number;
+  commands: number;
+  duration_s: number;
+  peak_eps: number;
+}
+
+export interface EnvelopeInstance {
+  coverage: "wire" | "commands" | "none";
+  provenance: string | null;
+  peak: { eps_1s: number; at: number; eps_10s: number } | null;
+  top_bursts: Array<{ at: number; eps_1s: number }>;
+  benchmark_windows_excluded: number;
+  limits: {
+    sustained_eps?: number;
+    sustained_kind?: string;
+    mode?: string;
+    measured_at?: number;
+    ceiling_eps?: number;
+  } | null;
+  burst_utilization_pct: number | null;
+  commanders: Array<{ commander: string; bursts: number; worst: EnvelopeBurst }>;
+  composed_worst: { eps: number; commanders: string[]; observed_at: number } | null;
+}
+
+export interface EnvelopeView {
+  window_seconds: number;
+  instances: Record<string, EnvelopeInstance>;
+  fanouts: Array<{
+    commander: string;
+    combined_eps: number;
+    observed_at: number;
+    instances: Record<string, number>;
+  }>;
+}
+
 export interface AlertMetricInfo {
   metric: string;
   scope: string;

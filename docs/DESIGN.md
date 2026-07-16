@@ -484,8 +484,9 @@ LQI/RSSI at T2 keeps link-quality trends fresh for free.
    timing.
 
 **Outputs:** utilization percent per denominator; steady headroom (knee − p95
-rate) and burst headroom (knee − peak rate; persisted rollups are 10 s, so
-burst granularity is 10 s until 1 s series persist); latency SLIs (enqueue→TX,
+rate) and burst headroom (knee − peak rate; persisted rollups are 10 s, and
+the burst envelope reads the §12 raw event store for exact sliding 1 s
+peaks); latency SLIs (enqueue→TX,
 TX→delivery-confirm, command→state-echo); error SLIs (BUSY, delivery failures):
 plotted against load. That last scatter enables **continuous knee validation**
 from natural traffic, catching capacity regressions (firmware updates, mesh
@@ -625,6 +626,15 @@ stay stable.
    **Headroom** view: the three denominators side by side, steady/burst
    headroom against the calibrated knee, and the latency-vs-load
    knee-validation scatter (uPlot); Fleet cards carry the knee line.
+   Each Headroom panel also carries the instance's **burst envelope**
+   (`GET /api/envelope`, V2_PROPOSAL.md §V2-5): sliding 1 s / 10 s peak TX
+   rates from the raw event store's wire stream (T0 command chains when no
+   tap covers the instance, tagged), per-commander worst observed bursts,
+   and the worst composed burst over commander sets observed firing
+   together; a fleet-level table lists cross-coordinator fan-outs (one
+   commander bursting on several coordinators at once) with the combined
+   rate a consolidation would concentrate on one mesh. Benchmark windows
+   are excluded throughout (§11.5).
 3. **Attribution explorer**: pivotable bucket × device-class × commander matrix;
    top-N devices/automations; the redundant-command report.
 4. **Wiretap**: per-coordinator wire-tier telemetry: agent/flow health

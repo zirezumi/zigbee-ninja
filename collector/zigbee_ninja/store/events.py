@@ -179,6 +179,72 @@ class RawEventLog:
         columns = [name.strip() for name in EVENT_COLUMNS.split(",")]
         return [dict(zip(columns, row, strict=True)) for row in rows]
 
+    def _filters(
+        self,
+        source: str | None,
+        kinds: tuple[str, ...] | None,
+        direction: str | None,
+    ) -> tuple[str, list]:
+        clauses: list[str] = []
+        params: list = []
+        if source is not None:
+            clauses.append("source = ?")
+            params.append(source)
+        if direction is not None:
+            clauses.append("direction = ?")
+            params.append(direction)
+        if kinds:
+            clauses.append(f"kind IN ({','.join('?' * len(kinds))})")
+            params.extend(kinds)
+        return (" AND " + " AND ".join(clauses)) if clauses else "", params
+
+    def rate_bins(
+        self,
+        instance: str,
+        start: float,
+        end: float,
+        bucket_s: float,
+        *,
+        source: str | None = None,
+        kinds: tuple[str, ...] | None = None,
+        direction: str | None = None,
+    ) -> list[tuple[int, int]]:
+        """Fixed-bin event counts for one instance, optionally filtered by
+        source, kind, and direction. Bins index from ``start`` in steps of
+        ``bucket_s``; only nonempty bins return."""
+        filter_sql, filter_params = self._filters(source, kinds, direction)
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT CAST(FLOOR((ts - ?) / ?) AS BIGINT) AS bin, COUNT(*) AS n "
+                f"FROM {self._from_clause(start, end)} "
+                f"WHERE instance = ? AND ts >= ? AND ts < ?{filter_sql} "
+                "GROUP BY bin ORDER BY bin",
+                (start, bucket_s, instance, start, end, *filter_params),
+            ).fetchall()
+        return [(int(bin_index), int(count)) for bin_index, count in rows]
+
+    def event_times(
+        self,
+        instance: str,
+        start: float,
+        end: float,
+        *,
+        source: str | None = None,
+        kinds: tuple[str, ...] | None = None,
+        direction: str | None = None,
+        limit: int = 50_000,
+    ) -> list[float]:
+        """Sorted event timestamps in the window under the same filters."""
+        filter_sql, filter_params = self._filters(source, kinds, direction)
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT ts FROM {self._from_clause(start, end)} "
+                f"WHERE instance = ? AND ts >= ? AND ts < ?{filter_sql} "
+                "ORDER BY ts LIMIT ?",
+                (instance, start, end, *filter_params, limit),
+            ).fetchall()
+        return [float(ts) for (ts,) in rows]
+
     def stats(self) -> dict:
         with self._lock:
             hot_rows = self._conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]

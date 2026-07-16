@@ -19,6 +19,7 @@ from .. import tiles as tiles_module
 from ..attribution import queries as attribution_queries
 from ..calibration.benchmark import CalibrationRejected
 from ..capacity import airtime as airtime_model
+from ..capacity import envelope as envelope_model
 from ..capacity import headroom as headroom_model
 from ..capacity import ledger as ledger_module
 from ..ingest import topology as topology_module
@@ -411,6 +412,18 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
         seconds = max(600, min(seconds, MAX_QUERY_WINDOW_SECONDS))
         engine.flush_rollups()
         return headroom_model.summarize(db, seconds, engine.registry.snapshot())
+
+    @app.get("/api/envelope")
+    def envelope_view(request: Request, seconds: int = 86400) -> dict:
+        """Fine-grained burst peaks, per-commander worst bursts, observed
+        co-fire compositions, and cross-coordinator fan-outs, judged against
+        the calibrated capacity limits (V2_PROPOSAL.md §V2-5)."""
+        require_user(request)
+        seconds = max(3600, min(seconds, 48 * 3600))
+        engine.flush_rollups()
+        return envelope_model.summarize(
+            engine.events, db, seconds, engine.registry.snapshot()
+        )
 
     @app.get("/api/topology")
     def topology_get(request: Request, instance: str | None = None, full: bool = False) -> dict:

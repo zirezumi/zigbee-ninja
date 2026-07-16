@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
-import { api, HeadroomInstance, HeadroomView } from "../api";
+import { api, EnvelopeInstance, EnvelopeView, HeadroomInstance, HeadroomView } from "../api";
 
 const WINDOWS: Array<[string, number]> = [
   ["1 h", 3600],
@@ -97,7 +97,110 @@ function KneeScatter({
   return <div ref={host} />;
 }
 
-function InstancePanel({ base, view }: { base: string; view: HeadroomInstance }) {
+function when(ts: number): string {
+  return new Date(ts * 1000).toLocaleString([], { hour12: false });
+}
+
+/** Fine-grained burst peaks and worst-case compositions from recorded
+ * traffic, judged against the calibrated capacity limits: what a short
+ * burst demands of this coordinator, not what the averages suggest. */
+function EnvelopeBlock({ env }: { env: EnvelopeInstance }) {
+  const sustained = env.limits?.sustained_eps ?? null;
+  const ceiling = env.limits?.ceiling_eps ?? null;
+  const pressured =
+    env.burst_utilization_pct !== null && env.burst_utilization_pct >= 80;
+  return (
+    <>
+      <div className="kv-grid">
+        <span title="The single busiest second of transmit traffic recorded in the window, and the busiest 10 second stretch. Benchmark traffic is excluded.">
+          Peak burst
+        </span>
+        <span>
+          {env.peak
+            ? `${env.peak.eps_1s}/s for 1 s at ${when(env.peak.at)} · ${env.peak.eps_10s}/s over 10 s`
+            : "no traffic recorded in the window"}
+          {env.coverage === "commands" && (
+            <span
+              className="chip"
+              title="No wiretap covers this coordinator, so peaks come from observed MQTT commands; frames the controller sends on its own are not counted"
+            >
+              from commands only
+            </span>
+          )}
+        </span>
+        <span title="The peak burst as a share of the sustained capacity limit; the hard ceiling is the rate the benchmark actually reached before the software pipeline bound">
+          Burst vs capacity
+        </span>
+        <span>
+          {env.burst_utilization_pct !== null && sustained !== null ? (
+            <>
+              <span className={pressured ? "chip warn" : "chip ok"}>
+                {env.burst_utilization_pct}% of the sustained limit ({sustained}/s)
+              </span>
+              {ceiling !== null && ` · hard ceiling ${ceiling}/s`}
+            </>
+          ) : (
+            "needs a calibrated capacity limit"
+          )}
+        </span>
+        {env.composed_worst && (
+          <>
+            <span title="Automations seen bursting at the same moment, each priced at its own worst recorded burst: the load if their worst days land together">
+              Worst composed burst
+            </span>
+            <span>
+              {env.composed_worst.eps}/s if {env.composed_worst.commanders.join(" + ")}{" "}
+              peak together (seen together at {when(env.composed_worst.observed_at)})
+            </span>
+          </>
+        )}
+      </div>
+      {env.commanders.length > 0 && (
+        <>
+          <table className="table">
+            <thead>
+              <tr>
+                <th title="Who sent the commands: the automation or MQTT client attribution names">
+                  Commander
+                </th>
+                <th className="num" title="Command bursts recorded for this commander in the window">
+                  Bursts
+                </th>
+                <th title="This commander's single heaviest recorded burst">Worst burst</th>
+                <th className="num" title="Peak commands per second inside that burst">
+                  Peak /s
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {env.commanders.slice(0, 5).map((entry) => (
+                <tr key={entry.commander}>
+                  <td>{entry.commander}</td>
+                  <td className="num">{entry.bursts}</td>
+                  <td>
+                    {entry.worst.commands} commands in {entry.worst.duration_s} s at{" "}
+                    {when(entry.worst.at)}
+                  </td>
+                  <td className="num">{entry.worst.peak_eps}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+    </>
+  );
+}
+
+function InstancePanel({
+  base,
+  view,
+  env,
+}: {
+  base: string;
+  view: HeadroomInstance;
+  env?: EnvelopeInstance;
+}) {
   const knee = view.knee;
   const dens = view.denominators;
   return (
@@ -166,6 +269,17 @@ function InstancePanel({ base, view }: { base: string; view: HeadroomInstance })
             : "—"}
         </span>
       </div>
+      {env && (
+        <>
+          <p
+            className="panel-kicker"
+            title="What short bursts demand of this coordinator: recorded fine-grained peaks and worst-case compositions, not averages"
+          >
+            Burst envelope
+          </p>
+          <EnvelopeBlock env={env} />
+        </>
+      )}
       {view.scatter.length >= 2 ? (
         <KneeScatter points={view.scatter} kneeEps={knee ? knee.eps : null} />
       ) : (
@@ -187,6 +301,7 @@ function InstancePanel({ base, view }: { base: string; view: HeadroomInstance })
 export default function Headroom() {
   const [seconds, setSeconds] = useState(21600);
   const [view, setView] = useState<HeadroomView | null>(null);
+  const [envelope, setEnvelope] = useState<EnvelopeView | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -204,6 +319,24 @@ export default function Headroom() {
     };
     void load();
     const interval = window.setInterval(() => void load(), 30000);
+    return () => {
+      alive = false;
+      window.clearInterval(interval);
+    };
+  }, [seconds]);
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const data = await api<EnvelopeView>(`/api/envelope?seconds=${seconds}`);
+        if (alive) setEnvelope(data);
+      } catch {
+        // The headroom panels stand on their own without envelope data.
+      }
+    };
+    void load();
+    const interval = window.setInterval(() => void load(), 120000);
     return () => {
       alive = false;
       window.clearInterval(interval);
@@ -241,8 +374,61 @@ export default function Headroom() {
         </div>
       ) : (
         bases.map((base) => (
-          <InstancePanel key={base} base={base} view={view.instances[base]} />
+          <InstancePanel
+            key={base}
+            base={base}
+            view={view.instances[base]}
+            env={envelope?.instances[base]}
+          />
         ))
+      )}
+      {envelope && envelope.fanouts.length > 0 && (
+        <div className="panel">
+          <p
+            className="panel-kicker"
+            title="Automations seen commanding several coordinators at the same moment. The combined rate is what one coordinator would have to absorb if those meshes were consolidated."
+          >
+            Cross-coordinator fan-outs
+          </p>
+          <table className="table">
+            <thead>
+              <tr>
+                <th title="The automation or MQTT client the commands were attributed to">
+                  Commander
+                </th>
+                <th title="Coordinators this commander was seen bursting on at the same moment, each with its worst recorded burst there">
+                  Coordinators (worst burst each)
+                </th>
+                <th
+                  className="num"
+                  title="The sum of the per-coordinator worst bursts: the single-mesh load if these meshes were consolidated"
+                >
+                  Combined /s
+                </th>
+                <th title="When the concurrent bursts were recorded">Seen</th>
+              </tr>
+            </thead>
+            <tbody>
+              {envelope.fanouts.slice(0, 8).map((fanout) => (
+                <tr key={fanout.commander}>
+                  <td>{fanout.commander}</td>
+                  <td>
+                    {Object.entries(fanout.instances)
+                      .map(([instance, eps]) => `${instance} (${eps}/s)`)
+                      .join(" · ")}
+                  </td>
+                  <td className="num">{fanout.combined_eps}</td>
+                  <td>{when(fanout.observed_at)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="hint">
+            Read-only analysis of recorded traffic: nothing here transmits on the mesh.
+            Combined rates assume each coordinator's worst burst lands at the same moment,
+            which the recorded overlap shows has happened at least once.
+          </p>
+        </div>
       )}
     </>
   );

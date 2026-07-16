@@ -294,6 +294,25 @@ supports changing."*
 > Top spenders currency. High confidence by construction; the same
 > 10 µs/s queue floor applies.
 >
+> **Implementation (V2.M4, burst envelope analysis):** the rebalancing
+> core ships first as `capacity/envelope.py` + `GET /api/envelope`,
+> surfaced on the Headroom view. Per instance it reports the recorded
+> fine-grained peak (fixed 1 s bins over the raw event store's wire TX
+> stream, refined to an exact sliding 1 s window around the busiest
+> seconds, plus the 10 s peak; instances without wire coverage fall back
+> to T0 command chains, tagged `inferred`), per-commander worst observed
+> bursts from the recorded chains, and the worst composed burst: commander
+> sets observed bursting concurrently, each member priced at its own worst
+> burst anywhere in the window: membership is observed, never
+> hypothesized. A fleet-level fan-out table lists commanders observed
+> bursting on several coordinators at the same moment with the combined
+> per-coordinator worst rates: the number a consolidation what-if must
+> survive. Peaks are judged against the sustained capacity limit (the
+> spread-mode knee) and the hard ceiling the spread ramp actually
+> achieved; benchmark windows are excluded from every aggregate (§11.5).
+> The rebalancing advisor and the what-if scenario pricing build on this
+> module.
+>
 > **Implementation (V2.M3, reporting advisor):** per-device autonomous
 > spend over the trailing day (rates divided by recorded time, exactly
 > like `/api/ledger`) compares two ways: against the median of at least
