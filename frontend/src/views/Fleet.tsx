@@ -1,7 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import uPlot from "uplot";
+import "uplot/dist/uPlot.min.css";
 import {
   AirtimeLive,
   AlertBrief,
+  BrokerView,
   FleetMessage,
   HeadroomInstance,
   HeadroomView,
@@ -14,7 +17,16 @@ import {
 } from "../api";
 
 const KIND_ORDER = ["command", "state", "bridge", "availability", "probe", "other"];
-const HISTORY_LENGTH = 60;
+const HISTORY_LENGTH = 300; // seconds of 1 s samples the live chart accumulates
+
+const KIND_TITLES: Record<string, string> = {
+  command: "Commands sent to devices (…/set and …/get topics)",
+  state: "State updates published by devices",
+  bridge: "Zigbee2MQTT's own bridge topics (logs, registries, health)",
+  availability: "Device online/offline transitions",
+  probe: "zigbee-ninja's own telemetry (always accounted separately)",
+  other: "Everything else under this instance's base topic",
+};
 
 function totalPerSecond(kinds: Record<string, number> | undefined): number {
   if (!kinds) return 0;
@@ -23,19 +35,60 @@ function totalPerSecond(kinds: Record<string, number> | undefined): number {
     .reduce((sum, [, count]) => sum + count, 0);
 }
 
-function Sparkline({ values }: { values: number[] }) {
-  const width = 140;
-  const height = 30;
-  const max = Math.max(1, ...values);
-  const step = values.length > 1 ? width / (values.length - 1) : width;
-  const points = values
-    .map((value, index) => `${(index * step).toFixed(1)},${(height - 2 - (value / max) * (height - 4)).toFixed(1)}`)
-    .join(" ");
-  return (
-    <svg className="sparkline" viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="none">
-      {values.length > 1 && <polyline points={points} />}
-    </svg>
-  );
+/** Live message-rate histogram: 1 s buckets streamed from the fleet socket,
+ * stepped/filled like a histogram, with labeled time and rate axes. */
+function RateChart({ history, endTs }: { history: number[]; endTs: number }) {
+  const host = useRef<HTMLDivElement | null>(null);
+  const plot = useRef<uPlot | null>(null);
+
+  useEffect(() => {
+    if (!host.current) return;
+    const options: uPlot.Options = {
+      width: Math.max(host.current.clientWidth, 360),
+      height: 150,
+      scales: {
+        x: { time: true },
+        y: { range: (_u, _min, max) => [0, Math.max(max, 5)] },
+      },
+      axes: [
+        {
+          stroke: "#8b95a7",
+          grid: { stroke: "rgba(128, 136, 152, 0.15)" },
+          ticks: { stroke: "rgba(128, 136, 152, 0.25)" },
+        },
+        {
+          label: "messages / s",
+          stroke: "#8b95a7",
+          grid: { stroke: "rgba(128, 136, 152, 0.15)" },
+          ticks: { stroke: "rgba(128, 136, 152, 0.25)" },
+        },
+      ],
+      series: [
+        {},
+        {
+          label: "msg/s",
+          stroke: "#4cc38a",
+          fill: "rgba(76, 195, 138, 0.18)",
+          paths: uPlot.paths?.stepped ? uPlot.paths.stepped({ align: 1 }) : undefined,
+        },
+      ],
+      legend: { show: false },
+      cursor: { show: false },
+    };
+    plot.current = new uPlot(options, [[], []], host.current);
+    return () => {
+      plot.current?.destroy();
+      plot.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!plot.current) return;
+    const xs = history.map((_, index) => endTs - (history.length - 1 - index));
+    plot.current.setData([xs, history]);
+  }, [history, endTs]);
+
+  return <div ref={host} className="rate-chart" />;
 }
 
 interface Coverage {
@@ -46,9 +99,21 @@ interface Coverage {
 
 function CoverageMeter({ coverage }: { coverage: Coverage }) {
   const tiers: Array<[label: string, live: boolean, title: string]> = [
-    ["T0", coverage.t0, "MQTT firehose (broker connection)"],
-    ["T1", coverage.t1, "Z2M extension probe (heartbeating)"],
-    ["T2", coverage.t2, "Passive wire tap (flow streaming)"],
+    [
+      "MQTT firehose",
+      coverage.t0,
+      "The broker connection itself — sees every MQTT command and state publish",
+    ],
+    [
+      "Z2M extension probe",
+      coverage.t1,
+      "A small probe running inside Zigbee2MQTT, reporting every Zigbee frame it handles — including housekeeping that never reaches MQTT",
+    ],
+    [
+      "Wiretap",
+      coverage.t2,
+      "Passive capture of the coordinator's network link — exact frame bytes and timing, decoded by the collector",
+    ],
   ];
   return (
     <span className="coverage">
@@ -74,10 +139,28 @@ function alertChip(alerts: AlertBrief[]): { label: string; className: string } |
   };
 }
 
-interface InstanceCardProps {
+function Fact({
+  label,
+  title,
+  children,
+}: {
+  label: string;
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="fact" title={title}>
+      <span className="fact-label">{label}</span>
+      <span className="fact-value">{children}</span>
+    </div>
+  );
+}
+
+interface InstanceRowProps {
   instance: InstanceInfo;
   kinds: Record<string, number> | undefined;
   history: number[];
+  endTs: number;
   latency?: LatencyStats;
   probe?: ProbeStats;
   airtime?: AirtimeLive;
@@ -87,10 +170,11 @@ interface InstanceCardProps {
   alerts: AlertBrief[];
 }
 
-function InstanceCard({
+function InstanceRow({
   instance,
   kinds,
   history,
+  endTs,
   latency,
   probe,
   airtime,
@@ -98,11 +182,11 @@ function InstanceCard({
   headroom,
   coverage,
   alerts,
-}: InstanceCardProps) {
+}: InstanceRowProps) {
   const online = instance.online;
   const chip = alertChip(alerts);
   return (
-    <div className="instance-card">
+    <div className="instance-row">
       <div className="instance-head">
         <span className={online === false ? "dot off" : online ? "dot on" : "dot unknown"} />
         <span className="instance-name">{instance.base_topic}</span>
@@ -116,66 +200,94 @@ function InstanceCard({
           <span className="rate-unit">msg/s</span>
         </span>
       </div>
-      <Sparkline values={history} />
-      <div className="kv-grid">
-        <span>Z2M</span>
-        <span>{instance.version ?? "—"}</span>
-        <span>Channel</span>
-        <span>{instance.channel ?? "—"}</span>
-        <span>Adapter</span>
-        <span className="clip" title={instance.adapter_port ?? undefined}>
-          {instance.coordinator_type ?? "—"}
-          {instance.adapter_port ? ` · ${instance.adapter_port}` : ""}
-        </span>
-        <span>Devices</span>
-        <span>
-          {instance.device_count} ({instance.router_count} routers,{" "}
-          {instance.end_device_count} end devices)
-        </span>
-        <span>Groups</span>
-        <span>{instance.group_count}</span>
-        <span>Probe</span>
-        <span>
+      <RateChart history={history} endTs={endTs} />
+      <div className="facts">
+        <Fact
+          label="Zigbee2MQTT"
+          title="Version this instance reported on its bridge/info topic"
+        >
+          {instance.version ?? "—"}
+        </Fact>
+        <Fact
+          label="Channel"
+          title="Zigbee radio channel (11–26, in the 2.4 GHz band). Instances on the same channel share one pool of airtime."
+        >
+          {instance.channel ?? "—"}
+        </Fact>
+        <Fact
+          label="Adapter"
+          title="The coordinator radio hardware, and the network address or serial port Zigbee2MQTT reaches it at"
+        >
+          <span className="clip" title={instance.adapter_port ?? undefined}>
+            {instance.coordinator_type ?? "—"}
+            {instance.adapter_port ? ` · ${instance.adapter_port}` : ""}
+          </span>
+        </Fact>
+        <Fact
+          label="Devices"
+          title="Devices paired to this coordinator. Routers (mains-powered) relay traffic for the mesh; end devices (usually battery) don't."
+        >
+          {instance.device_count} ({instance.router_count} routers, {instance.end_device_count}{" "}
+          end devices)
+        </Fact>
+        <Fact
+          label="Groups"
+          title="Zigbee groups on this instance. A single group command is relayed by every router, so heavy group use multiplies airtime."
+        >
+          {instance.group_count}
+        </Fact>
+        <Fact
+          label="Probe"
+          title="zigbee-ninja's extension running inside this Zigbee2MQTT instance — deployed and removed from the Footprint page"
+        >
           {probe?.version
             ? `v${probe.version}${probe.enabled === false ? " (paused)" : ""}`
             : "not deployed"}
-        </span>
-        <span>Airtime</span>
-        <span title="Share of the CSMA-discounted channel budget, trailing 60 s (wire tier)">
+        </Fact>
+        <Fact
+          label="Airtime"
+          title="Share of the radio channel's usable capacity this coordinator's traffic occupied over the last 60 s, measured at the wiretap"
+        >
           {airtime
             ? `${airtime.budget_pct_60s.toFixed(2)}% of budget · ${Math.round(airtime.us_per_s_60s)} µs/s`
             : "—"}
-        </span>
-        <span>Wire RTT</span>
-        <span title="sendUnicast → delivery confirmation at the NCP boundary (T2, authoritative)">
+        </Fact>
+        <Fact
+          label="Wire round-trip"
+          title="Time from handing a command to the coordinator until the mesh confirms delivery, measured on the coordinator link (the most accurate latency view)"
+        >
           {wireLatency
             ? `p50 ${wireLatency.p50_ms} ms · p95 ${wireLatency.p95_ms} ms (${wireLatency.count})`
             : "—"}
-        </span>
-        <span>Knee</span>
-        <span title="Calibrated sustainable command rate (§11); ≥ marks a lower bound. Load share from the trailing hour.">
+        </Fact>
+        <Fact
+          label="Capacity limit"
+          title="Maximum sustainable command rate, measured by the Calibration benchmark. ≥ means the benchmark ended before anything degraded, so the true limit is at least this. 'used' compares the trailing hour's load against it."
+        >
           {headroom?.knee
             ? `${headroom.knee.kind === "mesh_knee" ? "" : "≥"}${headroom.knee.eps}/s` +
-              (headroom.headroom
-                ? ` · load ${headroom.headroom.knee_utilization_pct}% of knee`
-                : "")
+              (headroom.headroom ? ` · ${headroom.headroom.knee_utilization_pct}% used` : "")
             : "not calibrated"}
-        </span>
-        <span>Z2M echo</span>
-        <span title="Command → state-echo proxy at the Z2M boundary (T1, approximate)">
+        </Fact>
+        <Fact
+          label="Z2M echo"
+          title="Time from an MQTT command to the device's state echo, seen at the Zigbee2MQTT boundary (approximate — includes queueing in Z2M)"
+        >
           {latency
             ? `p50 ${latency.p50_ms} ms · p95 ${latency.p95_ms} ms (${latency.count})`
             : "—"}
-        </span>
+        </Fact>
       </div>
-      <CoverageMeter coverage={coverage} />
-      <div className="kinds">
-        {KIND_ORDER.map((kind) => (
-          <span key={kind} className="kind">
-            <span className="kind-name">{kind}</span>
-            <span className="kind-count">{kinds?.[kind] ?? 0}</span>
-          </span>
-        ))}
+      <div className="row-foot">
+        <CoverageMeter coverage={coverage} />
+        <div className="kinds">
+          {KIND_ORDER.map((kind) => (
+            <span key={kind} className="kind" title={KIND_TITLES[kind]}>
+              <span className="kind-name">{kind}</span>
+              <span className="kind-count">{kinds?.[kind] ?? 0}</span>
+            </span>
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -183,9 +295,10 @@ function InstanceCard({
 
 interface FleetProps {
   onReconfigure: () => void;
+  brokerInfo: BrokerView | null;
 }
 
-export default function Fleet({ onReconfigure }: FleetProps) {
+export default function Fleet({ onReconfigure, brokerInfo }: FleetProps) {
   const [message, setMessage] = useState<FleetMessage | null>(null);
   const [socketState, setSocketState] = useState<"connecting" | "open" | "closed">("connecting");
   const historyRef = useRef<Record<string, number[]>>({});
@@ -199,7 +312,7 @@ export default function Fleet({ onReconfigure }: FleetProps) {
         const data = await api<HeadroomView>("/api/headroom?seconds=3600");
         if (alive) setHeadroom(data);
       } catch {
-        // knee line simply stays absent until the next poll succeeds
+        // capacity line simply stays absent until the next poll succeeds
       }
     };
     void load();
@@ -251,14 +364,24 @@ export default function Fleet({ onReconfigure }: FleetProps) {
   const globalRate = totalPerSecond(message?.rates["*"]);
   const alerts = message?.alerts ?? [];
   const globalAlerts = alerts.filter((alert) => alert.instance === "*");
+  const brokerAddress = brokerInfo?.host
+    ? `${brokerInfo.host}:${brokerInfo.port ?? 1883}`
+    : null;
 
   return (
     <>
       <div className={`banner ${broker?.state === "connected" ? "ok" : "warn"}`}>
         <span>
           Broker: <strong>{broker?.state ?? socketState}</strong>
+          {brokerAddress ? ` (${brokerAddress})` : ""}
           {broker?.error ? ` — ${broker.error}` : ""}
-          {broker?.state === "connected" ? ` · ${globalRate} msg/s across the broker` : ""}
+          {broker?.state === "connected" ? (
+            <span title="Total message rate across every topic on this broker — Zigbee2MQTT traffic and everything else sharing it">
+              {` · ${globalRate} msg/s`}
+            </span>
+          ) : (
+            ""
+          )}
         </span>
         <button className="ghost small" onClick={onReconfigure}>
           Reconfigure
@@ -289,7 +412,7 @@ export default function Fleet({ onReconfigure }: FleetProps) {
           </p>
         </div>
       ) : (
-        <div className="cards">
+        <div className="instance-rows">
           {instances.map((instance) => {
             const base = instance.base_topic;
             const probe = message?.probes[base];
@@ -297,11 +420,12 @@ export default function Fleet({ onReconfigure }: FleetProps) {
             const flow = message?.tap.flows.find((candidate) => candidate.instance === base);
             const now = message?.ts ?? 0;
             return (
-              <InstanceCard
+              <InstanceRow
                 key={base}
                 instance={instance}
                 kinds={message?.rates[base]}
                 history={historyRef.current[base] ?? []}
+                endTs={now}
                 latency={message?.latency[base]}
                 probe={probe}
                 airtime={message?.tap.airtime[base]}

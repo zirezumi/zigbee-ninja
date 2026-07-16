@@ -106,15 +106,21 @@ function InstancePanel({ base, view }: { base: string; view: HeadroomInstance })
         <p className="panel-kicker">{base}</p>
         {knee ? (
           <>
-            <span className="chip ok">
-              knee {kneeLabel(view)}
-              {knee.mode === "spread" ? " · NCP (spread)" : ""}
-              {knee.kind === "pipeline_ceiling"
-                ? knee.mode === "spread"
-                  ? " · global pipeline ceiling"
-                  : " · per-device pipeline ceiling"
-                : ""}
+            <span
+              className="chip ok"
+              title="The calibrated maximum sustainable command rate; ≥ marks a lower bound — the benchmark ended before anything degraded"
+            >
+              capacity limit {kneeLabel(view)}
+              {knee.mode === "spread" ? " · whole coordinator" : " · single device"}
             </span>
+            {knee.kind === "pipeline_ceiling" && (
+              <span
+                className="chip"
+                title="The benchmark driver could no longer add load — the Zigbee2MQTT/driver software pipeline is the binding constraint, so the radio's true limit is at least this"
+              >
+                software pipeline bound
+              </span>
+            )}
             {knee.stale_environment && (
               <span className="chip warn">firmware changed since calibration — recalibrate?</span>
             )}
@@ -124,31 +130,39 @@ function InstancePanel({ base, view }: { base: string; view: HeadroomInstance })
         )}
       </div>
       <div className="kv-grid">
-        <span>Channel budget</span>
-        <span title="Share of the CSMA-discounted 250 kbps channel over the window (denominator 1)">
+        <span title="Share of the radio channel's usable capacity this instance consumed over the window — capacity view 1 of 3">
+          Channel budget
+        </span>
+        <span>
           {dens.channel_budget.pct}% · {Math.round(dens.channel_budget.us_per_s)} µs/s
         </span>
-        <span>NCP knee</span>
-        <span title="Denominator 2 — a saturated or censored ramp only bounds it from below">
+        <span title="Maximum command rate the coordinator sustained in a whole-coordinator (spread) benchmark; ≥ means only bounded from below — capacity view 2 of 3">
+          Coordinator limit
+        </span>
+        <span>
           {dens.ncp_knee
             ? `${dens.ncp_knee.provenance === "lower_bound" ? "≥" : ""}${dens.ncp_knee.eps}/s (${dens.ncp_knee.provenance})`
             : "—"}
         </span>
-        <span>Pipeline ceiling</span>
-        <span title="Denominator 3 — Zigbee2MQTT's per-device service rate where the ramp saturated">
+        <span title="Zigbee2MQTT serves each device from its own queue; this is the rate where a single-device benchmark saturated — capacity view 3 of 3">
+          Per-device ceiling
+        </span>
+        <span>
           {dens.pipeline ? `${dens.pipeline.eps}/s per device` : "not reached"}
         </span>
-        <span>Load</span>
+        <span title="Observed command load over the selected window">Load</span>
         <span>
           {view.rates
             ? `p50 ${view.rates.p50_eps}/s · p95 ${view.rates.p95_eps}/s · max ${view.rates.max_eps}/s`
             : "no traffic in window"}
         </span>
-        <span>Headroom</span>
+        <span title="How much capacity remains: steady = limit minus typical (p95) load; burst = limit minus the worst peak">
+          Headroom
+        </span>
         <span title={view.headroom ? view.headroom.granularity : undefined}>
           {view.headroom
             ? `steady ${view.headroom.steady_eps}/s · burst ${view.headroom.burst_eps}/s · ` +
-              `${view.headroom.knee_utilization_pct}% of knee`
+              `${view.headroom.knee_utilization_pct}% of capacity used`
             : "—"}
         </span>
       </div>
@@ -160,9 +174,10 @@ function InstancePanel({ base, view }: { base: string; view: HeadroomInstance })
       {knee && (
         <p className="hint">
           Calibrated against {knee.target ?? "?"} ({knee.rtt_source ?? "?"} RTT
-          {knee.breach ? `, ended by ${knee.breach}` : ""}). Points bending upward well left
-          of the dashed knee line would mean the mesh degrades below its calibrated
-          capacity — the continuous validation signal.
+          {knee.breach ? `, ended by ${knee.breach}` : ""}). Each dot is one rollup window:
+          command load across, delivery latency up. Dots bending upward well left of the
+          dashed capacity line would mean the mesh now degrades below its calibrated
+          limit — the cue to recalibrate.
         </p>
       )}
     </div>
@@ -212,8 +227,9 @@ export default function Headroom() {
           ))}
         </div>
         <span className="hint">
-          Three capacity denominators side by side, with headroom against the calibrated
-          knee and the latency-vs-load scatter that validates it continuously.
+          Three views of capacity side by side — radio airtime, the coordinator's measured
+          limit, and the per-device software ceiling — with headroom against the calibrated
+          limit and a latency-vs-load scatter that keeps validating it.
         </span>
       </div>
       {error && <p className="error">{error}</p>}

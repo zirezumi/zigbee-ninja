@@ -109,13 +109,13 @@ METRICS: dict[str, dict] = {
         "scope": "instance",
         "kind": "gauge",
         "unit": "%",
-        "description": "Load as a share of the calibrated knee (60 s window)",
+        "description": "Load as a share of the calibrated capacity limit (60 s window)",
     },
     "steady_headroom_eps": {
         "scope": "instance",
         "kind": "gauge",
         "unit": "eps",
-        "description": "Calibrated knee minus current load (60 s window)",
+        "description": "Calibrated capacity limit minus current load (60 s window)",
     },
     "avg_tx": {
         "scope": "instance",
@@ -190,7 +190,7 @@ SEED_RULES: list[dict] = [
     },
     {
         "builtin": "knee_utilization",
-        "name": "Knee utilization high",
+        "name": "Capacity utilization high",
         "metric": "knee_utilization_pct",
         "instance": "*",
         "op": ">",

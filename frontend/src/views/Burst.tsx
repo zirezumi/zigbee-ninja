@@ -189,9 +189,10 @@ export default function Burst() {
       <div className="panel">
         <p className="panel-kicker">Raw event timeline</p>
         <p className="hint">
-          Every observed event — MQTT messages at T0 and decoded EZSP frames at T2 — from
-          the §12 raw store (hot hour + hourly Parquet segments). Drag on the chart to zoom;
-          windows of {EVENT_TABLE_WINDOW_S} s or less show the raw rows.
+          Every observed event — MQTT messages and decoded coordinator-link frames — from
+          the raw event store: the newest hour held in memory, older hours archived on disk
+          (48 h by default, adjustable in Settings). Drag on the chart to zoom; windows of{" "}
+          {EVENT_TABLE_WINDOW_S} s or less list the individual events.
         </p>
         <div className="row">
           <label>
@@ -237,7 +238,8 @@ export default function Burst() {
           <p className="hint">
             {formatClock(timeline.start, windowSeconds < 60)} –{" "}
             {formatClock(timeline.end, windowSeconds < 60)} · bucket {timeline.bucket_ms} ms
-            · store: {timeline.store.hot_rows} hot rows, {timeline.store.segments} segments (
+            · store: {timeline.store.hot_rows} events in the newest hour ·{" "}
+            {timeline.store.segments} archived hour{timeline.store.segments === 1 ? "" : "s"} (
             {(timeline.store.segment_bytes / 1_000_000).toFixed(1)} MB)
             {timeline.store.dropped > 0 ? ` · ${timeline.store.dropped} dropped` : ""}
           </p>
@@ -254,10 +256,16 @@ export default function Burst() {
               <tr>
                 <th>Opened</th>
                 <th>Target</th>
-                <th>Verb</th>
-                <th>Commander</th>
-                <th className="num">Echoes</th>
-                <th className="num">First echo</th>
+                <th title="set changes state; get reads it">Verb</th>
+                <th title="Who issued the command — the Home Assistant automation, script, or user when the HA integration is connected, else the MQTT client">
+                  Commander
+                </th>
+                <th className="num" title="State publishes the command provoked">
+                  Echoes
+                </th>
+                <th className="num" title="Command to first state echo — end-to-end responsiveness">
+                  First echo
+                </th>
               </tr>
             </thead>
             <tbody>

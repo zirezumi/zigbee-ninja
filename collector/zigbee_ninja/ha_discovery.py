@@ -8,7 +8,7 @@ ever claimed (empty retained payloads), keeping the footprint contract (P2).
 When granted for an instance, the publisher emits retained discovery configs
 (one HA device per coordinator, entities carrying an `origin` block), then
 refreshes state topics on a fixed cadence: headline capacity metrics (channel
-budget %, knee utilization %, wire p95 latency, MQTT message rate) as sensors
+budget %, capacity utilization %, wire p95 latency, MQTT message rate) as sensors
 and the active-alert state as a `problem` binary_sensor whose attributes list
 the alert names. Sensors carry `expire_after`, so a dead collector reads
 *unavailable* in HA rather than forever-fresh — no availability topic and no
@@ -44,7 +44,7 @@ SENSORS = (
     },
     {
         "key": "knee_utilization_pct",
-        "name": "Knee utilization",
+        "name": "Capacity utilization",
         "unit": "%",
         "icon": "mdi:speedometer",
     },

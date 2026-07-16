@@ -231,10 +231,11 @@ function TapTokenPanel() {
   if (tap === null) return null;
   return (
     <div className="panel">
-      <p className="panel-kicker">Wire-tap agent token</p>
+      <p className="panel-kicker">Wiretap agent token</p>
       <p className="hint">
-        A ninja-tap agent authenticates its outbound pcap stream with this collector-scoped
-        token. Treat it like a password: anyone holding it can stream capture data here.
+        A ninja-tap capture agent authenticates its outbound stream with this
+        collector-scoped token. Treat it like a password: anyone holding it can stream
+        capture data here.
       </p>
       <p>
         {revealed ? (

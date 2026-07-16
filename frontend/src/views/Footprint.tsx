@@ -2,7 +2,7 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 import { api, ApiError, HaView, TapStats, TapView, Tile } from "../api";
 
 const CAPABILITY_LABELS: Record<string, string> = {
-  z2m_extension: "Z2M extension probe (T1)",
+  z2m_extension: "Z2M extension probe (runs inside Zigbee2MQTT)",
   topology_pull: "Topology pulls (active mesh scans)",
   mqtt_discovery: "HA entities via MQTT discovery (standing publisher)",
 };
@@ -152,12 +152,13 @@ function TapAgentsPanel({ tap }: { tap: TapStats | null }) {
   const flows = tap?.flows ?? [];
   return (
     <div className="panel">
-      <p className="panel-kicker">Wire tap agents (T2)</p>
+      <p className="panel-kicker">Wiretap agents</p>
       <p className="hint">
-        A ninja-tap agent is a dumb capture process: it streams filtered pcap of the
-        coordinator links outbound to this collector over a scoped token, and all decoding
-        happens here. Uninstall on the capture host with <code>ninja-tap uninstall</code>{" "}
-        (GUI-managed lifecycle arrives with the T2 tile).
+        A capture agent is a small process on a host that can see the coordinators' network
+        traffic. It knows nothing about Zigbee: it streams a filtered packet capture
+        outbound to this collector over a scoped token, and all decoding happens here.
+        Uninstall on the capture host with <code>ninja-tap uninstall</code> (one-click
+        removal from this page is planned).
       </p>
       {!tap || tap.agents === 0 ? (
         <p className="hint">No agents connected.</p>
@@ -260,8 +261,15 @@ export default function Footprint() {
               <th>Capability</th>
               <th>Target</th>
               <th>Status</th>
-              <th>Hooks (self-reported)</th>
-              <th className="num">Drops</th>
+              <th title="Which Zigbee2MQTT event hooks the extension probe attached on this instance's version — self-reported in its heartbeat">
+                Hooks (self-reported)
+              </th>
+              <th
+                className="num"
+                title="Telemetry the probe had to drop under pressure, plus gaps in its sequence numbers"
+              >
+                Drops
+              </th>
               <th></th>
             </tr>
           </thead>
@@ -279,10 +287,14 @@ export default function Footprint() {
                     {tile.detail && <div className="hint">{tile.detail}</div>}
                   </td>
                   <td className="hooks">
-                    {tile.probe.hooks.length > 0 ? tile.probe.hooks.join(", ") : "—"}
+                    {tile.capability === "z2m_extension" && tile.probe.hooks.length > 0
+                      ? tile.probe.hooks.join(", ")
+                      : "—"}
                   </td>
                   <td className="num">
-                    {(counters.dropped ?? 0) + (tile.probe.seq_gaps ?? 0) || ""}
+                    {tile.capability === "z2m_extension"
+                      ? (counters.dropped ?? 0) + (tile.probe.seq_gaps ?? 0) || ""
+                      : ""}
                   </td>
                   <td className="num">
                     {["available", "revoked", "error"].includes(tile.status) && (

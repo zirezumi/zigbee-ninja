@@ -168,10 +168,17 @@ function PreviewPanel({
     <div className="panel">
       <div className="toolbar">
         <p className="panel-kicker">
-          Dry run — {spread ? "NCP spread ramp" : `calibrate ${preview.target}`} on{" "}
+          Dry run — {spread ? "whole-coordinator ramp" : `calibrate ${preview.target}`} on{" "}
           {preview.instance}
         </p>
-        {spread && <span className="chip warn">spread · denominator 2</span>}
+        {spread && (
+          <span
+            className="chip warn"
+            title="Reads spread across several routers at once, so the coordinator itself is what saturates"
+          >
+            spread mode
+          </span>
+        )}
         <span className="chip">{preview.rtt_source === "wire" ? "wire RTT" : "echo RTT"}</span>
       </div>
       <p>{preview.traffic}</p>
@@ -410,10 +417,10 @@ function CandidatesPanel({
         <button
           className="small"
           disabled={eligibleCount < 4 || busyTarget !== null}
-          title="Round-robin reads across the top routers so no single device's queue binds first — probes the NCP knee (denominator 2)"
+          title="Round-robin reads across the top routers so no single device's queue binds first — measures the whole coordinator's capacity limit instead of one device's"
           onClick={onSpread}
         >
-          Preview NCP spread ramp
+          Preview whole-coordinator ramp
         </button>
       </div>
       {view.candidates.length === 0 ? (
@@ -499,18 +506,25 @@ function HistoryPanel({
                 {record.status === "completed" ? (
                   record.knee ? (
                     <strong>
-                      knee {record.knee.censored ? "≥" : ""}
+                      capacity limit {record.knee.censored ? "≥" : ""}
                       {record.knee.eps}/s
                     </strong>
                   ) : (
-                    <span className="chip warn">no knee determined</span>
+                    <span className="chip warn">no limit determined</span>
                   )
                 ) : (
                   <span className={record.status === "skipped" ? "chip warn" : "chip bad"}>
                     {record.status}
                   </span>
                 )}{" "}
-                {record.mode === "spread" && <span className="chip warn">spread</span>}{" "}
+                {record.mode === "spread" && (
+                  <span
+                    className="chip warn"
+                    title="Whole-coordinator run: reads spread across several routers at once"
+                  >
+                    spread
+                  </span>
+                )}{" "}
                 {record.batch_id && <span className="chip">{record.batch_id}</span>}{" "}
                 {record.knee?.breach && <span className="hint">({record.knee.breach})</span>}
                 {drifted && (
@@ -686,8 +700,9 @@ export default function Calibration() {
     <>
       <div className="banner ok">
         <span>
-          A calibration run transmits on purpose: benign unicast reads of one router, ramped
-          until the latency knee shows. Every run is individually authorized from its dry-run
+          A calibration run transmits on purpose: benign read requests to a router, ramped
+          up until responses start slowing — that turning point is the coordinator's
+          measured capacity limit. Every run is individually authorized from its dry-run
           preview — there is no standing grant — and an abort control stays live throughout.
         </span>
       </div>

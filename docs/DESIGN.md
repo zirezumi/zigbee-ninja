@@ -576,13 +576,22 @@ Core entities: `Instance`, `Device`, `Group`, `Probe/Tile`, `FrameRecord`,
 live streams (1 s fleet counters, burst-inspector tail). **Frontend:** React +
 TypeScript + Vite, dark-first but fully dual-theme; uPlot for dense/streaming
 time series, d3 for structural views (attribution breakdowns, topology graph).
-Static bundle served by the collector. **Auth:** single admin account (argon2)
-standalone; HA ingress trust in add-on mode (fast-follow). Default port `8686`.
+Static bundle served by the collector; views are addressed by URL hash so
+refresh and the browser's back button preserve navigation. **Auth:** single
+admin account (argon2) standalone; HA ingress trust in add-on mode
+(fast-follow). Default port `8686`.
+
+**Terminology note:** the GUI presents the calibrated knee (§10, §11) as the
+**capacity limit** — "knee" remains the engineering term throughout this
+document and the API/metric identifiers (`knee_utilization_pct` etc.), which
+stay stable.
 
 **V1 views:**
 
-1. **Fleet** — per-coordinator utilization dials (airtime % and knee %), 24 h
-   sparklines, active alerts, coverage meters.
+1. **Fleet** — one full-width row per coordinator: a live axis-labeled
+   message-rate histogram (1 s stream), instance facts with plain-language
+   tooltips, airtime/latency/capacity readouts, active alerts, and the
+   coverage meter; the broker banner carries the configured host:port.
 2. **Coordinator detail** — stacked series by causality bucket; message-rate,
    airtime, and latency panes; error overlay; shared-channel pooling note.
    The §10 utilization/headroom outputs shipped first as the dedicated
@@ -591,15 +600,16 @@ standalone; HA ingress trust in add-on mode (fast-follow). Default port `8686`.
    knee-validation scatter (uPlot); Fleet cards carry the knee line.
 3. **Attribution explorer** — pivotable bucket × device-class × commander matrix;
    top-N devices/automations; the redundant-command report.
-4. **Wire tap** — per-coordinator wire-tier telemetry: agent/flow health
+4. **Wiretap** — per-coordinator wire-tier telemetry: agent/flow health
    (CRC, retransmits), airtime buckets with amplification, the wire latency
    SLI, delivery statuses, and mesh-health counters. The first slice of
    Coordinator detail, delivered as its own view while the stacked-series
    panes are pending.
-5. **Burst inspector** — event-level timeline over the raw window (§12 store),
-   zoom to milliseconds by re-querying tighter windows at finer buckets, an
-   event table at the zoomed range, and the window's command chains as spans
-   (opened → first echo) — the micro-gantt in its V1 form.
+5. **Burst inspector** (GUI nav label: **Benchmark**) — event-level timeline
+   over the raw window (§12 store), zoom to milliseconds by re-querying
+   tighter windows at finer buckets, an event table at the zoomed range, and
+   the window's command chains as spans (opened → first echo) — the
+   micro-gantt in its V1 form.
 6. **Topology** — mesh graph from the latest snapshot (LQI-weighted edges,
    relay-load-sized routers), freshness-stamped. First slice shipped: per-
    instance grant-gated on-demand pulls (15 min rate limit, one scan at a

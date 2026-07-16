@@ -18,10 +18,16 @@ const WINDOWS: Array<[label: string, seconds: number]> = [
 
 const BUCKET_ORDER = ["tx_unicast", "tx_groupcast", "rx", "rx_mesh"];
 const BUCKET_LABELS: Record<string, string> = {
-  tx_unicast: "tx unicast",
-  tx_groupcast: "tx groupcast",
-  rx: "rx",
-  rx_mesh: "rx mesh",
+  tx_unicast: "sent (unicast)",
+  tx_groupcast: "sent (group)",
+  rx: "received",
+  rx_mesh: "mesh overhead",
+};
+const BUCKET_TITLES: Record<string, string> = {
+  tx_unicast: "Commands sent to a single device",
+  tx_groupcast: "Commands sent to a group — relayed by every router, so far costlier on air",
+  rx: "Frames arriving at the coordinator (reports, replies)",
+  rx_mesh: "Routing bookkeeping: path reports and route-error notices",
 };
 
 function AirtimeBar({ buckets }: { buckets: AirtimeLive["buckets"] }) {
@@ -69,27 +75,35 @@ function FlowCard({ flow, airtime, latency, now }: FlowCardProps) {
       </div>
       {airtime ? <AirtimeBar buckets={airtime.buckets} /> : <div className="classbar empty" />}
       <div className="kv-grid">
-        <span>Coordinator</span>
+        <span title="The network address of this coordinator's Zigbee radio">Coordinator</span>
         <span className="clip mono">{flow.coordinator}</span>
-        <span>Airtime</span>
+        <span title="Radio time this coordinator's traffic occupied over the last 60 s">
+          Airtime
+        </span>
         <span>
           {airtime
             ? `${Math.round(airtime.us_per_s_60s)} µs/s · ${airtime.airtime_pct_60s.toFixed(3)}% duty (${airtime.provenance})`
             : "—"}
         </span>
-        <span>Wire RTT</span>
+        <span title="Time from handing a command to the coordinator until the mesh confirms delivery">
+          Wire round-trip
+        </span>
         <span>
           {latency
             ? `p50 ${latency.p50_ms} ms · p95 ${latency.p95_ms} ms · max ${latency.max_ms} ms (${latency.count})`
             : "—"}
         </span>
-        <span>Delivery</span>
+        <span title="Commands the mesh confirmed delivered vs failed; 'in flight' = sent, confirmation not yet seen">
+          Delivery
+        </span>
         <span>
           {wire.delivery_ok} ok
           {wire.delivery_failed > 0 ? ` · ${wire.delivery_failed} failed` : " · 0 failed"}
           {wire.pending_sends > 0 ? ` · ${wire.pending_sends} in flight` : ""}
         </span>
-        <span>Mesh health</span>
+        <span title="Route records are devices reporting their path back to the coordinator (normal bookkeeping); route errors are delivery paths that broke">
+          Mesh health
+        </span>
         <span>
           {wire.route_records} route records
           {Object.keys(wire.route_errors).length > 0
@@ -98,30 +112,52 @@ function FlowCard({ flow, airtime, latency, now }: FlowCardProps) {
                 .join(", ")}`
             : " · 0 route errors"}
         </span>
-        <span>Last hop</span>
+        <span title="Radio quality of the final hop into the coordinator: LQI is link quality 0–255 (higher is better); RSSI is signal strength in dBm (closer to 0 is stronger)">
+          Last hop
+        </span>
         <span>
           {wire.lqi_ewma != null
             ? `LQI ${Math.round(wire.lqi_ewma)} · RSSI ${Math.round(wire.rssi_ewma ?? 0)} dBm`
             : "—"}
         </span>
-        <span>Broadcast retry</span>
-        <span title="avg_tx, the §10 mesh-amplification retry factor: measured passively from the coordinator's own broadcast TX counters and generalized to router relays. Windows whose residual exceeds the passive-ack maximum are relay-contaminated and discarded.">
-          {wire.avg_tx != null
-            ? `avg_tx ${wire.avg_tx} (${wire.avg_tx_samples} windows, measured)`
-            : wire.avg_tx_rejected > 0
-              ? `avg_tx 1.3 (modeled — ${wire.avg_tx_rejected} contaminated windows discarded)`
-              : "avg_tx 1.3 (modeled default — awaiting counter windows)"}
+        <span title="How many times each router transmits a group/broadcast command on average, including automatic repeats — this multiplies the airtime cost of every group command across the mesh">
+          Broadcast relays
         </span>
-        <span>Link</span>
+        <span title="Measured passively from the coordinator's own transmit counters. Counter windows polluted by relayed foreign traffic are discarded and counted, never guessed at.">
+          {wire.avg_tx != null
+            ? `×${wire.avg_tx} per router (measured, ${wire.avg_tx_samples} windows)`
+            : wire.avg_tx_rejected > 0
+              ? `×1.3 per router (modeled — ${wire.avg_tx_rejected} noisy window${wire.avg_tx_rejected === 1 ? "" : "s"} discarded)`
+              : "×1.3 per router (modeled default — measuring)"}
+        </span>
+        <span title="Health of the Zigbee2MQTT ↔ coordinator link itself">Link</span>
         <span>
-          {flow.data_frames} frames · {flow.crc_errors} CRC · {flow.retransmits} reTx ·{" "}
-          {wire.loopbacks} loopbacks
+          {flow.data_frames} frames ·{" "}
+          <span title="Frames that failed their integrity checksum (CRC) — should be 0">
+            {flow.crc_errors} corrupted
+          </span>{" "}
+          ·{" "}
+          <span title="Frames the link had to resend (its own reliability layer)">
+            {flow.retransmits} link retries
+          </span>{" "}
+          ·{" "}
+          <span title="The coordinator hearing its own group commands echo back — excluded from radio airtime">
+            {wire.loopbacks} loopbacks
+          </span>
           {wire.layout_mismatch > 0 && (
-            <span className="chip warn"> {wire.layout_mismatch} layout mismatches</span>
+            <span
+              className="chip warn"
+              title="Frames whose internal structure didn't match the expected firmware layout — counted instead of risking wrong numbers"
+            >
+              {" "}
+              {wire.layout_mismatch} layout mismatches
+            </span>
           )}
         </span>
-        <span>NCP counters</span>
-        <span title="EmberZNet stack counters harvested passively from Z2M's own readAndClearCounters polls; labels are inferred pending live validation">
+        <span title="Internal tallies the coordinator chip keeps (transmissions, retries, failures). Zigbee2MQTT polls them hourly; zigbee-ninja reads the answers passively.">
+          Coordinator counters
+        </span>
+        <span>
           {wire.counters
             ? Object.entries(wire.counters)
                 .sort(([, a], [, b]) => b - a)
@@ -131,7 +167,10 @@ function FlowCard({ flow, airtime, latency, now }: FlowCardProps) {
             : "awaiting a Z2M counter poll"}
         </span>
       </div>
-      <div className="kinds">
+      <div
+        className="kinds"
+        title="Most frequent operations crossing the coordinator link (EZSP frame types)"
+      >
         {ezspTop.map(([name, count]) => (
           <span key={name} className="kind">
             <span className="kind-name">{name}</span>
@@ -206,21 +245,35 @@ export default function Wire() {
     <>
       <div className={`banner ${agents > 0 ? "ok" : "warn"}`}>
         <span>
-          Wire tap: <strong>{agents > 0 ? `${agents} agent${agents > 1 ? "s" : ""} streaming` : socketState === "open" ? "no agents connected" : socketState}</strong>
-          {agents > 0
-            ? ` · ${flows.length} coordinator flow${flows.length === 1 ? "" : "s"} · ${totalCrc} CRC errors`
-            : ""}
+          Wiretap:{" "}
+          <strong title="A capture agent is the small ninja-tap process installed on a host that can see the coordinators' network traffic; it streams a filtered packet capture to the collector, which does all the decoding">
+            {agents > 0
+              ? `${agents} capture agent${agents > 1 ? "s" : ""} connected`
+              : socketState === "open"
+                ? "no capture agents connected"
+                : socketState}
+          </strong>
+          {agents > 0 && (
+            <span>
+              {` · watching ${flows.length} coordinator link${flows.length === 1 ? "" : "s"}`}
+            </span>
+          )}
+          {agents > 0 && (
+            <span title="Frames that failed their integrity checksum (CRC) on a coordinator link — should be 0; corruption means data lost between Zigbee2MQTT and the radio">
+              {totalCrc > 0 ? ` · ${totalCrc} corrupted frames` : " · no corrupted frames"}
+            </span>
+          )}
         </span>
-        <span className="hint">passive pcap → ASH/EZSP decode (T2)</span>
+        <span className="hint">reads the coordinator links passively — never transmits</span>
       </div>
 
       {flows.length === 0 ? (
         <div className="panel">
           <p className="panel-kicker">Waiting for wire frames</p>
           <p className="hint">
-            A ninja-tap agent streams filtered pcap of each coordinator's TCP link to the
-            collector, which decodes ASH/EZSP centrally. Flows appear as soon as an agent
-            connects and traffic crosses a discovered coordinator endpoint.
+            A ninja-tap capture agent streams a filtered packet capture of each coordinator's
+            network link to the collector, which decodes it centrally. Flows appear as soon as
+            an agent connects and traffic crosses a discovered coordinator endpoint.
           </p>
         </div>
       ) : (
@@ -260,12 +313,16 @@ export default function Wire() {
               <tr>
                 <th>Instance</th>
                 {BUCKET_ORDER.map((bucket) => (
-                  <th key={bucket} className="num">
+                  <th key={bucket} className="num" title={BUCKET_TITLES[bucket]}>
                     {BUCKET_LABELS[bucket]}
                   </th>
                 ))}
-                <th className="num">µs/s</th>
-                <th className="num">of budget</th>
+                <th className="num" title="Microseconds of radio time per second of wall clock">
+                  µs/s
+                </th>
+                <th className="num" title="Share of the channel's usable capacity">
+                  of budget
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -290,10 +347,11 @@ export default function Wire() {
           </table>
         )}
         <p className="hint">
-          Airtime is reconstructed per frame from exact wire-tier payload sizes plus
-          deterministic 802.15.4/Zigbee header arithmetic; groupcast cost includes mesh
-          amplification across the instance's router census. The budget denominator is the
-          CSMA-discounted channel (η = 0.7).
+          Airtime is reconstructed frame by frame: the exact payload sizes seen at the
+          wiretap plus the fixed radio-header overhead every frame carries on air. Group
+          commands are costed across every router that relays them. "Of budget" compares
+          against the channel's usable capacity — 70% of the raw 250 kbps, the rest lost to
+          listen-before-talk.
         </p>
       </div>
     </>

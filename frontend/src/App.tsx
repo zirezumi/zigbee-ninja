@@ -25,13 +25,39 @@ type View =
   | "alerts"
   | "settings"
   | "burst";
+// The broker-connection form is a route of its own so the browser's back
+// button leaves it, and every view survives a page refresh via the URL hash.
+type Route = View | "broker";
+
+const ROUTES: ReadonlySet<string> = new Set([
+  "fleet",
+  "attribution",
+  "wire",
+  "headroom",
+  "burst",
+  "topology",
+  "calibration",
+  "footprint",
+  "alerts",
+  "settings",
+  "broker",
+]);
+
+function routeFromHash(): Route {
+  const hash = window.location.hash.replace(/^#\/?/, "");
+  return ROUTES.has(hash) ? (hash as Route) : "fleet";
+}
+
+function navigate(route: Route) {
+  window.location.hash = `/${route}`;
+}
 
 const NAV_ITEMS: Array<{ label: string; view?: View }> = [
   { label: "Fleet", view: "fleet" },
   { label: "Attribution", view: "attribution" },
-  { label: "Wire tap", view: "wire" },
+  { label: "Wiretap", view: "wire" },
   { label: "Headroom", view: "headroom" },
-  { label: "Burst inspector", view: "burst" },
+  { label: "Benchmark", view: "burst" },
   { label: "Topology", view: "topology" },
   { label: "Calibration", view: "calibration" },
   { label: "Footprint", view: "footprint" },
@@ -42,14 +68,14 @@ const NAV_ITEMS: Array<{ label: string; view?: View }> = [
 const VIEW_TITLES: Record<View, string> = {
   fleet: "Fleet",
   attribution: "Attribution",
-  wire: "Wire tap",
+  wire: "Wiretap",
   headroom: "Headroom",
   topology: "Topology",
   calibration: "Calibration",
   footprint: "Footprint & permissions",
   alerts: "Alerts",
   settings: "Settings",
-  burst: "Burst inspector",
+  burst: "Benchmark",
 };
 
 interface CredentialsFormProps {
@@ -121,8 +147,13 @@ export default function App() {
   const [version, setVersion] = useState("");
   const [username, setUsername] = useState("");
   const [broker, setBroker] = useState<BrokerView | null>(null);
-  const [reconfiguring, setReconfiguring] = useState(false);
-  const [view, setView] = useState<View>("fleet");
+  const [route, setRoute] = useState<Route>(routeFromHash);
+
+  useEffect(() => {
+    const onHashChange = () => setRoute(routeFromHash());
+    window.addEventListener("hashchange", onHashChange);
+    return () => window.removeEventListener("hashchange", onHashChange);
+  }, []);
 
   const refreshBroker = useCallback(async () => {
     setBroker(await api<BrokerView>("/api/broker"));
@@ -216,7 +247,8 @@ export default function App() {
     );
   }
 
-  const showSetup = broker !== null && (!broker.configured || reconfiguring);
+  const showSetup = broker !== null && (!broker.configured || route === "broker");
+  const view: View = route === "broker" ? "fleet" : route;
 
   return (
     <div className="shell">
@@ -230,8 +262,8 @@ export default function App() {
             item.view ? (
               <button
                 key={item.label}
-                className={item.view === view ? "nav-item active" : "nav-item"}
-                onClick={() => setView(item.view!)}
+                className={item.view === route ? "nav-item active" : "nav-item"}
+                onClick={() => navigate(item.view!)}
               >
                 {item.label}
               </button>
@@ -250,19 +282,20 @@ export default function App() {
         </div>
       </aside>
       <main>
-        <h1>{VIEW_TITLES[view]}</h1>
+        <h1>{showSetup ? "Broker connection" : VIEW_TITLES[view]}</h1>
         {broker === null ? (
           <p className="hint">loading…</p>
         ) : showSetup ? (
           <BrokerSetup
             current={broker.configured ? broker : null}
             onSaved={() => {
-              setReconfiguring(false);
+              if (route === "broker") navigate("fleet");
               void refreshBroker();
             }}
+            onCancel={broker.configured ? () => navigate("fleet") : undefined}
           />
         ) : view === "fleet" ? (
-          <Fleet onReconfigure={() => setReconfiguring(true)} />
+          <Fleet onReconfigure={() => navigate("broker")} brokerInfo={broker} />
         ) : view === "attribution" ? (
           <Attribution />
         ) : view === "wire" ? (

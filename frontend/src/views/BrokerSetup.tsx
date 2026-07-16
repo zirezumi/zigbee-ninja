@@ -4,9 +4,10 @@ import { api, ApiError, BrokerView } from "../api";
 interface BrokerSetupProps {
   current?: BrokerView | null;
   onSaved: () => void;
+  onCancel?: () => void;
 }
 
-export default function BrokerSetup({ current, onSaved }: BrokerSetupProps) {
+export default function BrokerSetup({ current, onSaved, onCancel }: BrokerSetupProps) {
   const [host, setHost] = useState(current?.host ?? "");
   const [port, setPort] = useState(String(current?.port ?? 1883));
   const [username, setUsername] = useState(current?.username ?? "");
@@ -84,9 +85,16 @@ export default function BrokerSetup({ current, onSaved }: BrokerSetupProps) {
           />
         </label>
         {error && <p className="error">{error}</p>}
-        <button type="submit" disabled={busy || !host}>
-          {busy ? "Testing connection…" : "Connect"}
-        </button>
+        <div className="row">
+          <button type="submit" disabled={busy || !host}>
+            {busy ? "Testing connection…" : "Connect"}
+          </button>
+          {onCancel && (
+            <button type="button" className="ghost" onClick={onCancel} disabled={busy}>
+              Cancel
+            </button>
+          )}
+        </div>
       </form>
     </div>
   );
