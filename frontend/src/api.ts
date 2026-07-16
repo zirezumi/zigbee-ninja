@@ -543,6 +543,7 @@ export interface LedgerCommanderRow {
   total_us: number;
   us_per_s: number;
   pct_of_budget: number;
+  trend: number | null;
   provenance: string;
   params: LedgerParams;
 }
@@ -554,7 +555,14 @@ export interface LedgerDeviceRow {
   autonomous_us: number;
   us_per_s: number;
   pct_of_budget: number;
+  trend: number | null;
   provenance: string;
+}
+
+export interface LedgerInstanceRollup {
+  total_us: number;
+  us_per_s: number;
+  pct_of_budget: number;
 }
 
 export interface LedgerView {
@@ -566,6 +574,7 @@ export interface LedgerView {
   device_count: number;
   commanders: LedgerCommanderRow[];
   devices: LedgerDeviceRow[];
+  instances: Record<string, LedgerInstanceRollup>;
   totals: {
     chains: number;
     tx_us: number;

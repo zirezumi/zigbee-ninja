@@ -103,6 +103,14 @@ function RuleEditor({ rule, metrics, onSaved, onCancel }: RuleEditorProps) {
 
   const metricInfo = metrics.find((m) => m.metric === form.metric);
   const globalMetric = metricInfo?.scope === "global";
+  // Cost metrics key their rules on spender names rather than coordinators;
+  // the field label follows the metric's scope so '*' reads correctly.
+  const keyLabel =
+    metricInfo?.scope === "commander"
+      ? "Commander"
+      : metricInfo?.scope === "device"
+        ? "Device"
+        : "Instance";
 
   function set<K extends keyof RuleFormState>(key: K, value: RuleFormState[K]) {
     setForm((current) => ({ ...current, [key]: value }));
@@ -177,7 +185,7 @@ function RuleEditor({ rule, metrics, onSaved, onCancel }: RuleEditorProps) {
           </select>
         </label>
         <label>
-          Instance
+          {keyLabel}
           <input
             value={globalMetric ? "*" : form.instance}
             onChange={(event) => set("instance", event.target.value)}

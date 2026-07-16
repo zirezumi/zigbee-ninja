@@ -12,12 +12,15 @@ import {
   JournalEntry,
   JournalView,
   LatencyStats,
+  LedgerInstanceRollup,
+  LedgerView,
   ProbeStats,
   Tile,
   WireLatencyStats,
   api,
   fleetSocketUrl,
 } from "../api";
+import { fmtBudgetPct, fmtUsPerS } from "./Attribution";
 
 const KIND_ORDER = ["command", "state", "bridge", "availability", "probe", "other"];
 const HISTORY_LENGTH = 300; // seconds of 1 s samples the live chart accumulates
@@ -203,6 +206,7 @@ interface InstanceRowProps {
   airtime?: AirtimeLive;
   wireLatency?: WireLatencyStats;
   headroom?: HeadroomInstance;
+  cost?: LedgerInstanceRollup;
   coverage: Coverage;
   alerts: AlertBrief[];
 }
@@ -220,6 +224,7 @@ function InstanceRow({
   airtime,
   wireLatency,
   headroom,
+  cost,
   coverage,
   alerts,
 }: InstanceRowProps) {
@@ -292,6 +297,14 @@ function InstanceRow({
         >
           {airtime
             ? `${airtime.budget_pct_60s.toFixed(2)}% of budget · ${Math.round(airtime.us_per_s_60s)} µs/s`
+            : "—"}
+        </Fact>
+        <Fact
+          label="Cost ledger"
+          title="Modeled airtime spend attributed over the last day: every command chain priced with mesh amplification, plus device reporting. The Airtime fact is the wire-measured last-60-seconds view; this is the attribution model's daily average, so the two need not match."
+        >
+          {cost
+            ? `${fmtBudgetPct(cost.pct_of_budget)} of budget · ${fmtUsPerS(cost.us_per_s)}`
             : "—"}
         </Fact>
         <Fact
@@ -446,6 +459,7 @@ export default function Fleet({ onReconfigure, brokerInfo }: FleetProps) {
   const historyRef = useRef<Record<string, number[]>>({});
 
   const [headroom, setHeadroom] = useState<HeadroomView | null>(null);
+  const [ledger, setLedger] = useState<LedgerView | null>(null);
   const [probeTiles, setProbeTiles] = useState<Record<string, Tile>>({});
   const [probeBusy, setProbeBusy] = useState<string | null>(null);
 
@@ -493,6 +507,12 @@ export default function Fleet({ onReconfigure, brokerInfo }: FleetProps) {
         if (alive) setHeadroom(data);
       } catch {
         // capacity line simply stays absent until the next poll succeeds
+      }
+      try {
+        const cost = await api<LedgerView>("/api/ledger?seconds=86400");
+        if (alive) setLedger(cost);
+      } catch {
+        // cost line simply stays absent until the next poll succeeds
       }
     };
     void load();
@@ -614,6 +634,7 @@ export default function Fleet({ onReconfigure, brokerInfo }: FleetProps) {
                 airtime={message?.tap.airtime[base]}
                 wireLatency={message?.tap.latency[base]}
                 headroom={headroom?.instances[base]}
+                cost={ledger?.instances[base]}
                 coverage={{
                   t0: broker?.state === "connected",
                   t1: heartbeat != null && now - heartbeat < 120,

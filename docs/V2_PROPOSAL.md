@@ -127,6 +127,24 @@ The ledger makes cost a first-class metric, so the existing alert engine
 New metrics ride the existing rule/state machinery: freeze-on-missing-data,
 restart rebaselining, and seed-once semantics all apply unchanged.
 
+> **Implementation (V2.M2):** baselines are rolling 14-day medians of
+> µs/day per commander and per device, computed from the daily ledger over
+> completed recording days (a day the ledger never saw is not history; a
+> spender silent on a recording day cost zero that day), gated on three
+> completed days and on a nonzero median so fresh deployments and
+> never-before-seen spenders freeze rather than alert. Four metrics ride
+> the evaluator: `commander_cost_ratio` and `device_cost_ratio` (trailing
+> 24 h spend over the median; rules key their state machines on spender
+> names, so one `'*'` rule watches every commander or device) plus
+> `commander_cost_us_per_s` and `instance_cost_us_per_s` for explicit
+> budgets. Regression rules seed disabled at the ratified 2x-over-median,
+> 24 h-sustain defaults; budget rules seed disabled with placeholder
+> thresholds. zigbee-ninja's own spend is excluded from the regression
+> ratio (benchmark runs are operator-initiated, not drift) but stays
+> visible to budget rules. The Top spenders panel shows the same ratio as
+> a per-row trend at the row's instance grain, and Fleet rows carry the
+> per-instance ledger cost line.
+
 ## §V2-5 The recommendation engine
 
 A set of **detectors**, each emitting structured findings:

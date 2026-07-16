@@ -671,8 +671,12 @@ pair runs an independent state machine:
 Metrics span capacity (knee-utilization %, steady headroom, channel budget %,
 load), latency (wire p95), reliability (delivery-failure / EZSP
 layout-mismatch / probe sequence-gap deltas), link health (broker and HA
-connectivity, tap agent count, probe heartbeat age), and data quality
-(avg_tx). Counter-style metrics evaluate as per-tick deltas: first sight
+connectivity, tap agent count, probe heartbeat age), data quality
+(avg_tx), and ledger cost (V2_PROPOSAL.md §V2-4: per-commander and
+per-device regression ratios against rolling 14-day medians, plus
+per-commander and per-instance spend rates for explicit budgets; rules on
+commander- or device-scoped metrics key their state machines on spender
+names rather than instance base topics). Counter-style metrics evaluate as per-tick deltas: first sight
 baselines silently and a cumulative decrease rebaselines, so collector
 restarts never alert retroactively. Rules and events persist (event history
 keeps 90 days); open events survive restarts and still require a sustained OK

@@ -55,6 +55,26 @@ const BUDGET_TITLE =
   "Share of one channel's usable airtime budget (250 kbps less protocol " +
   "overhead) this spender's average rate would occupy";
 
+/** Trend vs the row's own 14-day median (the regression-alert baseline). */
+function TrendCell({ trend }: { trend: number | null }) {
+  if (trend === null) {
+    return (
+      <td className="num" title="No baseline yet: needs three completed days of ledger history">
+        —
+      </td>
+    );
+  }
+  const arrow = trend >= 1.25 ? "↑" : trend <= 0.8 ? "↓" : "→";
+  return (
+    <td
+      className="num"
+      title={`Trailing 24 h spend is ${trend.toFixed(2)}x this row's 14-day median; the cost regression alert (Alerts view) opens at 2x sustained a day`}
+    >
+      {arrow} {trend.toFixed(2)}x
+    </td>
+  );
+}
+
 function ClassBar({ classes }: { classes: Record<string, number> }) {
   const total = Object.values(classes).reduce((sum, count) => sum + count, 0);
   if (total === 0) return <div className="classbar empty" />;
@@ -119,6 +139,7 @@ export default function Attribution() {
       instance: row.instance,
       us_per_s: row.us_per_s,
       pct_of_budget: row.pct_of_budget,
+      trend: row.trend,
       traffic: `${row.chains} ${row.chains === 1 ? "chain" : "chains"}`,
       title:
         `Priced with ${row.params.n_routers} routers, ` +
@@ -134,6 +155,7 @@ export default function Attribution() {
       instance: row.instance,
       us_per_s: row.us_per_s,
       pct_of_budget: row.pct_of_budget,
+      trend: row.trend,
       traffic: `${row.publishes} ${row.publishes === 1 ? "report" : "reports"}`,
       title: row.provenance,
     })),
@@ -225,6 +247,12 @@ export default function Attribution() {
                   <th className="num" title="Average airtime spend across the covered days">
                     Airtime
                   </th>
+                  <th
+                    className="num"
+                    title="Trailing 24 h spend vs this row's own 14-day median: the same baseline the cost regression alerts watch"
+                  >
+                    Trend
+                  </th>
                   <th className="num">Traffic</th>
                 </tr>
               </thead>
@@ -236,6 +264,7 @@ export default function Attribution() {
                     <td className="mono">{row.instance}</td>
                     <td className="num">{fmtBudgetPct(row.pct_of_budget)}</td>
                     <td className="num">{fmtUsPerS(row.us_per_s)}</td>
+                    <TrendCell trend={row.trend} />
                     <td className="num">{row.traffic}</td>
                   </tr>
                 ))}
