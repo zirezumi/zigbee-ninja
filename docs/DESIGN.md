@@ -711,8 +711,9 @@ cleanup sweep finishes the job when it returns.
 - **Payload privacy:** probes report sizes and metadata, not payload contents,
   unless deep-capture is explicitly toggled for forensics.
 - **Probe integrity:** versioned artifacts, schema handshake with the collector,
-  drift → redeploy prompt. No telemetry, no phone-home. Image signing (cosign)
-  once releases begin.
+  drift → redeploy prompt. No telemetry, no phone-home. Release images are
+  cosign-signed (keyless, GitHub OIDC) by the tag-triggered release workflow;
+  process and verification command in `docs/RELEASING.md`.
 
 ## §16 Licensing & IP hygiene
 
@@ -754,7 +755,9 @@ zigbee-ninja/
 
 CI (GitHub Actions): lint + tests + license check → multi-arch buildx →
 `ghcr.io/zirezumi/zigbee-ninja`. The frontend build embeds into the image; one
-artifact ships everywhere (P7).
+artifact ships everywhere (P7). Version tags trigger the release workflow —
+gates re-run, immutable `vX.Y.Z` image tags, cosign keyless signing, GitHub
+release (`docs/RELEASING.md`).
 
 ## §18 Milestones
 
