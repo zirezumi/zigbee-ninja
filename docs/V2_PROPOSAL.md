@@ -285,6 +285,27 @@ supports changing."*
 > at least 90% of the time alongside an identical-payload command to a
 > containing group is redundant traffic. Findings below 10 µs/s of
 > replayed saving stay out of the queue.
+>
+> **Implementation (V2.M3, redundancy costing):** chains the tracker
+> already marked redundant (identical payload to the same target inside
+> its window) group by commander and re-price exactly as the ledger
+> priced them (registry shape, echo count, measured parameters when
+> present), so the saving is the recorded duplicates' own cost in the
+> Top spenders currency. High confidence by construction; the same
+> 10 µs/s queue floor applies.
+>
+> **Implementation (V2.M3, reporting advisor):** per-device autonomous
+> spend over the trailing day (rates divided by recorded time, exactly
+> like `/api/ledger`) compares two ways: against the median of at least
+> three other devices with the same vendor and model (a strong
+> same-hardware baseline, high confidence), else against the fleet's
+> median reporting device at a 5× threshold (medium confidence). A name
+> or model suggesting presence sensing (presence, occupancy, motion,
+> mmwave, radar, pir) downgrades confidence one step and the finding
+> says the stream may be deliberate. Savings replay the recorded volume
+> at the reference median; findings under 50 µs/s stay out of the
+> queue (reporting is a standing per-device cost, so the bar sits
+> higher than the command-shape detectors).
 
 ## §V2-6 Verification (what closes the loop)
 

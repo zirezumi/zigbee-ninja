@@ -15,7 +15,7 @@ import time
 from collections.abc import Callable
 
 from ..store.db import Database
-from . import groupcast, pacing
+from . import groupcast, pacing, redundancy, reporting
 from .context import DetectorContext
 from .store import Finding, RecommendationStore
 
@@ -40,7 +40,7 @@ class RecommendationEngine:
         self._clock = clock
         self.store = RecommendationStore(db, clock=clock)
         # Ordered detector roster: modules exposing NAME and detect(ctx).
-        self._detectors: list = [pacing, groupcast]
+        self._detectors: list = [pacing, groupcast, redundancy, reporting]
         self._started_at = clock()
         self._last_run_at: float | None = None
         self._last_result: dict | None = None
