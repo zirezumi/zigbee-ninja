@@ -11,6 +11,7 @@ from a real traffic change.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from . import airtime
@@ -23,6 +24,36 @@ ZCL_GET_BYTES = 4
 ZCL_REPORT_BYTES = 12
 
 PROVENANCE = "inferred (T0 payload estimate)"
+AUTONOMOUS_PROVENANCE = "modeled (report size estimate)"
+
+# Commander labels for ledger rows without an attributed client.
+UNATTRIBUTED = "(unattributed)"
+SELF_COMMANDER = "zigbee-ninja"
+
+# Daily rows are tiny (instances x commanders), so the ledger keeps a year:
+# enough history for any regression baseline the alert engine grows.
+RETENTION_DAYS = 365
+
+
+def utc_day(ts: float) -> str:
+    """UTC calendar day a timestamp falls in; the ledger's rollup key."""
+    return time.strftime("%Y-%m-%d", time.gmtime(ts))
+
+
+def instance_params(
+    n_routers: int, avg_tx: float | None, retry_rate: float | None
+) -> dict:
+    """Pricing context recorded on a ledger row: the values in force when the
+    row was last written, and whether each came from a counter window or the
+    model default. This is what lets a later parameter improvement be told
+    apart from a real traffic change."""
+    return {
+        "n_routers": n_routers,
+        "avg_tx": round(avg_tx, 3) if avg_tx is not None else airtime.DEFAULT_AVG_TX,
+        "avg_tx_measured": avg_tx is not None,
+        "retry_rate": round(retry_rate, 4) if retry_rate is not None else 0.0,
+        "retry_rate_measured": retry_rate is not None,
+    }
 
 
 @dataclass(frozen=True)

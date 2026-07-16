@@ -554,8 +554,11 @@ A guided wizard, per coordinator, per-run authorized (grants never persist):
 Everything embedded, no external services (P7):
 
 - **SQLite (WAL)**: configuration, registries, tiles/footprint, calibrations,
-  alert rules/state, finalized chains (48 h detail, aggregates beyond), and
-  rollup series.
+  alert rules/state, finalized chains (48 h detail, aggregates beyond), rollup
+  series, and the daily **cost ledger** (V2_PROPOSAL.md §V2-2):
+  `ledger_daily` per (instance, day, commander) and `ledger_device_daily` per
+  (instance, day, device), µs stored, each row carrying provenance plus the
+  pricing parameters in force when it was last written; 365-day retention.
 - **Hourly Parquet segments**: raw event stream for the burst-inspector window
   (~48 h, quota-capped), queried in place by **embedded DuckDB** (MIT) for ad-hoc
   forensics without a series-cardinality explosion. Implementation: events

@@ -510,6 +510,20 @@ class TapIngest:
                 failed += flow.delivery_failed
         return ok, failed
 
+    def pricing_params(self, instance: str) -> tuple[float | None, float | None]:
+        """(avg_tx, retry_rate) from the instance's freshest flow, either None
+        until a counter window has produced a sample; ledger pricing then
+        falls back to the §10 defaults and records that in the row params."""
+        freshest: FlowState | None = None
+        for flow in self._flows.values():
+            if flow.instance == instance and (
+                freshest is None or flow.last_seen > freshest.last_seen
+            ):
+                freshest = flow
+        if freshest is None:
+            return None, None
+        return freshest.avg_tx_ewma, freshest.retry_rate_ewma
+
     def instance_wire_totals(self) -> dict[str, dict]:
         """Per-instance cumulative wire health counters plus the current avg_tx.
 

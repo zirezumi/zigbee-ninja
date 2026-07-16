@@ -63,6 +63,17 @@ The Attribution explorer grows cost columns; a **Top spenders** panel ranks
 commanders and devices by µs/day with trend arrows. This ledger is the
 currency every V2 surface trades in.
 
+> **Implementation (V2.M1):** finalized chains are priced at the 10 s flush
+> (`capacity/ledger.py`), using the instance's measured avg_tx and MAC retry
+> rate once counter windows have produced them and the §10 defaults before
+> that; each row records which was used. Rollups land in `ledger_daily` and
+> `ledger_device_daily` (µs, 365-day retention) with provenance and pricing
+> parameters. Autonomous state publishes are priced per device at a modeled
+> report size. zigbee-ninja's own mesh commands (benchmark reads) are priced
+> under the `zigbee-ninja` commander; their state echoes are consumed by the
+> calibration engine and stay unpriced, so self rows are TX-only lower
+> bounds, consistent with §10's posture.
+
 ## §V2-3 Change journal (the loop's clock)
 
 zigbee-ninja already watches `bridge/info`, `bridge/devices`, and

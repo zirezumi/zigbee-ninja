@@ -149,6 +149,30 @@ _MIGRATIONS = [
     CREATE INDEX idx_alert_events_cleared ON alert_events (cleared_at);
     CREATE INDEX idx_alert_events_opened ON alert_events (opened_at);
     """,
+    """
+    CREATE TABLE ledger_daily (
+        instance   TEXT NOT NULL,
+        day        TEXT NOT NULL,
+        commander  TEXT NOT NULL,
+        chains     INTEGER NOT NULL DEFAULT 0,
+        tx_us      REAL NOT NULL DEFAULT 0,
+        rx_us      REAL NOT NULL DEFAULT 0,
+        provenance TEXT NOT NULL DEFAULT '',
+        params     TEXT NOT NULL DEFAULT '{}',
+        PRIMARY KEY (instance, day, commander)
+    );
+    CREATE INDEX idx_ledger_daily_day ON ledger_daily (day);
+    CREATE TABLE ledger_device_daily (
+        instance      TEXT NOT NULL,
+        day           TEXT NOT NULL,
+        device        TEXT NOT NULL,
+        publishes     INTEGER NOT NULL DEFAULT 0,
+        autonomous_us REAL NOT NULL DEFAULT 0,
+        provenance    TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY (instance, day, device)
+    );
+    CREATE INDEX idx_ledger_device_daily_day ON ledger_device_daily (day);
+    """,
 ]
 
 

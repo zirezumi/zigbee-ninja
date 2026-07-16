@@ -295,6 +295,14 @@ class Registry:
                 return base
         return None
 
+    def is_group(self, base: str, target: str) -> bool:
+        """Whether a command target names a group (Z2M accepts the friendly
+        name or the numeric group id in the topic)."""
+        for group in self._groups.get(base, []):
+            if group.get("friendly_name") == target or str(group.get("id")) == target:
+                return True
+        return False
+
     def group_members(self, base: str, group_name: str) -> list[str]:
         """Friendly names of a group's member devices; [] for non-group targets."""
         ieee_map = self._ieee_to_name.get(base, {})

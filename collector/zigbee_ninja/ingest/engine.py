@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import secrets
 import time
 
 from .. import __version__
 from ..alerts import GLOBAL_INSTANCE, AlertManager
-from ..attribution.chains import ChainTracker, parse_command
+from ..attribution.chains import Chain, ChainTracker, parse_command
 from ..calibration.benchmark import CalibrationManager
 from ..capacity import headroom as headroom_model
+from ..capacity import ledger
 from ..capacity.headroom import TX_BUCKETS
 from ..ha_discovery import PUBLISH_INTERVAL_SECONDS, DiscoveryPublisher
 from ..store.config import ConfigStore
@@ -99,6 +101,13 @@ class Engine:
             version=__version__,
         )
         self._knees_cache: tuple[float, dict[str, float]] | None = None
+        # Cost-ledger accumulators, drained by reference swap on the 10 s
+        # flush (V2_PROPOSAL.md §V2-2): autonomous state publishes per
+        # (instance, day, device), and zigbee-ninja's own mesh commands per
+        # (instance, day, verb, group_target) so self spend stays on the
+        # books (DESIGN.md P4).
+        self._ledger_autonomous: dict[tuple[str, str, str], int] = {}
+        self._ledger_self: dict[tuple[str, str, str, bool], int] = {}
         self._ha_link: HaLink | None = None
         self._ha_task: asyncio.Task | None = None
         self._ingest: MqttIngest | None = None
@@ -149,9 +158,16 @@ class Engine:
         base = self.registry.base_for(topic)
         self.class_rates.record(base or GLOBAL, "self")
         if base is not None:
-            self.events.record(
-                time.time(), "mqtt", base, "self", "out", topic[len(base) + 1 :], len(payload)
-            )
+            now = time.time()
+            suffix = topic[len(base) + 1 :]
+            self.events.record(now, "mqtt", base, "self", "out", suffix, len(payload))
+            command = parse_command(suffix)
+            if command is not None:
+                # A mesh command of our own (benchmark reads): priced into the
+                # ledger under the self commander at the next flush.
+                target, verb = command
+                key = (base, ledger.utc_day(now), verb, self.registry.is_group(base, target))
+                self._ledger_self[key] = self._ledger_self.get(key, 0) + 1
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -314,6 +330,11 @@ class Engine:
                 return
             klass = self.chains.on_state(base, suffix)
             self.class_rates.record(base, klass)
+            if klass == "autonomous":
+                # Device-initiated report: the per-device side of the ledger
+                # (echoes inside a chain window are priced on the chain).
+                key = (base, ledger.utc_day(time.time()), suffix)
+                self._ledger_autonomous[key] = self._ledger_autonomous.get(key, 0) + 1
         elif kind == "availability" and self.calibration.active:
             self.calibration.on_availability(base, suffix, payload)
 
@@ -608,8 +629,127 @@ class Engine:
             conn.execute("DELETE FROM chains WHERE opened_at < ?", (chain_cutoff,))
             written += len(finalized)
 
+        written += self._flush_ledger(conn, finalized)
+
         if written:
             conn.commit()
+        return written
+
+    def _flush_ledger(self, conn, finalized: list[Chain]) -> int:
+        """Price finalized chains, self commands, and autonomous publishes
+        into the daily cost ledger (V2_PROPOSAL.md §V2-2). Units are µs;
+        every row carries provenance plus the pricing parameters in force."""
+        params_cache: dict[str, tuple[int, float | None, float | None]] = {}
+
+        def context(instance: str) -> tuple[int, float | None, float | None]:
+            if instance not in params_cache:
+                avg_tx, retry_rate = self.tap.pricing_params(instance)
+                params_cache[instance] = (
+                    self.registry.router_count_for(instance),
+                    avg_tx,
+                    retry_rate,
+                )
+            return params_cache[instance]
+
+        rows: dict[tuple[str, str, str], dict] = {}
+
+        def accumulate(
+            instance: str, day: str, commander: str, price: ledger.ChainPrice, count: int
+        ) -> None:
+            n_routers, avg_tx, retry_rate = context(instance)
+            entry = rows.setdefault(
+                (instance, day, commander), {"chains": 0, "tx_us": 0.0, "rx_us": 0.0}
+            )
+            entry["chains"] += count
+            entry["tx_us"] += price.tx_us * count
+            entry["rx_us"] += price.rx_us * count
+            entry["provenance"] = price.provenance
+            entry["params"] = ledger.instance_params(n_routers, avg_tx, retry_rate)
+
+        for chain in finalized:
+            n_routers, avg_tx, retry_rate = context(chain.instance)
+            price = ledger.price_chain(
+                verb=chain.verb,
+                group_target=self.registry.is_group(chain.instance, chain.target),
+                n_routers=n_routers,
+                echo_count=chain.echoes,
+                avg_tx=avg_tx,
+                retry_rate=retry_rate,
+            )
+            day = ledger.utc_day(chain.opened_at)
+            commander = chain.client or ledger.UNATTRIBUTED
+            accumulate(chain.instance, day, commander, price, 1)
+
+        self_pending, self._ledger_self = self._ledger_self, {}
+        for (instance, day, verb, group_target), count in self_pending.items():
+            n_routers, avg_tx, retry_rate = context(instance)
+            price = ledger.price_chain(
+                verb=verb,
+                group_target=group_target,
+                n_routers=n_routers,
+                echo_count=0,
+                avg_tx=avg_tx,
+                retry_rate=retry_rate,
+            )
+            accumulate(instance, day, ledger.SELF_COMMANDER, price, count)
+
+        written = 0
+        if rows:
+            conn.executemany(
+                "INSERT INTO ledger_daily "
+                "(instance, day, commander, chains, tx_us, rx_us, provenance, params) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(instance, day, commander) DO UPDATE SET "
+                "chains = chains + excluded.chains, "
+                "tx_us = tx_us + excluded.tx_us, "
+                "rx_us = rx_us + excluded.rx_us, "
+                "provenance = excluded.provenance, "
+                "params = excluded.params",
+                [
+                    (
+                        instance,
+                        day,
+                        commander,
+                        entry["chains"],
+                        entry["tx_us"],
+                        entry["rx_us"],
+                        entry["provenance"],
+                        json.dumps(entry["params"]),
+                    )
+                    for (instance, day, commander), entry in rows.items()
+                ],
+            )
+            written += len(rows)
+
+        auto_pending, self._ledger_autonomous = self._ledger_autonomous, {}
+        if auto_pending:
+            unit_us = ledger.autonomous_publish_cost_us()
+            conn.executemany(
+                "INSERT INTO ledger_device_daily "
+                "(instance, day, device, publishes, autonomous_us, provenance) "
+                "VALUES (?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(instance, day, device) DO UPDATE SET "
+                "publishes = publishes + excluded.publishes, "
+                "autonomous_us = autonomous_us + excluded.autonomous_us, "
+                "provenance = excluded.provenance",
+                [
+                    (
+                        instance,
+                        day,
+                        device,
+                        publishes,
+                        publishes * unit_us,
+                        ledger.AUTONOMOUS_PROVENANCE,
+                    )
+                    for (instance, day, device), publishes in auto_pending.items()
+                ],
+            )
+            written += len(auto_pending)
+
+        if written:
+            cutoff_day = ledger.utc_day(time.time() - ledger.RETENTION_DAYS * 86400)
+            conn.execute("DELETE FROM ledger_daily WHERE day < ?", (cutoff_day,))
+            conn.execute("DELETE FROM ledger_device_daily WHERE day < ?", (cutoff_day,))
         return written
 
     async def _flush_loop(self) -> None:
