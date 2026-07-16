@@ -148,7 +148,12 @@ def stream(args: argparse.Namespace) -> None:
     assert tcpdump.stdout is not None
     try:
         while True:
-            chunk = tcpdump.stdout.read(16384)
+            # read1 forwards whatever tcpdump has written (-U flushes per
+            # packet) instead of blocking until a full block accumulates —
+            # read(n) would hold quiet flows' frames for tens of seconds,
+            # which downstream consumers keyed on pcap timestamps never
+            # noticed but arrival-time fusion does.
+            chunk = tcpdump.stdout.read1(65536)
             if not chunk:
                 return
             try:
