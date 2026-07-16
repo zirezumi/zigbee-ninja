@@ -3,7 +3,7 @@
 DESIGN.md paragraph 9: an MQTT /set|/get opens a chain; state publishes for the
 target (or, for a group target, any member) inside an adaptive window are
 `provoked`; state publishes matching no open chain are `autonomous`. At T0 the
-only visible consequence of a command is the state echo — frame-level provoked
+only visible consequence of a command is the state echo: frame-level provoked
 traffic arrives with the T1/T2 tiers.
 """
 

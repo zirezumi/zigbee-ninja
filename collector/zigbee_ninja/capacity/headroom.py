@@ -1,7 +1,7 @@
 """Utilization, headroom, and the knee-validation scatter (DESIGN.md §10).
 
-Joins the persisted 10 s rollups — airtime_10s (load: TX frames per window,
-radio airtime per window) and latency_10s (the wire latency SLI) — with each
+Joins the persisted 10 s rollups: airtime_10s (load: TX frames per window,
+radio airtime per window) and latency_10s (the wire latency SLI): with each
 instance's latest completed calibration to report the §10 outputs:
 
 - utilization per denominator, side by side: channel airtime budget, the
@@ -9,7 +9,7 @@ instance's latest completed calibration to report the §10 outputs:
 - steady headroom (knee − p95 load) and burst headroom (knee − max load),
   both at 10 s granularity (1 s burst windows stay in-memory only);
 - the latency-vs-load scatter that validates the knee continuously from
-  natural traffic — a capacity regression shows up as points bending upward
+  natural traffic: a capacity regression shows up as points bending upward
   well below the recorded knee.
 
 Knee semantics are preserved, not flattened: a ramp that ended in driver
@@ -36,7 +36,7 @@ def _percentile(ordered: list[float], fraction: float) -> float:
 
 
 def latest_knees(db: Database) -> dict[str, dict[str, dict]]:
-    """Latest knee per (instance, calibration mode) — the modes measure
+    """Latest knee per (instance, calibration mode): the modes measure
     different denominators: a single-target ramp finds the per-device pipeline
     ceiling, a spread ramp probes the NCP/global pipeline knee."""
     rows = db.connect().execute(
@@ -94,7 +94,7 @@ def summarize(
     latency_by_window = {(row["ts"], row["instance"]): row["p95_ms"] for row in latency_rows}
 
     # Benchmark windows are self-traffic and are excluded from every headroom
-    # aggregate (§11.5) — otherwise each calibration ramp would masquerade as
+    # aggregate (§11.5): otherwise each calibration ramp would masquerade as
     # a natural load peak and flatter the burst numbers. The ramp's own curve
     # lives in its calibration record; /api/airtime keeps raw physical totals.
     benchmark_windows: dict[str, list[tuple[float, float]]] = {}

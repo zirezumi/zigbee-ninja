@@ -105,9 +105,9 @@ def v14_wire_conversation() -> bytes:
     send(200.00, su_cmd, True)
     send(200.05, ms_ok, False)     # unicast delivery confirm 50 ms later
     send(200.10, mc_cmd, True)
-    send(200.12, in_loop, False)   # our own groupcast echoed back — not radio
+    send(200.12, in_loop, False)   # our own groupcast echoed back: not radio
     send(200.20, in_radio, False)
-    send(200.25, ms_mc, False)     # groupcast confirm — no latency sample
+    send(200.25, ms_mc, False)     # groupcast confirm: no latency sample
     send(200.30, route_rec, False)
     send(200.35, counters_rsp, False)  # Z2M's own counter poll, harvested passively
     return build_pcap(packets)
@@ -189,12 +189,12 @@ def test_passive_avg_tx_from_counter_windows():
     # window 600 s → link-status estimate 40 → (460 − 40) / (180 + 20) = 2.1
     c1 = counters_frame(1, mac_tx=82, aps_tx=60, mtorr=10)
     c2 = counters_frame(2, mac_tx=460, aps_tx=180, mtorr=20)
-    # Too few originated broadcasts for a sample — must not move the EWMA.
+    # Too few originated broadcasts for a sample: must not move the EWMA.
     c3 = counters_frame(3, mac_tx=100, aps_tx=5, mtorr=2)
     mc = _ext(4, 0x00, 0x0038,
               APS[:8] + bytes([0x0A, 0x00, 0x55]) + bytes.fromhex("0c0000ffff00")
               + bytes([0x78, 0x56, 0x02, 0xAA, 0xBB]))
-    # Residual beyond the passive-ack maximum (raw 9.8): relay-contaminated —
+    # Residual beyond the passive-ack maximum (raw 9.8): relay-contaminated;
     # discarded and counted, never clamped into the EWMA.
     c4 = counters_frame(5, mac_tx=2000, aps_tx=180, mtorr=20)
 
@@ -348,7 +348,7 @@ def test_incoming_zcl_callback_feeds_fusion_not_loopbacks():
 
 def test_avg_tx_accepts_hourly_counter_windows():
     """Z2M's ember watchdog polls counters on a fixed 1 h setInterval, so real
-    windows are ~3600 s plus jitter — the old 3600 s ceiling rejected nearly
+    windows are ~3600 s plus jitter: the old 3600 s ceiling rejected nearly
     every live sample (observed gaps: 3599–3615 s)."""
     from zigbee_ninja.decode.ash import encode_data_frame
 

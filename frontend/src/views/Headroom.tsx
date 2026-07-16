@@ -16,7 +16,7 @@ function kneeLabel(instance: HeadroomInstance): string {
 }
 
 /** Wire p95 latency vs TX load, one point per rollup window, with the
- * calibrated knee as a dashed vertical line — points bending upward well
+ * calibrated knee as a dashed vertical line: points bending upward well
  * below the line are the continuous knee-validation signal (§10). */
 function KneeScatter({
   points,
@@ -108,7 +108,7 @@ function InstancePanel({ base, view }: { base: string; view: HeadroomInstance })
           <>
             <span
               className="chip ok"
-              title="The calibrated maximum sustainable command rate; ≥ marks a lower bound — the benchmark ended before anything degraded"
+              title="The calibrated maximum sustainable command rate; ≥ marks a lower bound: the benchmark ended before anything degraded"
             >
               capacity limit {kneeLabel(view)}
               {knee.mode === "spread" ? " · whole coordinator" : " · single device"}
@@ -116,13 +116,13 @@ function InstancePanel({ base, view }: { base: string; view: HeadroomInstance })
             {knee.kind === "pipeline_ceiling" && (
               <span
                 className="chip"
-                title="The benchmark driver could no longer add load — the Zigbee2MQTT/driver software pipeline is the binding constraint, so the radio's true limit is at least this"
+                title="The benchmark driver could no longer add load: the Zigbee2MQTT/driver software pipeline is the binding constraint, so the radio's true limit is at least this"
               >
                 software pipeline bound
               </span>
             )}
             {knee.stale_environment && (
-              <span className="chip warn">firmware changed since calibration — recalibrate?</span>
+              <span className="chip warn">firmware changed since calibration: recalibrate?</span>
             )}
           </>
         ) : (
@@ -130,13 +130,13 @@ function InstancePanel({ base, view }: { base: string; view: HeadroomInstance })
         )}
       </div>
       <div className="kv-grid">
-        <span title="Share of the radio channel's usable capacity this instance consumed over the window — capacity view 1 of 3">
+        <span title="Share of the radio channel's usable capacity this instance consumed over the window: capacity view 1 of 3">
           Channel budget
         </span>
         <span>
           {dens.channel_budget.pct}% · {Math.round(dens.channel_budget.us_per_s)} µs/s
         </span>
-        <span title="Maximum command rate the coordinator sustained in a whole-coordinator (spread) benchmark; ≥ means only bounded from below — capacity view 2 of 3">
+        <span title="Maximum command rate the coordinator sustained in a whole-coordinator (spread) benchmark; ≥ means only bounded from below: capacity view 2 of 3">
           Coordinator limit
         </span>
         <span>
@@ -144,7 +144,7 @@ function InstancePanel({ base, view }: { base: string; view: HeadroomInstance })
             ? `${dens.ncp_knee.provenance === "lower_bound" ? "≥" : ""}${dens.ncp_knee.eps}/s (${dens.ncp_knee.provenance})`
             : "—"}
         </span>
-        <span title="Zigbee2MQTT serves each device from its own queue; this is the rate where a single-device benchmark saturated — capacity view 3 of 3">
+        <span title="Zigbee2MQTT serves each device from its own queue; this is the rate where a single-device benchmark saturated: capacity view 3 of 3">
           Per-device ceiling
         </span>
         <span>
@@ -177,7 +177,7 @@ function InstancePanel({ base, view }: { base: string; view: HeadroomInstance })
           {knee.breach ? `, ended by ${knee.breach}` : ""}). Each dot is one rollup window:
           command load across, delivery latency up. Dots bending upward well left of the
           dashed capacity line would mean the mesh now degrades below its calibrated
-          limit — the cue to recalibrate.
+          limit: the cue to recalibrate.
         </p>
       )}
     </div>
@@ -227,8 +227,8 @@ export default function Headroom() {
           ))}
         </div>
         <span className="hint">
-          Three views of capacity side by side — radio airtime, the coordinator's measured
-          limit, and the per-device software ceiling — with headroom against the calibrated
+          Three views of capacity side by side: radio airtime, the coordinator's measured
+          limit, and the per-device software ceiling: with headroom against the calibrated
           limit and a latency-vs-load scatter that keeps validating it.
         </span>
       </div>

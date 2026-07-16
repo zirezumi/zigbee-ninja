@@ -44,7 +44,7 @@ def test_topology_grant_gate_and_pull_rejection(client):
     granted = client.post("/api/tiles/deploy", json=action).json()
     assert granted["status"] == "granted"
 
-    # Granted now, but the broker is unconfigured in this app — the publish
+    # Granted now, but the broker is unconfigured in this app: the publish
     # failure surfaces as a clean rejection, not a hang or a 500.
     response = client.post("/api/topology/pull", json=action)
     assert response.status_code == 409

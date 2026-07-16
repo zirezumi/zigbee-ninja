@@ -379,7 +379,7 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
 
     @app.get("/api/latency")
     def latency_series(request: Request, seconds: int = 3600) -> dict:
-        """Wire-latency 10 s rollups — the latency-vs-load axis for continuous
+        """Wire-latency 10 s rollups: the latency-vs-load axis for continuous
         knee validation (DESIGN.md §10)."""
         require_user(request)
         seconds = max(60, min(seconds, MAX_QUERY_WINDOW_SECONDS))
@@ -413,7 +413,7 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
     @app.post("/api/calibration/preview")
     def calibration_preview(request: Request, settings: CalibrationPreviewRequest) -> dict:
         """Dry run: the exact traffic, schedule, caps, and stop rules, plus the
-        single-use authorization token — nothing transmits."""
+        single-use authorization token: nothing transmits."""
         require_user(request)
         try:
             if settings.mode == "spread":
@@ -592,7 +592,7 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
     @app.websocket("/api/ws/tap")
     async def ws_tap(websocket: WebSocket) -> None:
         # Agent auth: Bearer token in the Authorization header (outbound-only,
-        # per-collector token). Not a browser session — this is a capture agent.
+        # per-collector token). Not a browser session: this is a capture agent.
         auth_header = websocket.headers.get("authorization", "")
         token = auth_header[7:] if auth_header.lower().startswith("bearer ") else ""
         if not token or token != engine.tap_token():

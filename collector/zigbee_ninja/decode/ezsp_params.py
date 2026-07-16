@@ -2,7 +2,7 @@
 
 Layouts here are pinned EMPIRICALLY against live SLZB-06MG24 captures speaking
 the EZSP v14-era encoding (EmberZNet 8.x: 32-bit sl_status, 16-bit message
-tags, rx-packet-info struct) — the spike swept 100% of live sendUnicast /
+tags, rx-packet-info struct): the spike swept 100% of live sendUnicast /
 sendMulticast / messageSentHandler / incomingRouteRecordHandler frames. Every
 parser self-checks the frame's internal length arithmetic and returns None when
 it doesn't hold, so a firmware layout change degrades to visible
@@ -13,7 +13,7 @@ pin them against a real v13 capture before adding them.
 Field notes from the live captures:
 - incomingMessageHandler radio frames carry exactly ONE byte after the message
   contents (values 0x02/0x04 observed; identity unconfirmed) while loopback
-  deliveries carry none — tolerated and surfaced as `trailing`.
+  deliveries carry none: tolerated and surfaced as `trailing`.
 - The rx-packet-info sender EUI64 is zeroed on this firmware; sender identity
   is the NWK short address only.
 """
@@ -134,7 +134,7 @@ class MessageSent:
 
 def parse_message_sent(params: bytes) -> MessageSent | None:
     # status u32, type u8, destination u16, apsFrame 11B, messageTag u16,
-    # messageLength u8, contents (length 0 observed live — contents not echoed)
+    # messageLength u8, contents (length 0 observed live: contents not echoed)
     if len(params) < 21 or len(params) != 21 + params[20]:
         return None
     return MessageSent(
@@ -155,14 +155,14 @@ class IncomingMessage:
     rssi: int
     payload_len: int
     trailing: bytes
-    # ZCL transaction sequence from the message contents' header — metadata
+    # ZCL transaction sequence from the message contents' header: metadata
     # only (never the payload body), the T1/T2 fusion join key (DESIGN.md §8).
     # None for ZDO frames and payloads too short to carry a ZCL header.
     zcl_seq: int | None = None
 
     @property
     def loopback(self) -> bool:
-        """NCP-internal delivery of our own group/broadcast — not a radio frame."""
+        """NCP-internal delivery of our own group/broadcast: not a radio frame."""
         return self.msg_type in _LOOPBACK_TYPES
 
     @property

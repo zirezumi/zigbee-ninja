@@ -694,7 +694,7 @@ button.linkish {
 }
 
 .seg-tx_groupcast {
-  background: var(--amber); /* mesh-amplified — the term worth watching */
+  background: var(--amber); /* mesh-amplified; the term worth watching */
 }
 
 .seg-rx {

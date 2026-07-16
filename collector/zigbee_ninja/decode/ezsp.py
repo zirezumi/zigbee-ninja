@@ -93,7 +93,7 @@ class EzspStream:
     may already be running the extended (v8+) header long before we observe any
     version handshake. Since every modern Ember NCP negotiates v8+ (SLZB, Sonoff
     ZBDongle-E, SkyConnect all run v13+), the stream *defaults to extended* and
-    only drops to legacy if a legacy-format version exchange is actually seen —
+    only drops to legacy if a legacy-format version exchange is actually seen:
     validated against a live SLZB-06MG24 capture in spike S1.
     """
 

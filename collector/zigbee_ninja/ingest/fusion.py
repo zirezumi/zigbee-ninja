@@ -2,11 +2,11 @@
 
 One physical incoming frame is seen at the wire (T2 incomingMessageHandler:
 sender short address + the ZCL transaction sequence in the message header) and
-at the Z2M boundary (T1 probe deviceMessage — probe v0.4 emits the same ZCL
+at the Z2M boundary (T1 probe deviceMessage: probe v0.4 emits the same ZCL
 sequence). Records fuse on (instance, sender nwk, zcl seq) inside a short
 watermark. The disagreement counters are the point of the exercise:
 **wire-only** frames quantify what Z2M-level observation misses (frames Z2M
-consumes without emitting a device event — default responses, interview
+consumes without emitting a device event: default responses, interview
 traffic, unknown devices); **probe-only** frames flag wire-capture gaps.
 Matched pairs also yield a per-instance probe↔pcap clock-offset estimate,
 the §8 cross-source alignment signal.
@@ -237,7 +237,7 @@ class FusionTracker:
                     "offset_samples": state.offset_samples,
                     "overflow_drops": state.overflow_drops,
                     # Cumulative since start: which senders fail to fuse, and
-                    # from which side — the fusion-quality drill-down.
+                    # from which side: the fusion-quality drill-down.
                     "top_unmatched": top_unmatched,
                     "seq_delta_histogram": dict(
                         sorted(

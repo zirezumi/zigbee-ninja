@@ -1,13 +1,13 @@
 """ASH (UART/TCP framing for EmberZNet EZSP) stream decoder.
 
 Written from the Silicon Labs UG101 protocol description (IP hygiene: no
-GPL-derived code — DESIGN.md §16). Spike S1 validates this against a live
+GPL-derived code: DESIGN.md §16). Spike S1 validates this against a live
 coordinator capture before M4 relies on it.
 
 Frame wire format: escaped(control byte + data field + CRC16) + FLAG.
 DATA-frame payloads are XOR-scrambled with a fixed LFSR sequence
 ("randomization") which this module reverses. The encoder helpers exist for
-tests and synthetic fixtures — the collector itself never transmits ASH.
+tests and synthetic fixtures: the collector itself never transmits ASH.
 """
 
 from __future__ import annotations

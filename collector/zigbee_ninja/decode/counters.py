@@ -5,7 +5,7 @@ wire tap sees the responses for free, which is the passive answer to spike S2
 (DESIGN.md §4, §19): no zigbee-ninja polling, no added NCP work.
 
 The name table below is written from the Silicon Labs UG100 / Zigbee stack API
-documentation's counter-type enumeration (clean room — DESIGN.md §16). The
+documentation's counter-type enumeration (clean room: DESIGN.md §16). The
 enum order has been stable across EmberZNet 6.x–8.x for the leading entries,
 but exact tail composition varies by SDK build, so treatment is defensive:
 

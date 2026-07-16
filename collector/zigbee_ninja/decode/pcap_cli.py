@@ -1,4 +1,4 @@
-"""Offline decode of a coordinator↔Z2M capture — the spike-S1 command.
+"""Offline decode of a coordinator↔Z2M capture: the spike-S1 command.
 
 Usage:
     python -m zigbee_ninja.decode.pcap_cli capture.pcap --port 6638

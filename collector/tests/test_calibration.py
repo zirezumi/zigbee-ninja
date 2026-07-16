@@ -9,7 +9,7 @@ from zigbee_ninja.store.db import Database
 
 INSTANCE = "z2m-test"
 
-# Sanitized fixtures only — no real IEEE addresses.
+# Sanitized fixtures only: no real IEEE addresses.
 DEVICES = [
     {
         "ieee_address": "0xa1",

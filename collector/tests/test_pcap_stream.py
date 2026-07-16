@@ -13,7 +13,7 @@ def test_streaming_across_arbitrary_chunk_boundaries():
     pcap, _ = conversation()
     reader = StreamingPcapReader()
     segments = []
-    # Feed one byte at a time — records must only emit once fully arrived.
+    # Feed one byte at a time: records must only emit once fully arrived.
     for i in range(len(pcap)):
         segments.extend(reader.feed(pcap[i : i + 1]))
     assert len(segments) == 6

@@ -11,10 +11,10 @@ const GRANT_CAPABILITIES = new Set(["topology_pull", "mqtt_discovery"]);
 
 function statusChip(tile: Tile): { label: string; className: string } {
   if (tile.status === "deployed" && tile.health === "stale") {
-    return { label: "degraded — no heartbeat", className: "chip warn" };
+    return { label: "degraded; no heartbeat", className: "chip warn" };
   }
   if (tile.status === "deployed" && tile.drift) {
-    return { label: `deployed — v${tile.probe.version} (update available)`, className: "chip warn" };
+    return { label: `deployed; v${tile.probe.version} (update available)`, className: "chip warn" };
   }
   switch (tile.status) {
     case "deployed":
@@ -85,14 +85,14 @@ function HaCard() {
         A read-only WebSocket subscription resolves each <code>mqtt.publish</code> to the
         automation or script that fired it, naming commanders in the Attribution explorer.
         Broker-safe: no broker changes, no write access to HA. Create a long-lived token in
-        HA (Profile → Security → Long-lived access tokens) and paste it here — it is stored
+        HA (Profile → Security → Long-lived access tokens) and paste it here: it is stored
         in the collector's data volume and never displayed again.
       </p>
       {view?.configured && !editing ? (
         <p>
           <span className={state === "connected" ? "chip ok" : "chip warn"}>
             {state}
-            {view.status.error ? ` — ${view.status.error}` : ""}
+            {view.status.error ? `: ${view.status.error}` : ""}
           </span>{" "}
           <span className="mono">{view.url}</span>
           {counters && (
@@ -249,7 +249,7 @@ export default function Footprint() {
         <p className="panel-kicker">Every foothold, listed and revocable</p>
         <p className="hint">
           Nothing is deployed without a grant from this page, everything deployed is
-          version-stamped and heartbeat-monitored, and every probe fails open — if
+          version-stamped and heartbeat-monitored, and every probe fails open: if
           zigbee-ninja dies, your mesh never notices. The extension probe installs and
           removes purely over MQTT; it reports payload sizes, never contents. Its heartbeat
           also self-reports which Z2M event hooks attached on your version.
@@ -261,7 +261,7 @@ export default function Footprint() {
               <th>Capability</th>
               <th>Target</th>
               <th>Status</th>
-              <th title="Which Zigbee2MQTT event hooks the extension probe attached on this instance's version — self-reported in its heartbeat">
+              <th title="Which Zigbee2MQTT event hooks the extension probe attached on this instance's version: self-reported in its heartbeat">
                 Hooks (self-reported)
               </th>
               <th
@@ -316,7 +316,7 @@ export default function Footprint() {
                         <button
                           className="small"
                           disabled={busy !== null}
-                          title={`Replace the running extension with the bundled v${tile.bundled_version} in place — no revoke, the grant is untouched`}
+                          title={`Replace the running extension with the bundled v${tile.bundled_version} in place: no revoke, the grant is untouched`}
                           onClick={() => void act("/api/tiles/deploy", tile)}
                         >
                           {busy === key ? "…" : `Update to v${tile.bundled_version}`}
@@ -338,7 +338,7 @@ export default function Footprint() {
             {tiles.length === 0 && (
               <tr>
                 <td colSpan={6} className="hint">
-                  No targets yet — tiles appear once discovery finds Zigbee2MQTT instances.
+                  No targets yet: tiles appear once discovery finds Zigbee2MQTT instances.
                 </td>
               </tr>
             )}

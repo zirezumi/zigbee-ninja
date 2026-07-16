@@ -1,11 +1,11 @@
 "use strict";
 
-// zigbee-ninja T1 probe — a Zigbee2MQTT external extension (DESIGN.md §7.1).
+// zigbee-ninja T1 probe: a Zigbee2MQTT external extension (DESIGN.md §7.1).
 //
 // Deployed and removed entirely over MQTT (bridge/request/extension/save|remove).
 // Dependency-free single file. Defensive by design: every hook attaches through
 // a capability check with a legacy fallback, every handler is wrapped, and the
-// heartbeat self-reports the attached hook inventory — so the S3 spike question
+// heartbeat self-reports the attached hook inventory: so the S3 spike question
 // ("which eventBus hooks are stable on this Z2M version?") is answered
 // empirically by every deployment.
 //

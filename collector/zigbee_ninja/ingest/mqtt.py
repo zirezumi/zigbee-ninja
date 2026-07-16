@@ -2,7 +2,7 @@
 
 The ingest task is cancellation-driven: the Engine cancels it on shutdown or
 broker reconfiguration, and the async context manager closes the client cleanly.
-Handler exceptions are swallowed (with a status note) — a bug in a downstream
+Handler exceptions are swallowed (with a status note): a bug in a downstream
 consumer must never kill the firehose.
 """
 
@@ -21,7 +21,7 @@ MAX_BACKOFF_SECONDS = 30
 # with a large retained set (a Home Assistant broker holds hundreds of retained
 # `homeassistant/.../config` messages), a "#"-only subscribe floods the client
 # with retained traffic and the broker can drop late-sorting `z2m-*/bridge/*`
-# retained messages from the per-client queue — leaving discovery empty. A
+# retained messages from the per-client queue: leaving discovery empty. A
 # dedicated up-front subscribe delivers the (small) retained bridge set first,
 # so discovery never depends on surviving the flood. Both single- and two-level
 # base topics are covered (e.g. `z2m-1/bridge/*` and `home/z2m/bridge/*`).

@@ -4,7 +4,7 @@
 
 - **The design document is the spec.** [docs/DESIGN.md](docs/DESIGN.md) is canonical;
   changes that alter the architecture must update it in the same PR.
-- **License policy (hard rule):** no GPL or AGPL code in distributed artifacts —
+- **License policy (hard rule):** no GPL or AGPL code in distributed artifacts;
   neither vendored nor as a dependency. Named exclusions: `bellows`, `zigpy`,
   `scapy`. CI enforces this via `tools/license_check.py`. Protocol-decoding logic
   is ported from MIT-licensed zigbee-herdsman or written from vendor specifications.
@@ -13,7 +13,7 @@
 
 ## Developer Certificate of Origin
 
-Contributions require a DCO sign-off — add `-s` to your commits:
+Contributions require a DCO sign-off: add `-s` to your commits:
 
 ```sh
 git commit -s -m "your change"

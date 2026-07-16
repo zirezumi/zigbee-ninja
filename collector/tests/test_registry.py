@@ -30,7 +30,7 @@ DEVICES = [
             "vendor": "ExampleCo",
             "model": "BULB-1",
             # Composite expose (light) wrapping gettable features, plus a
-            # published-only metering property — the §11 preview warns on it.
+            # published-only metering property: the §11 preview warns on it.
             "exposes": [
                 {
                     "type": "light",
@@ -41,9 +41,9 @@ DEVICES = [
                 },
                 {"property": "power", "access": 1},
                 {"property": "linkquality", "access": 1},
-                # Config enum sharing the "power" stem — NOT a measurement.
+                # Config enum sharing the "power" stem: NOT a measurement.
                 {"property": "power_on_behavior", "access": 7},
-                # Underscore-bounded stem match — IS a measurement.
+                # Underscore-bounded stem match: IS a measurement.
                 {"property": "device_temperature", "access": 1},
             ],
         },

@@ -1,6 +1,6 @@
 """Home Assistant MQTT-discovery publisher tile (DESIGN.md §14).
 
-A *standing* publisher on the shared broker — unlike a per-run calibration —
+A *standing* publisher on the shared broker: unlike a per-run calibration;
 so it is a per-instance grant tile: nothing publishes until the user grants
 the instance in Footprint, and revoking deletes every retained topic the tile
 ever claimed (empty retained payloads), keeping the footprint contract (P2).
@@ -11,7 +11,7 @@ refreshes state topics on a fixed cadence: headline capacity metrics (channel
 budget %, capacity utilization %, wire p95 latency, MQTT message rate) as sensors
 and the active-alert state as a `problem` binary_sensor whose attributes list
 the alert names. Sensors carry `expire_after`, so a dead collector reads
-*unavailable* in HA rather than forever-fresh — no availability topic and no
+*unavailable* in HA rather than forever-fresh: no availability topic and no
 LWT dependency. Everything rides the engine's own MQTT connection, so the
 traffic self-attributes (P4).
 
@@ -86,7 +86,7 @@ class DiscoveryPublisher:
         self._metrics = metrics
         self._version = version
         # Config payloads republish once per boot per instance (and again on
-        # payload change, e.g. a version bump) — not every cycle.
+        # payload change, e.g. a version bump): not every cycle.
         self._configs_published: dict[str, str] = {}
 
     # -- topic/payload construction ---------------------------------------------
@@ -161,7 +161,7 @@ class DiscoveryPublisher:
         return payloads
 
     def _all_topics(self, base: str) -> list[str]:
-        """Every retained topic this tile may ever claim for the instance —
+        """Every retained topic this tile may ever claim for the instance:
         recorded up front so a revoke clears entities whose states were
         skipped (no data yet) in every cycle so far."""
         topics = set(self._config_payloads(base))

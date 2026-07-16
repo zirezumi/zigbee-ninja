@@ -168,7 +168,7 @@ function PreviewPanel({
     <div className="panel">
       <div className="toolbar">
         <p className="panel-kicker">
-          Dry run — {spread ? "whole-coordinator ramp" : `calibrate ${preview.target}`} on{" "}
+          Dry run: {spread ? "whole-coordinator ramp" : `calibrate ${preview.target}`} on{" "}
           {preview.instance}
         </p>
         {spread && (
@@ -184,7 +184,7 @@ function PreviewPanel({
       <p>{preview.traffic}</p>
       {spread ? (
         <p className="mono hint">
-          {preview.targets.map((entry) => entry.friendly_name).join(" · ")} — per-device
+          {preview.targets.map((entry) => entry.friendly_name).join(" · ")}: per-device
           share ≤ {preview.per_target_max_eps}/s
         </p>
       ) : (
@@ -253,7 +253,7 @@ function PreviewPanel({
           Cancel
         </button>
         <span className="hint">
-          Authorization is single-use and applies to this run only — nothing persists.
+          Authorization is single-use and applies to this run only: nothing persists.
         </span>
       </div>
     </div>
@@ -317,7 +317,7 @@ function BulkProgressPanel({
           })}
         </tbody>
       </table>
-      {bulk.abort_requested && <p className="error">Abort requested — stopping…</p>}
+      {bulk.abort_requested && <p className="error">Abort requested: stopping…</p>}
     </div>
   );
 }
@@ -336,7 +336,7 @@ function BulkPreviewPanel({
   return (
     <div className="panel">
       <div className="toolbar">
-        <p className="panel-kicker">Dry run — calibrate the fleet, one router each</p>
+        <p className="panel-kicker">Dry run: calibrate the fleet, one router each</p>
         <span className="chip">{preview.runs.length} runs</span>
       </div>
       <p>
@@ -412,12 +412,12 @@ function CandidatesPanel({
         <span className="hint">
           {view.topology_pulled_at
             ? `ranked with the topology snapshot from ${ago(view.topology_pulled_at)}`
-            : "no topology snapshot — pull one for LQI-aware ranking"}
+            : "no topology snapshot; pull one for LQI-aware ranking"}
         </span>
         <button
           className="small"
           disabled={eligibleCount < 4 || busyTarget !== null}
-          title="Round-robin reads across the top routers so no single device's queue binds first — measures the whole coordinator's capacity limit instead of one device's"
+          title="Round-robin reads across the top routers so no single device's queue binds first: measures the whole coordinator's capacity limit instead of one device's"
           onClick={onSpread}
         >
           Preview whole-coordinator ramp
@@ -445,7 +445,7 @@ function CandidatesPanel({
                 <td>
                   {candidate.friendly_name}
                   {candidate.reasons.length > 0 && (
-                    <span className="hint"> — {candidate.reasons.join("; ")}</span>
+                    <span className="hint"> · {candidate.reasons.join("; ")}</span>
                   )}
                 </td>
                 <td className="hint">
@@ -529,7 +529,7 @@ function HistoryPanel({
                 {record.knee?.breach && <span className="hint">({record.knee.breach})</span>}
                 {drifted && (
                   <span className="chip warn" title={`ran on ${environment}, now ${current[record.instance]}`}>
-                    environment changed — recalibrate?
+                    environment changed: recalibrate?
                   </span>
                 )}
               </summary>
@@ -701,9 +701,9 @@ export default function Calibration() {
       <div className="banner ok">
         <span>
           A calibration run transmits on purpose: benign read requests to a router, ramped
-          up until responses start slowing — that turning point is the coordinator's
+          up until responses start slowing: that turning point is the coordinator's
           measured capacity limit. Every run is individually authorized from its dry-run
-          preview — there is no standing grant — and an abort control stays live throughout.
+          preview: there is no standing grant; and an abort control stays live throughout.
         </span>
       </div>
       {error && <p className="error">{error}</p>}

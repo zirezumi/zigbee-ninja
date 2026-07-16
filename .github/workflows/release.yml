@@ -1,7 +1,7 @@
 # Release pipeline (docs/RELEASING.md): runs only when a version tag is pushed.
 # Re-runs the full gates (a tag can point at any commit), builds and pushes the
 # multi-arch image under immutable version tags, and signs it with cosign
-# keyless (GitHub OIDC — no key material to manage or leak).
+# keyless (GitHub OIDC: no key material to manage or leak).
 name: Release
 
 on:
@@ -37,7 +37,7 @@ jobs:
       - name: Tests
         run: pytest
         working-directory: collector
-      - name: License policy (no GPL/AGPL deps — DESIGN.md §16)
+      - name: License policy (no GPL/AGPL deps; DESIGN.md §16)
         run: python tools/license_check.py
       - uses: actions/setup-node@v4
         with:

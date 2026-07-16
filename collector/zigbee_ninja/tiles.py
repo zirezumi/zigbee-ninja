@@ -1,6 +1,6 @@
 """Permission tiles: grant/deploy/revoke lifecycle + footprint (DESIGN.md §6).
 
-M3 implements the first tile — the per-instance Z2M extension probe, deployed
+M3 implements the first tile: the per-instance Z2M extension probe, deployed
 and removed entirely over MQTT (`bridge/request/extension/save|remove`) with
 transaction-correlated responses. Every deployed artifact is version-stamped;
 health is computed from probe heartbeats at read time.
@@ -20,7 +20,7 @@ from .store.db import Database
 
 CAPABILITY_Z2M_EXTENSION = "z2m_extension"
 # Topology pulls are ACTIVE mesh operations (Mgmt_Lqi/Mgmt_Rtg sweeps): the
-# tile is a pure grant — nothing is installed anywhere — and the puller
+# tile is a pure grant: nothing is installed anywhere; and the puller
 # enforces its own rate limit on top (DESIGN.md §6).
 CAPABILITY_TOPOLOGY = "topology_pull"
 # The HA MQTT-discovery publisher is a STANDING publisher on the shared

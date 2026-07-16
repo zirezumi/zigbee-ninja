@@ -8,7 +8,7 @@ capacity model needs (decode/ezsp_params.py), and accumulates:
 - per-coordinator frame stats and mesh-health counters,
 - per-frame airtime (capacity/airtime.py) into 1 s buckets with 10 s drains,
 - the wire-tier latency SLI: sendUnicast → messageSentHandler pairing by
-  message tag on pcap timestamps (DESIGN.md §10) — the authoritative
+  message tag on pcap timestamps (DESIGN.md §10): the authoritative
   replacement for the T1 command→state-echo proxy.
 """
 
@@ -44,7 +44,7 @@ _EWMA_ALPHA = 0.05
 # coordinator's own mac_tx_broadcast over the broadcasts it originated
 # (APS groupcasts + MTORR route discoveries), less the modeled radius-1
 # link-status transmissions, measures its passive-ack retransmission factor
-# directly — generalized to router relays on the same mesh.
+# directly: generalized to router relays on the same mesh.
 AVG_TX_MIN_WINDOW_SECONDS = 60.0
 # Zigbee2MQTT's ember adapter polls readAndClearCounters on a fixed 1 h
 # setInterval (herdsman WATCHDOG_COUNTERS_FEED_INTERVAL), so real windows are
@@ -156,7 +156,7 @@ class WireLatency:
     alignment is needed; rollup windows use the collector wall clock like the
     airtime tracker. Unicast-only by design: broadcast confirms fire on TX (no
     delivery wait) and would skew the SLI downward. The drained 10 s windows
-    persist to latency_10s — the series continuous knee validation plots
+    persist to latency_10s: the series continuous knee validation plots
     against load (DESIGN.md §10).
     """
 
@@ -214,7 +214,7 @@ class WireLatency:
 
     # -- calibration read side (DESIGN.md §11) ---------------------------------
     # Marks are pcap-clock timestamps: take one at a ramp-step boundary, then
-    # collect the samples that arrived after it — no cross-clock comparison.
+    # collect the samples that arrived after it: no cross-clock comparison.
 
     def latest_ts(self, instance: str) -> float:
         return self._latest_ts.get(instance, 0.0)
@@ -280,7 +280,7 @@ class TapIngest:
         # EZSP frame, for the raw event store (DESIGN.md §12).
         self._on_event = on_event
         # on_zcl_incoming(instance, sender_nwk, zcl_seq, pcap_ts): every radio
-        # (non-loopback) incoming frame with a ZCL header — the T2 side of
+        # (non-loopback) incoming frame with a ZCL header: the T2 side of
         # frame fusion (DESIGN.md §8).
         self._on_zcl_incoming = on_zcl_incoming
         self._readers: dict[str, StreamingPcapReader] = {}
@@ -514,7 +514,7 @@ class TapIngest:
         """Per-instance cumulative wire health counters plus the current avg_tx.
 
         Counters are summed across an instance's flows (monotonic within a
-        collector lifetime); avg_tx comes from the most recently seen flow —
+        collector lifetime); avg_tx comes from the most recently seen flow:
         the EWMA lives per flow, and reconnects start a fresh one."""
         out: dict[str, dict] = {}
         freshest: dict[str, float] = {}
@@ -546,7 +546,7 @@ class TapIngest:
         apparent window and over-subtracts slightly; the EWMA damps it.
 
         mac_tx_broadcast also counts the coordinator's *relays* of other
-        nodes' NWK broadcasts (route requests and the like) — traffic that
+        nodes' NWK broadcasts (route requests and the like): traffic that
         never crosses the EZSP boundary, so it cannot be subtracted. A window
         whose residual exceeds the passive-ack maximum of 3 transmissions per
         originated broadcast is therefore provably relay-contaminated and is
@@ -592,7 +592,7 @@ class TapIngest:
     def _update_retry_rate(self, flow: FlowState, values: list[int]) -> None:
         """One per-hop MAC retry-rate sample per clearing counter window.
 
-        retry_rate = mac_tx_unicast_retry / mac_tx_unicast_success — the share
+        retry_rate = mac_tx_unicast_retry / mac_tx_unicast_success: the share
         of unicast transmissions the coordinator's own radio had to repeat.
         Retries for eventually-failed frames count in the numerator (their
         airtime burned all the same), so the ratio can exceed the per-success
@@ -703,14 +703,14 @@ class TapIngest:
                         "retry_rate_provenance": (
                             "measured (coordinator hop, MAC counters)"
                             if flow.retry_rate_ewma is not None
-                            else "default (0 — awaiting counter windows)"
+                            else "default (0: awaiting counter windows)"
                         ),
                     },
                 }
             )
         return {
             "agents": len(self.agents),
-            # The footprint page lists every foothold (DESIGN.md P2) — tap
+            # The footprint page lists every foothold (DESIGN.md P2): tap
             # agents included, with the hello metadata they self-reported.
             "agent_details": [
                 {

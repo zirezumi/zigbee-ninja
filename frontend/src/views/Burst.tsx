@@ -189,7 +189,7 @@ export default function Burst() {
       <div className="panel">
         <p className="panel-kicker">Event timeline</p>
         <p className="hint">
-          Every observed event — MQTT messages and decoded coordinator-link frames — from
+          Every observed event: MQTT messages and decoded coordinator-link frames; from
           the raw event store: the newest hour held in memory, older hours archived on disk
           (48 h by default, adjustable in Settings). Drag on the chart to zoom; windows of{" "}
           {EVENT_TABLE_WINDOW_S} s or less list the individual events.
@@ -257,13 +257,13 @@ export default function Burst() {
                 <th>Opened</th>
                 <th>Target</th>
                 <th title="set changes state; get reads it">Command</th>
-                <th title="Who issued the command — the Home Assistant automation, script, or user when the HA integration is connected, else the MQTT client">
+                <th title="Who issued the command: the Home Assistant automation, script, or user when the HA integration is connected, else the MQTT client">
                   Commander
                 </th>
                 <th className="num" title="State publishes the command provoked">
                   Echoes
                 </th>
-                <th className="num" title="Command to first state echo — end-to-end responsiveness">
+                <th className="num" title="Command to first state echo: end-to-end responsiveness">
                   First echo
                 </th>
               </tr>
@@ -317,7 +317,7 @@ export default function Burst() {
             </tbody>
           </table>
           {events.length > 500 && (
-            <p className="hint">Showing the first 500 of {events.length} — zoom further.</p>
+            <p className="hint">Showing the first 500 of {events.length}: zoom further.</p>
           )}
         </div>
       )}

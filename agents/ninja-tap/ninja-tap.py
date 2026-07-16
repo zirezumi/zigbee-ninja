@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""ninja-tap — passive wire-tap capture agent (DESIGN.md §7.2).
+"""ninja-tap: passive wire-tap capture agent (DESIGN.md §7.2).
 
 Dumb agent, smart collector: shells out to tcpdump for the coordinator TCP
 flows discovery found, and streams raw pcap-record frames to the collector over
-an outbound, token-authenticated WebSocket. Knows nothing about Zigbee — all
+an outbound, token-authenticated WebSocket. Knows nothing about Zigbee: all
 reassembly and ASH/EZSP decode happen collector-side.
 
 Standard library only (no pip install on capture hosts). tcpdump is the sole
@@ -118,7 +118,7 @@ def stream(args: argparse.Namespace) -> None:
 
     connection receives a fresh pcap global header, and stream until either
     side drops. A disconnect returns so the outer loop restarts the whole
-    session (fresh header again) — the collector's per-connection pcap reader
+    session (fresh header again): the collector's per-connection pcap reader
     never sees headerless mid-stream bytes.
     """
     iface = args.iface or pick_iface(args.sample_host)
@@ -149,7 +149,7 @@ def stream(args: argparse.Namespace) -> None:
     try:
         while True:
             # read1 forwards whatever tcpdump has written (-U flushes per
-            # packet) instead of blocking until a full block accumulates —
+            # packet) instead of blocking until a full block accumulates:
             # read(n) would hold quiet flows' frames for tens of seconds,
             # which downstream consumers keyed on pcap timestamps never
             # noticed but arrival-time fusion does.

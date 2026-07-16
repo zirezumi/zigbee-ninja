@@ -18,7 +18,7 @@ _SUFFIX_HANDLERS = {
 }
 
 # Published properties whose values move on their own (metering, environment).
-# Reading such a device republishes them — the §11 preview warns about the
+# Reading such a device republishes them: the §11 preview warns about the
 # resulting state churn in downstream controllers.
 _MEASUREMENT_HINTS = (
     "power",
@@ -276,7 +276,7 @@ class Registry:
         return int(instance.get("router_count") or 0) if instance else 0
 
     def network_address_for(self, base: str, friendly_name: str) -> int | None:
-        """Short (nwk) address for a friendly name — the T1↔T2 fusion join
+        """Short (nwk) address for a friendly name: the T1↔T2 fusion join
         needs it because the wire sees short addresses (sender EUI64 arrives
         zeroed) while probe events carry names."""
         return self._name_to_nwk.get(base, {}).get(friendly_name)

@@ -103,17 +103,17 @@ function CoverageMeter({ coverage }: { coverage: Coverage }) {
     [
       "MQTT firehose",
       coverage.t0,
-      "The broker connection itself — sees every MQTT command and state publish",
+      "The broker connection itself: sees every MQTT command and state publish",
     ],
     [
       "Z2M extension probe",
       coverage.t1,
-      "A small probe running inside Zigbee2MQTT, reporting every Zigbee frame it handles — including housekeeping that never reaches MQTT",
+      "A small probe running inside Zigbee2MQTT, reporting every Zigbee frame it handles: including housekeeping that never reaches MQTT",
     ],
     [
       "Wiretap",
       coverage.t2,
-      "Passive capture of the coordinator's network link — exact frame bytes and timing, decoded by the collector",
+      "Passive capture of the coordinator's network link: exact frame bytes and timing, decoded by the collector",
     ],
   ];
   return (
@@ -167,7 +167,7 @@ function ProbeFactValue({
   onUpdate: () => void;
 }) {
   if (!tile || !["deployed", "deploying"].includes(tile.status)) {
-    return <span>Not deployed — deploy from Permissions</span>;
+    return <span>Not deployed: deploy from Permissions</span>;
   }
   if (tile.status === "deploying") return <span>Deploying…</span>;
   if (tile.drift) {
@@ -177,7 +177,7 @@ function ProbeFactValue({
         <button
           className="linkish"
           disabled={busy}
-          title={`Replace the running v${tile.probe.version} extension with the bundled v${tile.bundled_version} in place — the grant is untouched`}
+          title={`Replace the running v${tile.probe.version} extension with the bundled v${tile.bundled_version} in place: the grant is untouched`}
           onClick={onUpdate}
         >
           {busy ? "updating…" : `Update to v${tile.bundled_version}`}
@@ -276,7 +276,7 @@ function InstanceRow({
         </Fact>
         <Fact
           label="Probe"
-          title="zigbee-ninja's extension running inside this Zigbee2MQTT instance — deployed and removed from the Permissions page"
+          title="zigbee-ninja's extension running inside this Zigbee2MQTT instance: deployed and removed from the Permissions page"
         >
           {probe?.enabled === false ? (
             <span>Deployed · paused</span>
@@ -311,7 +311,7 @@ function InstanceRow({
         </Fact>
         <Fact
           label="Z2M echo"
-          title="Time from an MQTT command to the device's state echo, seen at the Zigbee2MQTT boundary (approximate — includes queueing in Z2M)"
+          title="Time from an MQTT command to the device's state echo, seen at the Zigbee2MQTT boundary (approximate: includes queueing in Z2M)"
         >
           {latency
             ? `p50 ${latency.p50_ms} ms · p95 ${latency.p95_ms} ms (${latency.count})`
@@ -452,9 +452,9 @@ export default function Fleet({ onReconfigure, brokerInfo }: FleetProps) {
         <span>
           Broker: <strong>{broker?.state ?? socketState}</strong>
           {brokerAddress ? ` (${brokerAddress})` : ""}
-          {broker?.error ? ` — ${broker.error}` : ""}
+          {broker?.error ? `: ${broker.error}` : ""}
           {broker?.state === "connected" ? (
-            <span title="Total message rate across every topic on this broker — Zigbee2MQTT traffic and everything else sharing it">
+            <span title="Total message rate across every topic on this broker: Zigbee2MQTT traffic and everything else sharing it">
               {` · ${globalRate} msg/s`}
             </span>
           ) : (

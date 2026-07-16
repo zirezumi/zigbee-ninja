@@ -8,7 +8,7 @@ so its posture is the strictest in the product:
   authorization token (short TTL). Starting a run requires echoing that token;
   nothing persists across runs (DESIGN.md §6).
 - **Closed loop.** Reads are paced at the step rate but bounded by outstanding
-  replies — a stalling mesh throttles the driver instead of being buried.
+  replies: a stalling mesh throttles the driver instead of being buried.
 - **Benign traffic.** Unicast attribute reads through the instance's own MQTT
   command path (`<base>/<target>/get {"<attr>": ""}`), the same path
   controllers use. Reads actuate nothing; each reply republishes device state.
@@ -19,7 +19,7 @@ so its posture is the strictest in the product:
 The knee (§10 denominator 2) is the highest ramp step sustained without a stop
 rule firing: p95 RTT breach vs the step-1 baseline, read-timeout ratio,
 instance delivery failures, or driver saturation (the closed loop can no
-longer reach the requested rate — which indicates the *pipeline* service
+longer reach the requested rate: which indicates the *pipeline* service
 ceiling, denominator 3, and bounds the NCP knee from below; the record says
 which). RTT prefers the wire-tier SLI when a tap covers the coordinator and
 falls back to the MQTT command→state-echo path, provenance-tagged either way.
@@ -42,7 +42,7 @@ from ..store.db import Database
 # -- ramp schedule & hard caps (all shown verbatim in the dry-run preview) ------
 RAMP_RATES_EPS = (1.0, 2.0, 4.0, 8.0, 16.0, 32.0)
 # Spread mode round-robins reads across several routers so no single device's
-# Zigbee2MQTT queue binds first — the aggregate ramp probes the NCP/global
+# Zigbee2MQTT queue binds first: the aggregate ramp probes the NCP/global
 # pipeline knee (§10 denominator 2) instead of the per-device ceiling.
 SPREAD_RATES_EPS = (8.0, 16.0, 32.0, 64.0)
 SPREAD_MIN_TARGETS = 4
@@ -62,14 +62,14 @@ MAX_TOTAL_READS = 5000
 COOLDOWN_SECONDS = 120.0
 AUTHORIZATION_TTL_SECONDS = 600.0
 
-# -- stop rules (knee detection — a normal end of ramp) -------------------------
+# -- stop rules (knee detection: a normal end of ramp) -------------------------
 RTT_BREACH_FACTOR = 3.0
 RTT_FLOORS_MS = {"wire": 300.0, "echo": 2000.0}
 TIMEOUT_BREACH_RATIO = 0.10
 SATURATION_RATIO = 0.80
 DELIVERY_FAILURES_PER_STEP = 10
 
-# -- watchdog rules (abort — something beyond the run is being affected) --------
+# -- watchdog rules (abort: something beyond the run is being affected) --------
 WATCHDOG_BRIDGE_ERRORS = 5
 STALL_MIN_SENT = 10
 STALL_SECONDS = 10.0
@@ -82,7 +82,7 @@ class CalibrationRejected(RuntimeError):
 
 
 class _Abort(Exception):
-    """Internal: watchdog or manual abort — stop transmitting immediately."""
+    """Internal: watchdog or manual abort; stop transmitting immediately."""
 
 
 @dataclass
@@ -130,7 +130,7 @@ class _ActiveRun:
 
 @dataclass
 class _BulkState:
-    """A sequential queue of authorized runs — one batch, one authorization."""
+    """A sequential queue of authorized runs: one batch, one authorization."""
 
     batch_id: str
     queue: list[dict]
@@ -208,7 +208,7 @@ class CalibrationManager:
         return self._active is not None
 
     def owns_command(self, base: str, target: str, verb: str) -> bool:
-        """True for the run's own reads — the engine skips chain attribution
+        """True for the run's own reads: the engine skips chain attribution
         for them because publish() already accounted them as `self` (P4)."""
         run = self._active
         return (
@@ -221,7 +221,7 @@ class CalibrationManager:
     def on_state(self, base: str, name: str) -> bool:
         """Complete one outstanding read on a target's state echo.
 
-        Returns True only when an outstanding read was completed — the engine
+        Returns True only when an outstanding read was completed: the engine
         then classes the echo `self`. A target state publish with nothing
         outstanding stays an ordinary autonomous report.
         """
@@ -445,12 +445,12 @@ class CalibrationManager:
             )
             warnings.append(
                 f"Each reply republishes device state; {', '.join(chatty)} report(s) "
-                f"{', '.join(measurements)} — expect state/recorder churn in "
+                f"{', '.join(measurements)}: expect state/recorder churn in "
                 "controllers for the run duration."
             )
         if not wire:
             warnings.append(
-                "No wire tap covers this coordinator — RTT falls back to the "
+                "No wire tap covers this coordinator: RTT falls back to the "
                 "MQTT command→state-echo path (coarser; the knee is tagged accordingly)."
             )
         shared = [
@@ -462,7 +462,7 @@ class CalibrationManager:
         ]
         if shared:
             warnings.append(
-                f"Shares Zigbee channel {info.get('channel')} with {', '.join(shared)} — "
+                f"Shares Zigbee channel {info.get('channel')} with {', '.join(shared)}: "
                 "their traffic contends with the benchmark."
             )
 
@@ -497,12 +497,12 @@ class CalibrationManager:
             "targets": targets,
             "traffic": (
                 "Unicast ZCL attribute reads via Zigbee2MQTT's own command path; "
-                "each read is one TX unicast plus the target's reply — nothing is "
+                "each read is one TX unicast plus the target's reply: nothing is "
                 "written or actuated."
                 if single
                 else (
                     f"Unicast ZCL attribute reads round-robined across "
-                    f"{len(devices)} routers via Zigbee2MQTT's own command path — "
+                    f"{len(devices)} routers via Zigbee2MQTT's own command path: "
                     f"per-device share stays at or below "
                     f"{SPREAD_PER_TARGET_MAX_EPS:.0f}/s (under every measured "
                     "per-device ceiling), so the aggregate ramp probes the "
@@ -518,7 +518,7 @@ class CalibrationManager:
             "estimated_duration_s": int(len(steps) * (STEP_SECONDS + READ_TIMEOUT_SECONDS)),
             "read_timeout_s": READ_TIMEOUT_SECONDS,
             "max_outstanding_rule": (
-                f"max({MIN_OUTSTANDING}, rate × {OUTSTANDING_RTT_ALLOWANCE}s) — a "
+                f"max({MIN_OUTSTANDING}, rate × {OUTSTANDING_RTT_ALLOWANCE}s): a "
                 "stalling mesh throttles the driver"
             ),
             "rtt_source": "wire" if wire else "echo",
@@ -605,16 +605,16 @@ class CalibrationManager:
         value = self._authorizations.get(authorization)
         if value is None:
             raise CalibrationRejected(
-                "Unknown or already-used authorization — request a fresh preview"
+                "Unknown or already-used authorization: request a fresh preview"
             )
         if self._clock() - value["created_at"] > AUTHORIZATION_TTL_SECONDS:
             self._authorizations.pop(authorization, None)
-            raise CalibrationRejected("Authorization expired — request a fresh preview")
+            raise CalibrationRejected("Authorization expired: request a fresh preview")
         if bool(value.get("batch")) != batch:
             raise CalibrationRejected(
-                "This authorization is for a batch — start it via the bulk endpoint"
+                "This authorization is for a batch: start it via the bulk endpoint"
                 if value.get("batch")
-                else "This authorization is for a single run — use /api/calibration/run"
+                else "This authorization is for a single run: use /api/calibration/run"
             )
         return value
 
@@ -649,7 +649,7 @@ class CalibrationManager:
         now = self._clock()
         if now < self._cooldown_until:
             raise CalibrationRejected(
-                f"Cooling down — next run allowed in {int(self._cooldown_until - now)}s"
+                f"Cooling down: next run allowed in {int(self._cooldown_until - now)}s"
             )
 
     def _request_abort(self, reason: str) -> None:
@@ -704,14 +704,14 @@ class CalibrationManager:
                 self._record(run, status)
             finally:
                 # Even a storage failure must release the run and arm the
-                # cooldown — a stuck "running" state would block all runs.
+                # cooldown: a stuck "running" state would block all runs.
                 self._cooldown_until = self._clock() + COOLDOWN_SECONDS
                 self._active = None
 
     async def _run_bulk(self) -> None:
         """Execute the batch queue sequentially: same rails per run, the full
         cooldown between runs, and any abort (manual or watchdog) stops the
-        remainder — a batch never outruns the conditions it was authorized
+        remainder: a batch never outruns the conditions it was authorized
         under."""
         bulk = self._bulk
         assert bulk is not None
@@ -725,7 +725,7 @@ class CalibrationManager:
                     await self._sleep(1.0)
                 if bulk.abort_requested:
                     return
-                # Re-verify at its turn in the queue — the fleet may have
+                # Re-verify at its turn in the queue: the fleet may have
                 # changed since the batch was authorized.
                 try:
                     self._verify_plan_targets(plan)
@@ -860,7 +860,7 @@ class CalibrationManager:
             and step.completed == 0
             and self._clock() - step.started_at > STALL_SECONDS
         ):
-            raise _Abort("no replies at all — target or pipeline unresponsive")
+            raise _Abort("no replies at all: target or pipeline unresponsive")
 
     def _expire_timeouts(self, run: _ActiveRun, step: StepResult) -> None:
         now = self._clock()
@@ -1013,7 +1013,7 @@ class CalibrationManager:
             if device.get("friendly_name") == target:
                 if device.get("type") != "Router":
                     raise ValueError(
-                        f"{target} is not a router — benchmarks only target "
+                        f"{target} is not a router: benchmarks only target "
                         "mains-powered routers"
                     )
                 if not str(device.get("power_source") or "").startswith("Mains"):

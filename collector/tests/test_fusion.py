@@ -48,7 +48,7 @@ def test_expired_entry_never_matches_late_counterpart():
     fusion = make(now)
     fusion.on_wire("z2m-test", 1, 10, pcap_ts=1000.0)
     now[0] = 1006.0
-    fusion.on_probe("z2m-test", 1, 10, probe_ts=1006.0)  # too late — new pending
+    fusion.on_probe("z2m-test", 1, 10, probe_ts=1006.0)  # too late: new pending
     now[0] = 1012.0
     view = fusion.snapshot()["z2m-test"]
     assert view["matched_5m"] == 0
@@ -89,7 +89,7 @@ def test_seq_delta_histogram_exposes_systematic_shift():
     now = [1000.0]
     fusion = make(now)
     # The same sender expires unmatched on both sides with sequences that
-    # differ by a constant 100 — the histogram must say so.
+    # differ by a constant 100: the histogram must say so.
     for offset in range(4):
         fusion.on_wire("z2m-test", 5, 10 + offset, pcap_ts=1000.0 + offset / 10)
         fusion.on_probe("z2m-test", 5, 110 + offset, probe_ts=1000.0 + offset / 10)

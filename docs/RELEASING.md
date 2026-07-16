@@ -2,7 +2,7 @@
 
 Releases are cut by pushing an annotated version tag; everything else is
 automated by `.github/workflows/release.yml`. Nothing releases from ordinary
-pushes — `main` stays a moving development line (`:edge` + `:sha-*` images
+pushes: `main` stays a moving development line (`:edge` + `:sha-*` images
 from CI), and **releases own `:latest`** alongside their immutable `vX.Y.Z`
 tag.
 
@@ -10,13 +10,13 @@ tag.
 
 Semantic versioning, pre-1.0 rules: **0.MINOR.PATCH**.
 
-- **MINOR** — new capability or any behavior/API change a user could notice
+- **MINOR**: new capability or any behavior/API change a user could notice
   (view semantics, API shapes, probe/agent protocol, metric identifiers).
-- **PATCH** — fixes and internal changes with no observable contract change.
+- **PATCH**: fixes and internal changes with no observable contract change.
 - 1.0.0 comes when the HA add-on packaging lands and the API/probe contracts
   are declared stable.
 
-The version lives in **two places that must agree** —
+The version lives in **two places that must agree**:
 `collector/pyproject.toml` (`project.version`) and
 `collector/zigbee_ninja/__init__.py` (`__version__`). The release workflow
 fails if the tag does not match `pyproject.toml`.
@@ -37,7 +37,7 @@ fails if the tag does not match `pyproject.toml`.
    (lint, tests, license policy, frontend build, tag↔version check), builds
    the multi-arch image (amd64/arm64), pushes
    `ghcr.io/zirezumi/zigbee-ninja:vX.Y.Z`, signs it with **cosign keyless**
-   (GitHub Actions OIDC — no long-lived key exists), and creates the GitHub
+   (GitHub Actions OIDC: no long-lived key exists), and creates the GitHub
    release with generated notes.
 4. Post-release: bump `main` to the next `.devN` version
    (e.g. `0.1.1.dev0`) in both files.
@@ -54,7 +54,7 @@ cosign verify \
 ```
 
 This proves the image was built by this repository's release workflow from
-the stated tag — the §15 image-signing posture.
+the stated tag: the §15 image-signing posture.
 
 ## Image tag semantics (ratified 2026-07-16)
 

@@ -51,7 +51,7 @@ function nodeColor(node: TopologyGraphNode): string {
 
 /** Force-directed mesh graph over the stored raw networkmap: LQI-weighted
  * edges (weak links dashed), routers sized by how many links and observed
- * routing paths lean on them. The simulation settles synchronously — small
+ * routing paths lean on them. The simulation settles synchronously: small
  * meshes need no animation loop. Wheel zooms, drag pans, clicking a node
  * opens its detail panel. */
 function MeshGraph({ base, pulledAt }: { base: string; pulledAt: number }) {
@@ -344,7 +344,7 @@ function InstancePanel({ base, summary, granted, busy, onPull }: InstancePanelPr
         <p className="hint">
           {granted
             ? "Pull a snapshot to map this mesh."
-            : "Topology pulls are not granted for this instance — grant them on the Permissions page."}
+            : "Topology pulls are not granted for this instance; grant them on the Permissions page."}
         </p>
       ) : (
         <>
@@ -375,7 +375,7 @@ function InstancePanel({ base, summary, granted, busy, onPull }: InstancePanelPr
                 .filter((failure) => !summary.unresponsive_nodes.includes(failure.node))
                 .map((failure) => `${failure.node} (${failure.failed.join(", ")})`)
                 .join(", ")}{" "}
-              — a firmware omission on those devices, not a reachability problem.
+              (a firmware omission on those devices, not a reachability problem).
             </p>
           )}
           <MeshGraph base={base} pulledAt={summary.pulled_at} />
@@ -383,7 +383,7 @@ function InstancePanel({ base, summary, granted, busy, onPull }: InstancePanelPr
             <div>
               <p className="panel-kicker">Weakest links (LQI &lt; 80)</p>
               {summary.weak_links.length === 0 ? (
-                <p className="hint">None — every reported link is at LQI 80 or better.</p>
+                <p className="hint">None: every reported link is at LQI 80 or better.</p>
               ) : (
                 <table className="table">
                   <thead>
@@ -487,7 +487,7 @@ export default function Topology() {
     <>
       <div className="banner ok">
         <span>
-          A pull asks Zigbee2MQTT to sweep the mesh (Mgmt_Lqi/Mgmt_Rtg to every router) —
+          A pull asks Zigbee2MQTT to sweep the mesh (Mgmt_Lqi/Mgmt_Rtg to every router):
           real mesh traffic, so it is grant-gated per instance and rate-limited to one scan
           per 15 minutes, one instance at a time.
         </span>

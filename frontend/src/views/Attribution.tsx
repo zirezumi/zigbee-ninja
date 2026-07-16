@@ -19,17 +19,17 @@ const CLASS_ORDER = [
 
 const CLASS_TITLES: Record<string, string> = {
   commanded:
-    "Commands sent because something outside Zigbee2MQTT asked — automations, scripts, or users publishing to …/set and …/get",
+    "Commands sent because something outside Zigbee2MQTT asked: automations, scripts, or users publishing to …/set and …/get",
   provoked:
     "Replies those commands caused: read responses and the state echoes that follow a set",
   autonomous:
-    "Traffic devices generate on their own — sensor reports, physical presses — outside any command's window",
+    "Traffic devices generate on their own: sensor reports, physical presses; outside any command's window",
   "controller-housekeeping":
     "Zigbee2MQTT's own radio work: availability pings, configuration reads, firmware-update checks",
   "stack-housekeeping":
-    "The coordinator chip's internal network upkeep — modeled, since it never crosses an observable boundary",
+    "The coordinator chip's internal network upkeep: modeled, since it never crosses an observable boundary",
   "retry-overhead": "Extra transmissions spent repeating frames that failed the first time",
-  self: "zigbee-ninja's own traffic (topology pulls, calibration reads) — always counted separately",
+  self: "zigbee-ninja's own traffic (topology pulls, calibration reads); always counted separately",
 };
 
 function ClassBar({ classes }: { classes: Record<string, number> }) {
@@ -42,7 +42,7 @@ function ClassBar({ classes }: { classes: Record<string, number> }) {
           key={klass}
           className={`classbar-seg seg-${klass}`}
           style={{ width: `${(classes[klass] / total) * 100}%` }}
-          title={`${klass}: ${classes[klass]} — ${CLASS_TITLES[klass] ?? ""}`}
+          title={`${klass}: ${classes[klass]}; ${CLASS_TITLES[klass] ?? ""}`}
         />
       ))}
     </div>
@@ -199,7 +199,7 @@ export default function Attribution() {
           <p className="panel-kicker">Redundant commands</p>
           {redundant.length === 0 ? (
             <p className="hint">
-              None detected — identical payloads to the same target within 5 s would appear
+              None detected: identical payloads to the same target within 5 s would appear
               here. The cheapest utilization win there is.
             </p>
           ) : (

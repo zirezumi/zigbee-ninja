@@ -363,7 +363,7 @@ export default function Alerts() {
       <div className="panel">
         <p className="panel-kicker">Rules</p>
         <p className="hint">
-          Self-health rules ship enabled — they only fire when something you deployed stops
+          Self-health rules ship enabled: they only fire when something you deployed stops
           reporting. Capacity rules ship disabled with placeholder thresholds: enable the
           ones you want once you know your installation's norms. A rule with instance{" "}
           <code>*</code> watches every instance reporting the metric.

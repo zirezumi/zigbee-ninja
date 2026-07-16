@@ -3,13 +3,13 @@
 Self-hosted observability for Zigbee networks managed by [Zigbee2MQTT](https://www.zigbee2mqtt.io/).
 
 zigbee-ninja answers, with defensible numbers: **how much of each Zigbee coordinator's
-throughput capacity is being used — and by what?** It runs continuously as a single
+throughput capacity is being used: and by what?** It runs continuously as a single
 container with a built-in web GUI, attributes traffic to its causes (controller
 commands, device reporting, housekeeping, retry overhead), models mesh airtime
 amplification for group/broadcast traffic, and calibrates each coordinator's real
 capacity knee with a guided benchmark.
 
-**Status: pre-alpha — V1 feature-complete, hardening.** The architecture is
+**Status: pre-alpha; V1 feature-complete, hardening.** The architecture is
 fully specified in [docs/DESIGN.md](docs/DESIGN.md). Broker onboarding,
 discovery, live fleet rates, command-chain attribution, the Z2M extension
 probe, the passive wire tap with full ASH/EZSP decode, per-frame airtime
@@ -17,7 +17,7 @@ accounting, the wire-tier latency SLI, the calibration wizard (single, spread,
 and fleet-batch modes), headroom dashboards, threshold alerting, HA entities
 via MQTT discovery, secrets-at-rest encryption, settings-backed retention, and
 the raw-event burst inspector (zoomable timeline over an embedded
-DuckDB/Parquet store) all work. Not yet generally usable — no signed release
+DuckDB/Parquet store) all work. Not yet generally usable: no signed release
 images yet.
 
 ## Principles
@@ -69,7 +69,7 @@ make image    # build the container image
 
 [Apache-2.0](LICENSE). Contributions are accepted under the
 [Developer Certificate of Origin](CONTRIBUTING.md) (`git commit -s`).
-Dependency policy: no GPL/AGPL code in distributed artifacts — enforced by
+Dependency policy: no GPL/AGPL code in distributed artifacts; enforced by
 `tools/license_check.py` in CI (rationale in [docs/DESIGN.md](docs/DESIGN.md) §16).
 
 Zigbee® is a registered trademark of the Connectivity Standards Alliance.

@@ -32,7 +32,7 @@ def test_record_flush_query_roundtrip(tmp_path):
     bins = {entry["bin"]: entry for entry in timeline["bins"]}
     assert bins[1]["mqtt"]["events"] == 1
     assert bins[1]["wire"]["events"] == 1
-    assert 2 not in bins  # 7202.0 belongs to z2m-b — instance-scoped out
+    assert 2 not in bins  # 7202.0 belongs to z2m-b: instance-scoped out
     assert log.stats()["hot_rows"] == 3
 
 

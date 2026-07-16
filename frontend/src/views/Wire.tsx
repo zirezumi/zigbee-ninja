@@ -26,7 +26,7 @@ const BUCKET_LABELS: Record<string, string> = {
 };
 const BUCKET_TITLES: Record<string, string> = {
   tx_unicast: "Commands sent to a single device",
-  tx_groupcast: "Commands sent to a group — relayed by every router, so far costlier on air",
+  tx_groupcast: "Commands sent to a group; relayed by every router, so far costlier on air",
   rx: "Frames arriving at the coordinator (reports, replies)",
   rx_mesh: "Routing bookkeeping: path reports and route-error notices",
 };
@@ -54,7 +54,7 @@ function AirtimeBar({ buckets }: { buckets: AirtimeLive["buckets"] }) {
 function fusionText(fusion: FusionView | undefined): string {
   if (!fusion || fusion.state === "idle") return "—";
   if (fusion.state === "awaiting probe v0.4") {
-    return "awaiting probe v0.4 — update the extension from Permissions";
+    return "awaiting probe v0.4: update the extension from Permissions";
   }
   if (fusion.state === "no wire coverage") return "no wire frames to fuse with";
   const offset =
@@ -142,22 +142,22 @@ function FlowCard({ flow, airtime, latency, fusion, now }: FlowCardProps) {
         <span>
           {wire.retry_rate != null
             ? `${(wire.retry_rate * 100).toFixed(1)}% per hop (measured, ${wire.retry_rate_samples} window${wire.retry_rate_samples === 1 ? "" : "s"})`
-            : "0% assumed — awaiting counter windows"}
+            : "0% assumed; awaiting counter windows"}
         </span>
-        <span title="How many times each router transmits a group/broadcast command on average, including automatic repeats — this multiplies the airtime cost of every group command across the mesh">
+        <span title="How many times each router transmits a group/broadcast command on average, including automatic repeats: this multiplies the airtime cost of every group command across the mesh">
           Broadcast relays
         </span>
         <span title="Measured passively from the coordinator's own transmit counters. Counter windows polluted by relayed foreign traffic are discarded and counted, never guessed at.">
           {wire.avg_tx != null
             ? `×${wire.avg_tx} per router (measured, ${wire.avg_tx_samples} windows)`
             : wire.avg_tx_rejected > 0
-              ? `×1.3 per router (modeled — ${wire.avg_tx_rejected} noisy window${wire.avg_tx_rejected === 1 ? "" : "s"} discarded)`
-              : "×1.3 per router (modeled default — measuring)"}
+              ? `×1.3 per router (modeled: ${wire.avg_tx_rejected} noisy window${wire.avg_tx_rejected === 1 ? "" : "s"} discarded)`
+              : "×1.3 per router (modeled default; measuring)"}
         </span>
         <span title="Health of the Zigbee2MQTT ↔ coordinator link itself">Link</span>
         <span>
           {flow.data_frames} frames ·{" "}
-          <span title="Frames that failed their integrity checksum (CRC) — should be 0">
+          <span title="Frames that failed their integrity checksum (CRC): should be 0">
             {flow.crc_errors} corrupted
           </span>{" "}
           ·{" "}
@@ -165,13 +165,13 @@ function FlowCard({ flow, airtime, latency, fusion, now }: FlowCardProps) {
             {flow.retransmits} link retries
           </span>{" "}
           ·{" "}
-          <span title="The coordinator hearing its own group commands echo back — excluded from radio airtime">
+          <span title="The coordinator hearing its own group commands echo back: excluded from radio airtime">
             {wire.loopbacks} loopbacks
           </span>
           {wire.layout_mismatch > 0 && (
             <span
               className="chip warn"
-              title="Frames whose internal structure didn't match the expected firmware layout — counted instead of risking wrong numbers"
+              title="Frames whose internal structure didn't match the expected firmware layout: counted instead of risking wrong numbers"
             >
               {" "}
               {wire.layout_mismatch} layout mismatches
@@ -289,7 +289,7 @@ export default function Wire() {
             </span>
           )}
           {agents > 0 && (
-            <span title="Frames that failed their integrity checksum (CRC) on a coordinator link — should be 0; corruption means data lost between Zigbee2MQTT and the radio">
+            <span title="Frames that failed their integrity checksum (CRC) on a coordinator link: should be 0; corruption means data lost between Zigbee2MQTT and the radio">
               {totalCrc > 0 ? ` · ${totalCrc} corrupted frames` : " · no corrupted frames"}
             </span>
           )}
@@ -337,7 +337,7 @@ export default function Wire() {
           </div>
         </div>
         {storedInstances.length === 0 ? (
-          <p className="hint">No stored airtime windows yet — rollups land every 10 s.</p>
+          <p className="hint">No stored airtime windows yet: rollups land every 10 s.</p>
         ) : (
           <table className="table">
             <thead>
@@ -381,7 +381,7 @@ export default function Wire() {
           Airtime is reconstructed frame by frame: the exact payload sizes seen at the
           wiretap plus the fixed radio-header overhead every frame carries on air. Group
           commands are costed across every router that relays them. "Of budget" compares
-          against the channel's usable capacity — 70% of the raw 250 kbps, the rest lost to
+          against the channel's usable capacity: 70% of the raw 250 kbps, the rest lost to
           listen-before-talk.
         </p>
       </div>

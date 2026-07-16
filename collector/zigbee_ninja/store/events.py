@@ -3,7 +3,7 @@
 Events land in an in-memory buffer, flush into a *hot* DuckDB table on the
 engine's 10 s cadence, and closed hours export to hourly Parquet segments
 (ZSTD) under ``<data>/events/``. Queries union the hot table with the
-segment files in place — no series-cardinality explosion, event-level
+segment files in place: no series-cardinality explosion, event-level
 fidelity for the burst-inspector window.
 
 Retention is quota-first: segments older than the horizon are deleted, then
@@ -14,7 +14,7 @@ V1 captures the T0 MQTT stream (per-instance topics, plus zigbee-ninja's own
 publishes as ``self``) and the T2 wire tier (every decoded EZSP frame, on
 pcap timestamps). T1 probe batches already reach the broker as MQTT messages,
 so they appear at T0 granularity; per-event probe capture can ride later.
-A full buffer drops new events and counts the drops — bursty meshes degrade
+A full buffer drops new events and counts the drops: bursty meshes degrade
 visibly, never by blocking the ingest path.
 """
 

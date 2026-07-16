@@ -2,13 +2,13 @@
 
 A pull publishes `<base>/bridge/request/networkmap {"type": "raw", "routes":
 true}` and awaits the response topic. Zigbee2MQTT services it by sweeping the
-mesh with Mgmt_Lqi/Mgmt_Rtg requests — real mesh traffic, which is why pulls
+mesh with Mgmt_Lqi/Mgmt_Rtg requests: real mesh traffic, which is why pulls
 sit behind an explicit per-instance grant tile, a per-instance rate limit, and
 a one-scan-at-a-time global gate. The publish rides the collector's own broker
 connection, so it self-attributes (P4).
 
 Snapshots keep the full raw map (for the graph view) plus a computed summary:
-router census, weak links, and per-node degree — the beginnings of the §10
+router census, weak links, and per-node degree: the beginnings of the §10
 relay-load and hop-expansion inputs.
 """
 
@@ -76,7 +76,7 @@ def summarize(value: dict) -> dict:
         "link_count": len(links),
         "by_type": by_type,
         # A node that answered the LQI query but not e.g. Mgmt_Rtg is present
-        # and healthy — several router firmwares simply omit the routing-table
+        # and healthy: several router firmwares simply omit the routing-table
         # ZDO endpoint (live example: Third Reality 3RSP02028BZ plugs). Only a
         # node that failed the LQI query itself counts as possibly unreachable.
         "failed_nodes": [failure["node"] for failure in failures],
@@ -96,13 +96,13 @@ def graph(value: dict) -> dict:
     """Reduce a raw Z2M networkmap to the render-ready graph the view draws.
 
     A raw link is one neighbor-table row: `target` heard `source` at `lqi`,
-    so most pairs appear twice (once per direction) with asymmetric LQIs —
+    so most pairs appear twice (once per direction) with asymmetric LQIs:
     the graph keeps one edge per pair carrying the *worst* of the two, the
     same pessimistic reading the weak-links table uses. A link's `routes`
     are the reporting node's routing-table rows via that neighbor; every
     ACTIVE row names the next hop that relays for it, so counting ACTIVE
     rows per next-hop node measures how many known paths flow through it
-    (`routes_via` — the relay-load input for node sizing).
+    (`routes_via`: the relay-load input for node sizing).
     """
     nodes = value.get("nodes") or []
     links = value.get("links") or []
@@ -206,7 +206,7 @@ class TopologyPuller:
         now = self._clock()
         if last is not None and now - last < self._min_interval:
             wait = int(self._min_interval - (now - last))
-            raise PullRejected(f"Rate limited — next pull allowed in {wait}s")
+            raise PullRejected(f"Rate limited: next pull allowed in {wait}s")
 
         future: asyncio.Future = asyncio.get_running_loop().create_future()
         self._pending[base] = future
@@ -263,7 +263,7 @@ class TopologyPuller:
         for row in rows:
             summary = json.loads(row["summary"])
             if "query_failures" not in summary:
-                # Snapshot predates the failure-detail split — recompute from
+                # Snapshot predates the failure-detail split: recompute from
                 # the retained raw map instead of serving the stale shape.
                 summary = summarize(json.loads(row["raw"]))
             entry = {

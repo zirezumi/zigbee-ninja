@@ -6,13 +6,13 @@ matches the Mosquitto 2.x debug format:
   1720000000: Received PUBLISH from ha-core (d0, q0, r0, m0, 'z2m-1/lamp/set', ... (42 bytes))
 
 DELIVERY CAVEAT (verified live on Mosquitto 2.0.22, DESIGN.md §4 T0.5):
-`log_dest topic` does NOT publish debug-level lines to `$SYS/broker/log/#` —
+`log_dest topic` does NOT publish debug-level lines to `$SYS/broker/log/#`:
 only notice/subscribe-class messages reach the topic; the "Received PUBLISH
 from …" lines go to stderr/file only. So feeding this parser requires a
 broker-side log reader (journal/file tail), NOT a pure-MQTT subscription. The
 `on_log` entry point therefore takes raw log-line bytes from whatever source
-(topic today only carries non-PUBLISH lines); wiring a broker-side reader — or
-preferring the HA-token per-automation path (§7.4) — is a deployment choice.
+(topic today only carries non-PUBLISH lines); wiring a broker-side reader: or
+preferring the HA-token per-automation path (§7.4): is a deployment choice.
 """
 
 from __future__ import annotations

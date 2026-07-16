@@ -5,7 +5,7 @@ the probe's own clock, no cross-host alignment). It is an APPROXIMATE proxy: a
 live trace on this system showed presence dimmers also emit frequent autonomous
 reports (illuminance, occupancy, mmWave, OTA) that would mispair with commands
 and inflate the figure toward the match-window ceiling. Two guards keep it
-honest — pairing is restricted to actuator state-echo clusters (so a sensor/OTA
+honest: pairing is restricted to actuator state-echo clusters (so a sensor/OTA
 report is never mistaken for a command response), and a report pairs with the
 NEWEST pending command, not the oldest. The authoritative, unambiguous latency
 SLI is the wire tier's sendUnicast→messageSentHandler pairing (DESIGN.md §10),
@@ -69,7 +69,7 @@ class LatencyTracker:
     ) -> None:
         self._latest_ts[instance] = max(self._latest_ts.get(instance, 0.0), probe_ts)
         if not is_state_echo_cluster(cluster):
-            return  # autonomous report — never a command response
+            return  # autonomous report: never a command response
         pending = self._pending.get((instance, name))
         if not pending:
             return
@@ -111,7 +111,7 @@ class ProbeIngest:
         self._clock = clock
         self._on_heartbeat = on_heartbeat or (lambda _base, _hb: None)
         # on_device_seq(base, device_name, zcl_seq, probe_ts): deviceMessage
-        # events that carry a ZCL transaction sequence (probe v0.4+) — the T1
+        # events that carry a ZCL transaction sequence (probe v0.4+): the T1
         # side of frame fusion (DESIGN.md §8).
         self._on_device_seq = on_device_seq or (lambda _base, _name, _seq, _ts: None)
         self.latency = LatencyTracker(resolve_members)

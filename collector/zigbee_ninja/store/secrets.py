@@ -3,11 +3,11 @@
 The broker password and HA token are encrypted with Fernet under a key
 created on first boot inside the data volume (mode 0600). Stored ciphertext
 carries an ``enc:`` marker so plaintext rows written before this landed are
-recognized and upgraded in place at startup — the upgrade is idempotent.
+recognized and upgraded in place at startup: the upgrade is idempotent.
 
 Threat model, stated honestly: the key lives beside the database, so a
 compromise of the data volume is a compromise of the secrets. What this
-protects against is narrower — casual inspection of the SQLite file, backups
+protects against is narrower: casual inspection of the SQLite file, backups
 or exports of the database alone, and secrets leaking through settings dumps.
 A passphrase-locked mode (key derived from operator input, not stored) is a
 later hardening step.

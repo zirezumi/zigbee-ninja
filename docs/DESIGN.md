@@ -1,4 +1,4 @@
-# zigbee-ninja — Architecture & Design
+# zigbee-ninja: Architecture & Design
 
 | | |
 |---|---|
@@ -9,7 +9,7 @@
 
 A self-hosted, containerized observability service for Zigbee networks managed by
 Zigbee2MQTT: it measures how much of each coordinator's throughput capacity is in
-use, attributes that traffic to its causes, and models mesh airtime amplification —
+use, attributes that traffic to its causes, and models mesh airtime amplification:
 passive by default, permission-gated everywhere else.
 
 > A private appendix describing the author's reference deployment exists outside
@@ -18,25 +18,25 @@ passive by default, permission-gated everywhere else.
 ## §1 Mission & scope
 
 zigbee-ninja answers one question with defensible numbers: **how much of each
-Zigbee coordinator's throughput capacity is being used — and by what?** It runs
+Zigbee coordinator's throughput capacity is being used: and by what?** It runs
 continuously, presents everything through its own web GUI, and is built as a
 generic, redistributable product: nothing in the core assumes any particular
 home's configuration.
 
 Concretely, it must be able to answer:
 
-- **Utilization & headroom** — per coordinator, against an empirically calibrated
+- **Utilization & headroom**: per coordinator, against an empirically calibrated
   capacity knee, at both steady-state and burst timescales.
-- **Attribution** — which share of traffic is controller-commanded (e.g. Home
+- **Attribution**: which share of traffic is controller-commanded (e.g. Home
   Assistant), which is device reporting, which is housekeeping or retry overhead;
   drill down to device, device class, MQTT client, and (with HA integration) the
   individual automation.
-- **Latency health** — command queue delay, mesh round-trip, end-to-end
+- **Latency health**: command queue delay, mesh round-trip, end-to-end
   command→state-echo; correlation of latency/error onset with load.
-- **Planning support** — a per-device load ledger sufficient to evaluate moving
+- **Planning support**: a per-device load ledger sufficient to evaluate moving
   devices between coordinators or consolidating coordinators away (the interactive
   what-if advisor itself is a fast-follow).
-- **Pacing validation** — burst-level views fine enough to judge whether command
+- **Pacing validation**: burst-level views fine enough to judge whether command
   staggering/pacing strategies in the controller are earning their keep.
 
 **V1 scope:** Zigbee2MQTT systems (1..N instances on a single MQTT broker),
@@ -51,11 +51,11 @@ the inline proxy tier for serial adapters, RF sniffing, multi-broker.
 
 | # | Principle | Meaning |
 |---|---|---|
-| P1 | **Passive by default** | Observation never adds mesh traffic. Active operations — topology pulls, calibration benchmarks — are permission-gated, rate-limited, and individually revocable. |
+| P1 | **Passive by default** | Observation never adds mesh traffic. Active operations: topology pulls, calibration benchmarks; are permission-gated, rate-limited, and individually revocable. |
 | P2 | **Consent per foothold** | Every probe deployment is an explicit grant in the GUI, against a named target, revocable later. A footprint page lists everything zigbee-ninja has ever deployed. |
 | P3 | **Fail-open** | No V1 probe sits in a required datapath. If zigbee-ninja dies, the mesh never notices. (The future serial-proxy tier is the sole, loudly-labeled exception.) |
 | P4 | **Self-accounting** | zigbee-ninja's own MQTT client, topology pulls, and benchmarks are measured and attributed to *itself*, never silently folded into the numbers it reports. |
-| P5 | **Confidence-tagged** | Every metric carries a provenance tag — `measured` / `modeled` / `inferred` — surfaced in the GUI, driven by which observation tier produced it. |
+| P5 | **Confidence-tagged** | Every metric carries a provenance tag: `measured` / `modeled` / `inferred`; surfaced in the GUI, driven by which observation tier produced it. |
 | P6 | **Generic core** | All knowledge of the installation comes from discovery and live registries (`bridge/info`, `bridge/devices`, `bridge/groups`). No installation-specific logic in core. |
 | P7 | **Single image** | One container: collector, embedded storage, API, and GUI. This is what makes HA add-on packaging a packaging exercise rather than a re-architecture. Multi-arch (amd64/arm64). |
 | P8 | **Clean IP** | Apache-2.0; no GPL/AGPL dependencies in distributed artifacts, so the codebase stays commercially forkable (§16). |
@@ -86,8 +86,8 @@ flowchart LR
 ```
 
 The V1 deployment target is standalone Docker. The same image later ships as a
-Home Assistant add-on, whose constraint — effectively one container, no compose
-stacks — is why P7 exists.
+Home Assistant add-on, whose constraint: effectively one container, no compose
+stacks: is why P7 exists.
 
 ## §4 Observation tiers & visibility matrix
 
@@ -96,7 +96,7 @@ degrades gracefully to whatever the user grants. The GUI presents this as a
 per-coordinator **coverage meter**: which tiers are live, and what each missing
 tier would add.
 
-### T0 — MQTT firehose *(credentials: broker only)*
+### T0: MQTT firehose *(credentials: broker only)*
 
 Subscribe to each instance's base topic tree plus `$SYS/#`. Sees every command
 (`<base>/<target>/set|get`), every state publish, Z2M's bridge log stream
@@ -105,36 +105,36 @@ full device/group registries. This tier alone supports message-rate dashboards
 and MQTT-level attribution. It cannot see frame sizes, radio timing, retries, or
 Z2M-internal radio work.
 
-### T0.5 — Broker publish attribution *(broker-side log reader)*
+### T0.5: Broker publish attribution *(broker-side log reader)*
 
 With debug-level logging enabled, Mosquitto emits per-PUBLISH lines carrying the
-**publishing client id** ("Received PUBLISH from `ha-core` …") — turning "a
+**publishing client id** ("Received PUBLISH from `ha-core` …"): turning "a
 command arrived" into "client `ha-core` issued this command". The tolerant
 parser (`brokerlog.py`) reads those lines.
 
 > **Live correction (2026-07-14, Mosquitto 2.0.22): these debug lines are NOT
 > available over MQTT.** `log_dest topic` publishes only notice/subscribe-class
 > messages to `$SYS/broker/log/#`; debug-level PUBLISH lines go **only** to
-> `stderr`/`file`. So T0.5 cannot be pure-MQTT as originally specified — it
+> `stderr`/`file`. So T0.5 cannot be pure-MQTT as originally specified: it
 > requires a **broker-side log reader** (tail the journal/file, parse, forward),
 > i.e. a foothold on the broker host, not just a config change. On a
 > single-controller (HA-only) install the marginal value is also low (nearly
 > every command is `ha-core`). **Preferred alternative:** per-*automation*
-> attribution via the HA-token integration (§7.4) — broker-safe (read-only HA
+> attribution via the HA-token integration (§7.4): broker-safe (read-only HA
 > WebSocket) and strictly more informative. Broker debug logging also ~doubles
 > broker message volume; measure before enabling.
 
-### T1 — Z2M runtime extension *(credentials: broker only)*
+### T1: Z2M runtime extension *(credentials: broker only)*
 
 A single-file, dependency-free JS extension deployed *and removed* entirely over
-MQTT (`bridge/request/extension/save` / `remove` — confirmed present in Z2M 2.x).
+MQTT (`bridge/request/extension/save` / `remove`: confirmed present in Z2M 2.x).
 It hooks Z2M's event bus and emits compact batched telemetry: every ZCL frame
 in/out at the Z2M boundary with device, cluster, command, sizes, timestamps, and
-queue-timing milestones. This is the workhorse tier — it sees Z2M-internal radio
+queue-timing milestones. This is the workhorse tier: it sees Z2M-internal radio
 work (availability pings, config readbacks) that never appears on MQTT, and it
 works identically for serial and network adapters on any host.
 
-### T2 — Passive wire tap *(host agent, one-liner install)*
+### T2: Passive wire tap *(host agent, one-liner install)*
 
 For network-attached coordinators, the coordinator↔Z2M link is a long-lived TCP
 flow carrying ASH-framed EZSP. A tiny host agent (`ninja-tap`, §7.2) captures
@@ -143,14 +143,14 @@ does TCP reassembly and ASH/EZSP decode centrally. This yields exact bytes and
 timing for every frame crossing the NCP boundary, per-frame LQI/RSSI on receive,
 delivery-status callbacks, and ASH-level link health (retransmits/NAKs on the
 wire itself). Because the EmberZNet NCP handles network security, payloads at
-this boundary are already decrypted — no network-key handling required.
+this boundary are already decrypted: no network-key handling required.
 
 For serial-USB coordinators there is no passive tap; the equivalent fidelity
-requires the **inline proxy** tier (T2b) — a transparent TCP/serial interposer.
+requires the **inline proxy** tier (T2b): a transparent TCP/serial interposer.
 It is a product option only, clearly labeled as sitting in the datapath, and is
 out of V1 scope.
 
-### T3 — RF sniffer *(reserved, not V1)*
+### T3: RF sniffer *(reserved, not V1)*
 
 Channel-matched capture hardware would add the only things T2 can't see:
 MAC-level retries by remote nodes, CCA busy time, foreign-network and Wi-Fi
@@ -174,19 +174,19 @@ airtime ground-truth input) but not built in V1.
 
 > **Key structural fact:** on EmberZNet NCPs, NWK-layer housekeeping (link status
 > beacons, route maintenance) is generated *inside* the coordinator and never
-> crosses the EZSP boundary — so even T2 can't see it per-frame. The plan: poll
+> crosses the EZSP boundary: so even T2 can't see it per-frame. The plan: poll
 > EmberZNet's aggregate counters if an access route proves practical (spike S2),
 > and treat *counters − attributed frames* as a measured residual for the
 > stack-housekeeping bucket; otherwise model it from protocol constants (link
 > status ≈ one one-hop broadcast per router per 15 s) with an honest `modeled` tag.
 >
 > **S2 resolution: the access route is passive.** Zigbee2MQTT itself issues
-> `readAndClearCounters`; the wire tap harvests the responses for free — no
+> `readAndClearCounters`; the wire tap harvests the responses for free: no
 > zigbee-ninja polling, no added NCP work. `decode/counters.py` labels the
 > arrays (clean-room UG100 name order, unknown tail indices degrade to
 > `counter_NN`), provenance `inferred` until live cross-tier validation
 > promotes the map. Beyond the housekeeping residual this also exposes the
-> per-hop MAC retry rate (`mac_tx_unicast_retry`/`_success`) and CCA failures —
+> per-hop MAC retry rate (`mac_tx_unicast_retry`/`_success`) and CCA failures:
 > direct inputs to the §10 retry factor and contention picture.
 
 ## §5 Discovery & onboarding
@@ -196,7 +196,7 @@ address and credentials; nearly everything else falls out of retained topics:
 
 1. **Connect to broker** → subscribe `+/bridge/info`. Every Z2M instance
    announces its base topic, version, network settings (channel, PAN id), and
-   adapter configuration — including the adapter URL, which for network
+   adapter configuration: including the adapter URL, which for network
    coordinators (`tcp://ip:port`) hands us the coordinator endpoint T2 needs.
 2. **Registries** → `bridge/devices` and `bridge/groups` per instance: IEEE
    addresses, friendly names, vendor/model definitions, Router vs EndDevice,
@@ -223,7 +223,7 @@ A **tile** is one grantable capability against one named target:
 
 | Tile | Target | Deploy mechanism | Revoke mechanism |
 |---|---|---|---|
-| Broker telemetry (T0.5) | broker | Broker debug logging **+ a broker-side log reader** (see §4 T0.5 live correction) — not pure-MQTT on Mosquitto | Remove reader + revert config |
+| Broker telemetry (T0.5) | broker | Broker debug logging **+ a broker-side log reader** (see §4 T0.5 live correction): not pure-MQTT on Mosquitto | Remove reader + revert config |
 | Z2M extension (T1) | per Z2M instance | `bridge/request/extension/save` over MQTT | `bridge/request/extension/remove` |
 | Wire tap (T2) | per capture host | Copy-paste one-liner installer (default); SSH-automated (opt-in) | GUI revoke → agent self-uninstalls; or local `ninja-tap uninstall` |
 | Topology pulls | per Z2M instance | Grant + rate limit (networkmap requests load the mesh) | Toggle off |
@@ -248,12 +248,12 @@ instructions surfaced.
 
 ## §7 Probe designs
 
-### §7.1 Z2M extension — `zigbee-ninja-probe.js`
+### §7.1 Z2M extension: `zigbee-ninja-probe.js`
 
 - **Form:** one dependency-free JS file (Z2M extensions can't `npm install`),
   built and unit-tested in-repo, embedded into the collector image, deployed per
   instance over MQTT.
-- **Hooks:** Z2M's extension context (eventBus, mqtt, zigbee, logger, settings —
+- **Hooks:** Z2M's extension context (eventBus, mqtt, zigbee, logger, settings;
   per the documented extension API). The exact stable hook inventory across Z2M
   2.x is milestone M3's opening spike (S3); the design assumes at minimum
   message-in/message-out visibility with device identity, which the documented
@@ -263,16 +263,16 @@ instructions surfaced.
   or 500 events. Riding the instance's own base topic inherits existing broker
   ACLs.
 - **Event record:** monotonic + wall timestamps, direction, target (IEEE/group),
-  endpoint, cluster, command, payload *size* (never payload contents by default —
+  endpoint, cluster, command, payload *size* (never payload contents by default:
   a toggleable deep-capture mode exists for burst forensics), status/error,
   request-response correlation where Z2M provides it, queue milestones where
-  observable, and (v0.4+) the ZCL transaction sequence per device message —
+  observable, and (v0.4+) the ZCL transaction sequence per device message:
   the T1/T2 fusion join key (§8).
 - **Self-limits:** fixed-size internal buffer, drop-and-count under pressure
-  (drops reported in heartbeat — self-accounting extends to the probe itself),
+  (drops reported in heartbeat: self-accounting extends to the probe itself),
   kill-switch topic, honors `extension/remove`.
 
-### §7.2 Wire-tap agent — `ninja-tap`
+### §7.2 Wire-tap agent: `ninja-tap`
 
 - **Philosophy: dumb agent, smart collector.** The agent knows nothing about
   Zigbee. It shells out to `tcpdump` (BSD-licensed system binary) with a BPF
@@ -304,7 +304,7 @@ instructions surfaced.
   a Z2M restart, else inferred from the instance's Z2M version and validated by
   CRC/shape coherence.
 - **Clean-room constraint:** ported from zigbee-herdsman (MIT) semantics or
-  written from the Silicon Labs UG100 spec — never from bellows/zigpy (GPL, §16).
+  written from the Silicon Labs UG100 spec: never from bellows/zigpy (GPL, §16).
   Golden pcap fixtures anchor the test suite (spike S1).
 - **Deep parameter decode** (`decode/ezsp_params.py`) covers exactly the frames
   the capacity and latency models need: the send paths, `messageSentHandler`,
@@ -312,7 +312,7 @@ instructions surfaced.
   records, network-status/route-error callbacks, and counter-read responses.
   Field layouts are pinned **empirically against live captures** (EZSP v14-era
   encoding: 32-bit `sl_status`, 16-bit message tags, rx-packet-info struct) and
-  every parser self-checks the frame's internal length arithmetic — a firmware
+  every parser self-checks the frame's internal length arithmetic: a firmware
   layout change degrades to a visible `layout_mismatch` counter, never to
   silently wrong numbers. v13-era layouts are added only when pinned against a
   real v13 capture.
@@ -325,7 +325,7 @@ service call carries its target topic; its context id (or parent context)
 resolves to the automation/script run that fired it, so a chain's commander
 becomes *automation X / script Y / UI user Z*.
 
-**This is the primary commander-attribution path** — the broker-safe replacement
+**This is the primary commander-attribution path**: the broker-safe replacement
 for T0.5, which cannot deliver per-PUBLISH client ids over MQTT on Mosquitto
 (see §4 T0.5). It is read-only against HA (no writes, no broker change) and
 strictly more informative than a client id on a single-controller install.
@@ -349,7 +349,7 @@ flowchart LR
 - **Normalization:** every source adapter emits canonical events (source,
   instance, monotonic + wall timestamps, kind, payload). Probes report their own
   clocks; the collector estimates a per-source offset continuously (EWMA over
-  paired observations — the same command seen at broker, extension, and wire
+  paired observations: the same command seen at broker, extension, and wire
   within milliseconds is a natural alignment signal) and exposes residual skew as
   a data-quality metric.
 - **Fusion:** one physical frame may be observed at T1 and T2. Incoming
@@ -361,7 +361,7 @@ flowchart LR
   signal: **wire-only** frames quantify what Z2M-level observation misses
   (default responses, interview traffic, unknown devices); **probe-only**
   frames flag capture gaps. Matched pairs also measure the probe↔pcap clock
-  offset continuously — the per-source alignment signal above. Outgoing
+  offset continuously: the per-source alignment signal above. Outgoing
   frames have no Z2M-boundary *frame* event (commands are observed as MQTT
   messages), so fusion is incoming-only.
 - **Watermarks:** attribution windows close on a lateness watermark (~2 s). Live
@@ -370,7 +370,7 @@ flowchart LR
 
 ## §9 Attribution engine
 
-Three orthogonal, joinable dimensions per frame/chain — all derived from generic
+Three orthogonal, joinable dimensions per frame/chain: all derived from generic
 sources:
 
 **(1) Causality class.** A command intake (MQTT `/set`|`/get`|bridge request,
@@ -378,18 +378,18 @@ with client identity from T0.5) opens a chain: matching TX frames (group targets
 expanded via the registry), then response traffic inside an adaptive window
 (reads longer, sets shorter; default ≈1.5 s). Classes:
 
-- `commanded` — TX caused by an external MQTT command.
-- `provoked` — responses inside a chain window: default responses, read
+- `commanded`: TX caused by an external MQTT command.
+- `provoked`: responses inside a chain window: default responses, read
   responses, post-set report echoes.
-- `autonomous` — reports arriving outside any window: sensor telemetry, physical
+- `autonomous`: reports arriving outside any window: sensor telemetry, physical
   actuation.
-- `controller-housekeeping` — Z2M's own radio work (availability pings, config
+- `controller-housekeeping`: Z2M's own radio work (availability pings, config
   readbacks, OTA checks), identified directly at T1 or by periodicity patterns.
-- `stack-housekeeping` — NCP-internal NWK maintenance: counter-residual if S2
+- `stack-housekeeping`: NCP-internal NWK maintenance: counter-residual if S2
   lands (`measured`), else protocol-constant model (`modeled`).
-- `retry-overhead` — APS/MAC retransmission cost, from delivery-status callbacks,
+- `retry-overhead`: APS/MAC retransmission cost, from delivery-status callbacks,
   counters, and the calibrated retry factor.
-- `self` — zigbee-ninja's own operations (P4).
+- `self`: zigbee-ninja's own operations (P4).
 
 **(2) Device & message taxonomy.** Registry join: vendor/model, Router vs
 EndDevice, mains vs battery, exposed capability class (light, switch, sensor,
@@ -406,7 +406,7 @@ client granularity automatically.
 The default "HA usage" headline = `commanded + provoked` for HA-labeled clients;
 every bucket stays independently visible. A **redundant-command detector**
 (identical payload to the same target within a configurable window,
-cross-referenced by commander) ships as a first-class report — near-duplicate
+cross-referenced by commander) ships as a first-class report: near-duplicate
 commands are the cheapest utilization win an automation author can act on.
 
 ## §10 Capacity & airtime model
@@ -428,7 +428,7 @@ subframe the EZSP boundary can't see (TX PSDUs are lower bounds), and RX
 airtime counts the final hop only until topology-based hop expansion lands.
 The CSMA-backoff term above defaults to **0 µs before calibration**: mean
 backoff is idle listening rather than channel occupancy, and η<sub>CSMA</sub>
-in denominator 1 already discounts CSMA overhead — calibration may later move
+in denominator 1 already discounts CSMA overhead: calibration may later move
 cost between the two knobs, never double-count it. At T1 the same
 reconstruction applies to ZCL payload sizes (near-exact); T0 estimates via a
 payload→ZCL mapping table (`inferred`).
@@ -441,12 +441,12 @@ windows: `mac_tx_unicast_retry / mac_tx_unicast_success` per clearing read
 (each response is a self-contained window, so no window length or prior
 harvest is needed), EWMA'd across windows, floor-guarded on the success
 count and clamped to the macMaxFrameRetries ceiling of 3. It defaults to 0
-until samples arrive and reflects the coordinator's own hop — retries on
+until samples arrive and reflects the coordinator's own hop: retries on
 farther hops remain invisible until T3, consistent with the TX lower-bound
 posture above.
 
 **Groupcast/broadcast cost (mesh amplification):** a group command is a single
-coordinator TX, but it rides an NWK broadcast that every router relays — with up
+coordinator TX, but it rides an NWK broadcast that every router relays: with up
 to 3 transmissions each under passive-ack retry rules, and no MAC ACKs. Model:
 `(1 + N_routers) × frame_airtime × avg_tx`, with `avg_tx ∈ [1, 3]` (default
 1.3). **avg_tx is measured passively, per coordinator**, from the harvested
@@ -454,11 +454,11 @@ to 3 transmissions each under passive-ack retry rules, and no MAC ACKs. Model:
 fixed hourly interval, so windows are ~3600 s; the acceptance guard admits up
 to two fused windows): `(mac_tx_broadcast − modeled radius-1 link-status TXs)
 / (APS broadcasts + MTORR route discoveries)` is the coordinator's own
-passive-ack retransmission factor — provenance `measured (coordinator tx,
+passive-ack retransmission factor: provenance `measured (coordinator tx,
 generalized to relays)`, EWMA'd across windows, replacing the default as
 samples arrive. One honesty gate applies: `mac_tx_broadcast` also counts the
 coordinator's *relays* of other nodes' NWK broadcasts (route requests and the
-like), traffic that never crosses the EZSP boundary and cannot be subtracted —
+like), traffic that never crosses the EZSP boundary and cannot be subtracted:
 so a window whose residual exceeds the passive-ack maximum of 3 is provably
 relay-contaminated and is **discarded and counted** (visible in the GUI), never
 clamped into a fake ceiling value. On meshes with steady relay traffic the
@@ -468,14 +468,14 @@ amplification term is what explains why "one more group" costs far more
 airtime than coordinator counters suggest.
 
 **Topology snapshots** (router census, parent/route tables, depth estimates)
-come from permission-gated, rate-limited networkmap pulls — they load the mesh,
+come from permission-gated, rate-limited networkmap pulls: they load the mesh,
 so they're sparse, scheduled, and self-attributed. Between pulls, per-frame
 LQI/RSSI at T2 keeps link-quality trends fresh for free.
 
-**Denominators — three, reported side-by-side:**
+**Denominators: three, reported side-by-side:**
 
 1. **Channel airtime budget:** 250 kbps × η<sub>CSMA</sub> (default 0.7,
-   calibrated). Instances sharing a channel draw from one pooled budget —
+   calibrated). Instances sharing a channel draw from one pooled budget:
    discovery's channel map drives joint accounting. Foreign networks and Wi-Fi
    remain invisible until T3; the GUI says so rather than pretending.
 2. **NCP throughput knee:** sustainable frames/s before the latency knee, from
@@ -486,7 +486,7 @@ LQI/RSSI at T2 keeps link-quality trends fresh for free.
 **Outputs:** utilization percent per denominator; steady headroom (knee − p95
 rate) and burst headroom (knee − peak rate; persisted rollups are 10 s, so
 burst granularity is 10 s until 1 s series persist); latency SLIs (enqueue→TX,
-TX→delivery-confirm, command→state-echo); error SLIs (BUSY, delivery failures) —
+TX→delivery-confirm, command→state-echo); error SLIs (BUSY, delivery failures):
 plotted against load. That last scatter enables **continuous knee validation**
 from natural traffic, catching capacity regressions (firmware updates, mesh
 drift) without waiting for a re-benchmark. Knee semantics carry through: a
@@ -498,10 +498,10 @@ ceiling (denominator 3) and a lower bound for the NCP knee, never a false
 
 A guided wizard, per coordinator, per-run authorized (grants never persist):
 
-1. **Target selection** — mains-powered routers ranked by suitability (healthy
+1. **Target selection**: mains-powered routers ranked by suitability (healthy
    link LQI from the latest topology snapshot, then the least-entangled device:
    fewer bindings and group memberships); the user picks.
-2. **Dry-run preview** — exact traffic to be generated (topic and payload),
+2. **Dry-run preview**: exact traffic to be generated (topic and payload),
    the full step schedule, hard caps, stop rules, and watchdog conditions,
    shown before anything transmits. The preview mints a **single-use,
    short-TTL authorization token**; starting the run requires echoing it, and
@@ -512,8 +512,8 @@ A guided wizard, per coordinator, per-run authorized (grants never persist):
    time with the full cooldown between them; an abort stops the remainder;
    an item whose target vanished by its turn is skipped with a durable
    `skipped` history record rather than run against a changed fleet.
-3. **Ramp** — closed-loop unicast attribute reads through the instance's own
-   MQTT command path (`<base>/<target>/get` of a benign, gettable attribute —
+3. **Ramp**: closed-loop unicast attribute reads through the instance's own
+   MQTT command path (`<base>/<target>/get` of a benign, gettable attribute:
    the same path controllers use; reads actuate nothing, each reply
    republishes device state). Stepped geometric rates (~20 s per step), an
    outstanding-replies bound so a stalling mesh throttles the driver, and a
@@ -523,7 +523,7 @@ A guided wizard, per coordinator, per-run authorized (grants never persist):
    coordinator and falls back to the command→state-echo path, tagged either
    way. The knee = the last step sustained before a stop rule fires: p95 RTT
    breach (vs a multiple of the step-1 baseline with an absolute floor),
-   read-timeout ratio, delivery-failure budget, or **driver saturation** —
+   read-timeout ratio, delivery-failure budget, or **driver saturation**:
    the closed loop can no longer reach the requested rate, which measures the
    *pipeline* service ceiling (denominator 3) and bounds the NCP knee from
    below; the record says which rule ended the ramp, and a ramp that exhausts
@@ -532,17 +532,17 @@ A guided wizard, per coordinator, per-run authorized (grants never persist):
    top-ranked routers (per-target FIFOs pair each reply with its own
    device's reads) with the per-device share held under the measured
    per-device ceilings, so the aggregate ramp probes the NCP/global-pipeline
-   knee — denominator 2 measured, not just bounded — while a single-target
+   knee: denominator 2 measured, not just bounded; while a single-target
    run keeps measuring denominator 3. (An earlier revision specified an
    optional groupcast stage against a wizard-created test group to calibrate
-   the broadcast retry factor `avg_tx`; that stage is superseded — avg_tx is
+   the broadcast retry factor `avg_tx`; that stage is superseded: avg_tx is
    now measured passively and continuously from the coordinator's own
    broadcast counters, §10.)
-4. **Safety rails** — hard rate/duration/total-read caps enforced inside the
+4. **Safety rails**: hard rate/duration/total-read caps enforced inside the
    send loop; watchdog abort on any device on the instance going offline, on
    an error spike in the Zigbee2MQTT log, or on total reply silence; manual
    abort always live; cool-down pause after every run.
-5. **Record** — per-step curves (rate, achieved, RTT percentiles per source,
+5. **Record**: per-step curves (rate, achieved, RTT percentiles per source,
    timeouts, delivery failures), the knee with its terminating rule and
    censored flag, date, Z2M version, coordinator firmware. Benchmark windows
    are flagged in history and excluded from utilization series (the reads and
@@ -553,17 +553,17 @@ A guided wizard, per coordinator, per-run authorized (grants never persist):
 
 Everything embedded, no external services (P7):
 
-- **SQLite (WAL)** — configuration, registries, tiles/footprint, calibrations,
+- **SQLite (WAL)**: configuration, registries, tiles/footprint, calibrations,
   alert rules/state, finalized chains (48 h detail, aggregates beyond), and
   rollup series.
-- **Hourly Parquet segments** — raw event stream for the burst-inspector window
+- **Hourly Parquet segments**: raw event stream for the burst-inspector window
   (~48 h, quota-capped), queried in place by **embedded DuckDB** (MIT) for ad-hoc
   forensics without a series-cardinality explosion. Implementation: events
   buffer in memory (bounded; overflow drops are counted, never block ingest),
   flush into a hot DuckDB table on the 10 s cadence, and closed hours export
   to ZSTD Parquet segments; queries union the hot table with the overlapping
   segments. Retention deletes segments past the horizon (default 48 h), then
-  oldest-first until the directory fits the quota (default 4 GB) — both
+  oldest-first until the directory fits the quota (default 4 GB): both
   settings-backed. V1 captures the T0 MQTT stream (including zigbee-ninja's
   own publishes, tagged `self`) and every decoded T2 EZSP frame on pcap
   timestamps; T1 probe batches already appear at T0 granularity, and
@@ -579,12 +579,12 @@ The coarser 1 min/1 h tiers and the disk-quota degradation manager ride with
 the Parquet/DuckDB raw-event store. **Cardinality budget is explicit:** per-instance
 headline series at 1 s; per-device at 10 s+; per-(device × bucket) at 1 min+.
 Rough sizing at a busy reference load (~150 events/s aggregate): ~13 M events/day
-≈ 1.3 GB/day of Parquet — a 4–8 GB default quota holds the 48 h detail window
+≈ 1.3 GB/day of Parquet: a 4–8 GB default quota holds the 48 h detail window
 comfortably on small hardware.
 
 Core entities: `Instance`, `Device`, `Group`, `Probe/Tile`, `FrameRecord`,
 `Chain`, `TopologySnapshot`, `Calibration`, `SeriesPoint`,
-`AlertRule/AlertEvent` — each carrying provenance (source tiers) and confidence.
+`AlertRule/AlertEvent`: each carrying provenance (source tiers) and confidence.
 
 ## §13 API & GUI
 
@@ -598,54 +598,54 @@ admin account (argon2) standalone; HA ingress trust in add-on mode
 (fast-follow). Default port `8686`.
 
 **Terminology note:** the GUI presents the calibrated knee (§10, §11) as the
-**capacity limit** — "knee" remains the engineering term throughout this
+**capacity limit**: "knee" remains the engineering term throughout this
 document and the API/metric identifiers (`knee_utilization_pct` etc.), which
 stay stable.
 
 **V1 views:**
 
-1. **Fleet** — one full-width row per coordinator: a live axis-labeled
+1. **Fleet**: one full-width row per coordinator: a live axis-labeled
    message-rate histogram (1 s stream), instance facts with plain-language
    tooltips, airtime/latency/capacity readouts, active alerts, and the
    coverage meter; the broker banner carries the configured host:port.
-2. **Coordinator detail** — stacked series by causality bucket; message-rate,
+2. **Coordinator detail**: stacked series by causality bucket; message-rate,
    airtime, and latency panes; error overlay; shared-channel pooling note.
    The §10 utilization/headroom outputs shipped first as the dedicated
    **Headroom** view: the three denominators side by side, steady/burst
    headroom against the calibrated knee, and the latency-vs-load
    knee-validation scatter (uPlot); Fleet cards carry the knee line.
-3. **Attribution explorer** — pivotable bucket × device-class × commander matrix;
+3. **Attribution explorer**: pivotable bucket × device-class × commander matrix;
    top-N devices/automations; the redundant-command report.
-4. **Wiretap** — per-coordinator wire-tier telemetry: agent/flow health
+4. **Wiretap**: per-coordinator wire-tier telemetry: agent/flow health
    (CRC, retransmits), airtime buckets with amplification, the wire latency
    SLI, delivery statuses, and mesh-health counters. The first slice of
    Coordinator detail, delivered as its own view while the stacked-series
    panes are pending.
-5. **Burst inspector** (GUI nav label: **Benchmark**) — event-level timeline
+5. **Burst inspector** (GUI nav label: **Benchmark**); event-level timeline
    over the raw window (§12 store), zoom to milliseconds by re-querying
    tighter windows at finer buckets, an event table at the zoomed range, and
-   the window's command chains as spans (opened → first echo) — the
+   the window's command chains as spans (opened → first echo): the
    micro-gantt in its V1 form.
-6. **Topology** — per-instance grant-gated on-demand pulls (15 min rate
+6. **Topology**: per-instance grant-gated on-demand pulls (15 min rate
    limit, one scan at a time), stored snapshots with summaries (router
-   census, weak links, node degree, per-query sweep answers — a node that
+   census, weak links, node degree, per-query sweep answers: a node that
    answers Mgmt_Lqi but omits Mgmt_Rtg is a firmware quirk, not
    unreachable), and the **force-directed mesh graph** over the stored raw
    map (d3-force, settled synchronously): LQI-weighted edges with weak
    links dashed, one edge per pair carrying the worse direction's LQI, and
    routers sized by neighbor links plus ACTIVE routing-table paths observed
    through them (`GET /api/topology/graph`).
-7. **Calibration** — wizard + history + knee-drift indicators. Shipped:
+7. **Calibration**: wizard + history + knee-drift indicators. Shipped:
    ranked target picker, dry-run preview with per-run authorization, the
    fleet-batch flow (one authorization per enumerated batch, queue progress,
    abort-stops-remainder), live ramp progress with the RTT-vs-rate curve and
    an ever-present abort, and history with batch tags and an
    environment-drift "recalibrate?" chip. (The groupcast stage is superseded
-   by passive avg_tx measurement — §10.)
-8. **Footprint & permissions** — tiles, health, versions, revoke-all; connected
+   by passive avg_tx measurement; see §10.)
+8. **Footprint & permissions**: tiles, health, versions, revoke-all; connected
    wire-tap agents.
-9. **Alerts** — rules and notification center (§14).
-10. **Settings** — retention knobs (§12), client labels for the Attribution
+9. **Alerts**: rules and notification center (§14).
+10. **Settings**: retention knobs (§12), client labels for the Attribution
     explorer, and the wire-tap agent token (revealed on demand).
 
 ## §14 Alerting
@@ -655,11 +655,11 @@ rollup cadence. A rule is (metric, instance or `*`, operator, threshold,
 sustain window, optional clear threshold, severity); each (rule, instance)
 pair runs an independent state machine:
 
-- **open** — the condition holds continuously for the sustain window;
-- **clear** — the value stays on the OK side of the clear threshold (default:
+- **open**: the condition holds continuously for the sustain window;
+- **clear**: the value stays on the OK side of the clear threshold (default:
   the open threshold) for max(sustain, 60 s); the floor keeps zero-sustain
   counter rules from flapping tick to tick;
-- **freeze** — missing data (an undeployed probe, an unconfigured HA link,
+- **freeze**: missing data (an undeployed probe, an unconfigured HA link,
   no tap coverage) neither opens nor clears anything.
 
 Metrics span capacity (knee-utilization %, steady headroom, channel budget %,
@@ -672,15 +672,15 @@ restarts never alert retroactively. Rules and events persist (event history
 keeps 90 days); open events survive restarts and still require a sustained OK
 reading to clear.
 
-Built-in rules seed exactly once — user edits and deletions are durable.
+Built-in rules seed exactly once: user edits and deletions are durable.
 Self-health rules (probe heartbeat stale, tap agent down, broker/HA link
 down, layout mismatch) ship **enabled**: they only fire when something the
 user deployed stops reporting. Capacity rules ship **disabled** with
-placeholder thresholds — utilization and latency norms are per-installation,
+placeholder thresholds: utilization and latency norms are per-installation,
 so the user opts in from the Alerts view.
 
 Delivery: the GUI notification center (active alerts ride the 1 s fleet
-stream), plus the **MQTT discovery publisher** — headline metrics and alert
+stream), plus the **MQTT discovery publisher**: headline metrics and alert
 states as Home Assistant entities, so any HA user gets native
 notifications/automations for free, tokenless, and it's the natural bridge
 for non-HA consumers too. Because it is a *standing* publisher on the shared
@@ -691,7 +691,7 @@ discovery prefix, then refreshes per-metric state topics (channel budget %,
 knee utilization %, wire p95, message rate) and a `problem` binary_sensor
 (active-alert state, alert names as attributes) every 45 s over the
 collector's own MQTT connection (self-attributed, P4). Sensors carry
-`expire_after`, so a dead collector reads *unavailable* in HA — no
+`expire_after`, so a dead collector reads *unavailable* in HA: no
 availability topic or LWT to trust. A metric with no data yet simply skips
 its topic. Revoking the grant publishes empty retained payloads for every
 topic the tile ever claimed (bookkept per instance), removing the entities
@@ -710,7 +710,7 @@ cleanup sweep finishes the job when it returns.
   idempotently. A ciphertext that no longer decrypts (key replaced) resolves
   to "unconfigured" and is repaired by re-entering the secret in the GUI.
   Honest threat model: the key sits beside the database, so volume compromise
-  = secrets compromise — this protects the DB file alone (backups, exports,
+  = secrets compromise: this protects the DB file alone (backups, exports,
   casual inspection), nothing more; a passphrase-locked mode is a later
   hardening step, documented as such.
 - **Blast radius:** read-only by default (P1); every active operation is
@@ -763,13 +763,13 @@ zigbee-ninja/
 
 CI (GitHub Actions): lint + tests + license check → multi-arch buildx →
 `ghcr.io/zirezumi/zigbee-ninja`. The frontend build embeds into the image; one
-artifact ships everywhere (P7). Version tags trigger the release workflow —
+artifact ships everywhere (P7). Version tags trigger the release workflow:
 gates re-run, immutable `vX.Y.Z` image tags, cosign keyless signing, GitHub
 release (`docs/RELEASING.md`).
 
 ## §18 Milestones
 
-Each milestone ends deployed on a live reference system — continuous dogfooding,
+Each milestone ends deployed on a live reference system: continuous dogfooding,
 no big-bang integration.
 
 | M | Deliverable | Proves |

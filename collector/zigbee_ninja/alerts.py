@@ -3,11 +3,11 @@
 Threshold rules over first-class metrics, evaluated on the engine's 10 s
 rollup cadence. Each (rule, instance) pair runs an independent state machine:
 
-- **open** — the condition holds continuously for ``sustain_seconds``;
-- **clear** — the value stays on the OK side of ``clear_threshold`` (default:
+- **open**: the condition holds continuously for ``sustain_seconds``;
+- **clear**: the value stays on the OK side of ``clear_threshold`` (default:
   the threshold itself) continuously for ``max(sustain_seconds, 60 s)``; the
   floor keeps zero-sustain rules (counter deltas) from flapping every tick;
-- **freeze** — a metric with no current value (undeployed probe, unconfigured
+- **freeze**: a metric with no current value (undeployed probe, unconfigured
   HA link, no tap coverage) neither opens nor clears anything.
 
 Metric samples come from a provider callable ``(metric_names) -> {metric:
@@ -17,7 +17,7 @@ differences consecutive ticks: first sight baselines at zero and a decrease
 rebaselines, so collector restarts never alert retroactively.
 
 Built-in rules seed exactly once (tracked in settings), so deleting or
-disabling one is durable across restarts. Self-health rules ship enabled —
+disabling one is durable across restarts. Self-health rules ship enabled:
 they only fire when a foothold the user deployed stops reporting or a
 configured link drops; capacity rules ship disabled until the user opts in
 with thresholds that fit the installation.

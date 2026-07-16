@@ -4,7 +4,7 @@ With a user-supplied long-lived token, a read-only WebSocket client subscribes
 to `automation_triggered`, `script_started`, and `call_service` events. An
 `mqtt.publish` service call carries its target topic; its context id (or parent
 context) resolves to the automation/script run that fired it. That upgrades a
-chain's commander from "(unattributed)" to the actual automation name — the
+chain's commander from "(unattributed)" to the actual automation name: the
 broker-safe replacement for T0.5 on brokers whose topic log can't carry
 per-PUBLISH client lines.
 

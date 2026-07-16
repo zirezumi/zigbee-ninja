@@ -27,7 +27,7 @@ def test_alerts_view_shows_seeds_catalog_and_no_active(client):
     builtins = {rule["builtin"]: rule for rule in data["rules"] if rule["builtin"]}
     assert builtins["broker_down"]["enabled"] is True
     assert builtins["layout_mismatch"]["severity"] == "critical"
-    # Capacity rules ship seeded but disabled — the user opts in (§14).
+    # Capacity rules ship seeded but disabled: the user opts in (§14).
     assert builtins["knee_utilization"]["enabled"] is False
     assert builtins["wire_p95"]["enabled"] is False
 

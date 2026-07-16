@@ -74,7 +74,7 @@ def test_autonomous_cluster_report_not_paired_as_latency():
 
 
 def test_vendor_state_echo_cluster_is_paired():
-    # Hue bulbs echo state on manuSpecificPhilips2 — that IS a command response.
+    # Hue bulbs echo state on manuSpecificPhilips2: that IS a command response.
     ingest = ProbeIngest()
     ingest.handle(
         "z2m-test",
@@ -156,7 +156,7 @@ def test_device_seq_callback_only_for_sequenced_events():
             [
                 # Probe v0.4 appends [zcl_seq, endpoint] to dm events.
                 [1000.0, "dm", "lamp", "genOnOff", "attributeReport", 120, 30, 146, 11],
-                # -1 marks a message without a ZCL sequence — never forwarded.
+                # -1 marks a message without a ZCL sequence: never forwarded.
                 [1000.1, "dm", "lamp", "genOnOff", "attributeReport", 120, 30, -1, 11],
                 # v0.3 shape (no fusion fields) still parses for latency only.
                 [1000.2, "dm", "lamp", "genOnOff", "attributeReport", 120, 30],

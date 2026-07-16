@@ -1,5 +1,5 @@
 # zigbee-ninja passive capture agent (DESIGN.md §7.2).
-# Install: see install.sh. Least-privilege — capture capability only, no host creds.
+# Install: see install.sh. Least-privilege; capture capability only, no host creds.
 [Unit]
 Description=zigbee-ninja ninja-tap passive Zigbee-coordinator capture
 After=network-online.target

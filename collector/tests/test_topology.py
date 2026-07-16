@@ -6,12 +6,12 @@ import pytest
 from zigbee_ninja.ingest.topology import PullRejected, TopologyPuller, graph, summarize
 from zigbee_ninja.store.db import Database
 
-# Synthetic map (sanitized fixtures only — no real IEEE addresses).
+# Synthetic map (sanitized fixtures only: no real IEEE addresses).
 RAW_MAP = {
     "nodes": [
         {"ieeeAddr": "0x01", "friendlyName": "coordinator", "type": "Coordinator"},
         {"ieeeAddr": "0x02", "friendlyName": "lamp-a", "type": "Router"},
-        # Answered LQI but omitted the routing table — present and healthy,
+        # Answered LQI but omitted the routing table: present and healthy,
         # the firmware just lacks the Mgmt_Rtg endpoint (3RSP02028BZ pattern).
         {"ieeeAddr": "0x03", "friendlyName": "lamp-b", "type": "Router",
          "failed": ["routingTable"]},
@@ -60,7 +60,7 @@ def test_graph_dedupes_directions_and_counts_active_routes():
         ],
         "links": [
             # The same physical pair reported from both ends with asymmetric
-            # LQIs — one edge survives, carrying the worse reading.
+            # LQIs: one edge survives, carrying the worse reading.
             {"sourceIeeeAddr": "0x02", "targetIeeeAddr": "0x01", "lqi": 210},
             {"source": {"ieeeAddr": "0x01"}, "target": {"ieeeAddr": "0x02"},
              "linkquality": 150},

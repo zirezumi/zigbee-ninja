@@ -3,7 +3,7 @@
 Enough for S1 captures on a quiet LAN: tcpdump's default classic pcap format,
 Ethernet (with optional 802.1Q tag) or raw-IP linktypes, IPv4/TCP, in-order
 reassembly with retransmit dedupe and explicit gap accounting. Not a general
-pcap library and doesn't try to be — pcapng, IPv6, and out-of-order repair are
+pcap library and doesn't try to be: pcapng, IPv6, and out-of-order repair are
 out of scope until a real capture demands them.
 """
 

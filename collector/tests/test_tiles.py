@@ -51,7 +51,7 @@ def test_deploy_success_flow(tmp_path):
 def test_redeploy_updates_in_place_without_revoke(tmp_path):
     """A drifted probe updates by deploying again: extension/save replaces the
     running code under the same name, so no revoke/re-grant round trip exists
-    — the contract the Footprint "Update" button relies on."""
+    (the contract the Footprint "Update" button relies on)."""
     db = Database(tmp_path)
     manager = TileManager(db, publisher=None)
 

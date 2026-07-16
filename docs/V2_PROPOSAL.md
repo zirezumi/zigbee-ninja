@@ -1,21 +1,21 @@
-# zigbee-ninja V2 — the optimization loop
+# zigbee-ninja V2: the optimization loop
 
 | | |
 |---|---|
-| **Status** | RATIFIED 2026-07-16 — V2.M1 green-lit; §V2-10 resolved below |
+| **Status** | RATIFIED 2026-07-16: V2.M1 green-lit; §V2-10 resolved below |
 | **Date** | 2026-07-15 (drafted) · 2026-07-16 (ratified) |
-| **Depends on** | DESIGN.md (V1, canonical) — everything there stays true |
+| **Depends on** | DESIGN.md (V1, canonical): everything there stays true |
 
 V1 answers *"how much of each coordinator's capacity is used, and by what."*
 V2 answers the question that follows: ***"what, precisely, should the
-installation change — and did the change work?"***
+installation change: and did the change work?"***
 
 The product stance does not move: zigbee-ninja **never touches the mesh or the
 controller**. V2's output is recommendations with modeled savings and, after
 the user applies a change through their own tooling, a measured verdict. The
 loop is: **measure → attribute → recommend → (user applies) → verify**.
 Closing it turns a monitoring tool into a continuous traffic-cost regression
-suite for a Zigbee installation — the same way CI turns tests from a one-off
+suite for a Zigbee installation: the same way CI turns tests from a one-off
 audit into a standing guarantee.
 
 Everything below is generic core (P6): derived from discovery, registries,
@@ -28,7 +28,7 @@ Three V1 facts make the loop buildable now, not speculative:
 
 1. **Attribution already names the spender.** Chains carry the commanding
    automation/script/user (HA integration) or MQTT client. Nothing new is
-   needed to say *who* causes traffic — only to price it.
+   needed to say *who* causes traffic: only to price it.
 2. **The airtime model already prices frames.** Per-frame µs with unicast
    hop/retry structure and groupcast mesh amplification exists; pricing a
    *chain* is a join away. Every price inherits a provenance tag (P5).
@@ -49,7 +49,7 @@ chain_cost_us = Σ TX frames (unicast: hops × (frame+ACK+IFS) × (1+retry_rate)
 ```
 
 - Persisted on finalized chains; rolled up per (instance, commander, day)
-  and per (instance, device, day) — the **ledger**.
+  and per (instance, device, day): the **ledger**.
 - Autonomous (non-commanded) traffic is priced too, per device: reporting
   cost is real cost and often dominant on sensor-heavy meshes.
 - Every ledger row carries the weakest provenance tag among its inputs
@@ -57,7 +57,7 @@ chain_cost_us = Σ TX frames (unicast: hops × (frame+ACK+IFS) × (1+retry_rate)
   the model parameters used (avg_tx, retry factor, hop assumption), so a
   later parameter improvement is distinguishable from a real traffic change.
 - Self-traffic stays self-attributed (P4) and is shown in the ledger like
-  any other spender — zigbee-ninja pays rent in its own books.
+  any other spender: zigbee-ninja pays rent in its own books.
 
 The Attribution explorer grows cost columns; a **Top spenders** panel ranks
 commanders and devices by µs/day with trend arrows. This ledger is the
@@ -67,7 +67,7 @@ currency every V2 surface trades in.
 
 zigbee-ninja already watches `bridge/info`, `bridge/devices`, and
 `bridge/groups` continuously. V2 derives a passive **change journal**: a
-timestamped record whenever the installation itself changes —
+timestamped record whenever the installation itself changes:
 
 - device joined / left / **moved between instances**
 - group created / deleted / **membership changed**
@@ -96,7 +96,7 @@ The ledger makes cost a first-class metric, so the existing alert engine
   channel budget), for users who want CI-style hard limits rather than
   drift detection. Seeded disabled, like all capacity rules.
 
-New metrics ride the existing rule/state machinery — freeze-on-missing-data,
+New metrics ride the existing rule/state machinery: freeze-on-missing-data,
 restart rebaselining, and seed-once semantics all apply unchanged.
 
 ## §V2-5 The recommendation engine
@@ -123,7 +123,7 @@ that instead); every recommendation carries confidence and evidence links;
 dismissals are durable (a dismissed finding never nags again unless its
 inputs materially change).
 
-**Detector inventory, first wave — ordered by expected value on real meshes:**
+**Detector inventory, first wave: ordered by expected value on real meshes:**
 
 1. **Redundant-command costing.** The V1 detector already finds identical
    commands to the same target inside a window; V2 groups clusters by
@@ -135,7 +135,7 @@ inputs materially change).
    groupcast cost on this mesh's router census and measured avg_tx);
    *(b)* groups so small or so router-adjacent that per-member unicast
    would be cheaper than the broadcast amplification; *(c)* membership
-   pruning — members whose state never diverges from another group's.
+   pruning: members whose state never diverges from another group's.
 3. **Reporting-configuration advisor.** Autonomous reporting is priced per
    device in the ledger; devices whose reporting dominates their class
    (e.g. a sensor publishing every trivial delta) get "raise min-interval /
@@ -147,7 +147,7 @@ inputs materially change).
    latency, from single-target calibration) or approach the *measured*
    coordinator knee (from spread calibration). Because the latency-vs-load
    scatter is measured, the predicted p95 improvement from spreading a
-   burst is interpolation on this mesh's own curve — honest within the
+   burst is interpolation on this mesh's own curve: honest within the
    observed load range, `modeled` beyond it. Output: "stagger these N
    commands over ≥T ms" with the specific automations named.
 5. **Rebalancing advisor (what-if).** The per-device ledger + per-instance
@@ -170,9 +170,9 @@ supports changing."*
 
 ## §V2-6 Verification (what closes the loop)
 
-When a recommendation's change is applied — auto-detected via the journal
+When a recommendation's change is applied: auto-detected via the journal
 where registries show it (regroup, rebalance, membership), or marked
-applied by the user where they don't (pacing, controller-side dedupe) —
+applied by the user where they don't (pacing, controller-side dedupe):
 zigbee-ninja opens a verification window:
 
 - **Before** = the ledger/latency/headroom aggregates over N days
@@ -181,7 +181,7 @@ zigbee-ninja opens a verification window:
 - Verdict when the after-window has enough data: **improved / no material
   change / regressed**, with the actual deltas (µs/s, % of budget, p95
   latency) and honest guards: minimum window, and a same-hours comparison
-  to blunt time-of-day seasonality. No p-value theater — measured deltas
+  to blunt time-of-day seasonality. No p-value theater: measured deltas
   with stated windows.
 - Verdicts feed back: a `regressed` recommendation reopens with its
   real-world result attached; a `verified` one archives with its receipts.
@@ -203,7 +203,7 @@ zigbee-ninja opens a verification window:
 
 ## §V2-8 What V2 explicitly does not do
 
-- **No write path to the mesh, broker, or controller — not even opt-in.**
+- **No write path to the mesh, broker, or controller: not even opt-in.**
   Applying changes is the user's tooling's job; the manifest/contract is
   the boundary. (T2b inline proxy remains the only sanctioned datapath
   exception product-wide, and it is unrelated to V2.)
@@ -225,17 +225,17 @@ per V1 practice.
 
 ## §V2-10 Ratified decisions (owner, 2026-07-16)
 
-1. **Units:** both — the ledger stores µs, displays headline % of channel
+1. **Units:** both; the ledger stores µs, displays headline % of channel
    budget with µs/s alongside.
-2. **Regression sensitivity:** start loose — default 2× over a 14-day
+2. **Regression sensitivity:** start loose; default 2× over a 14-day
    median with 24 h sustain, tunable per rule like every other alert.
-3. **Manifest contract:** ratified early — the JSON shape above is the
+3. **Manifest contract:** ratified early; the JSON shape above is the
    contract controller-side tooling builds against; field renames from here
    on are breaking changes.
-4. **Applied-detection:** hybrid — journal-based auto-detection for
+4. **Applied-detection:** hybrid; journal-based auto-detection for
    registry-visible changes (regroups, device moves), manual marking for
    controller-side changes (pacing, dedupe).
-5. **HA surfacing:** yes — a `recommendations_open` sensor publishes through
+5. **HA surfacing:** yes; a `recommendations_open` sensor publishes through
    the already-granted discovery tile so controller-side automations can
    react.
 6. **Detector priorities:** for the reference deployment the build order is
@@ -243,7 +243,7 @@ per V1 practice.
    reporting-configuration advisor → rebalancing advisor → retry hotspots.
    (The generic default ordering in §V2-5 stands for the product.)
 
-**Additionally ratified:** a standing GUI principle — every V2 surface must
+**Additionally ratified:** a standing GUI principle; every V2 surface must
 be understandable to someone with a cursory grasp of network engineering:
 all granular data available, cogently presented, plain-language labels with
 tooltips carrying the depth.

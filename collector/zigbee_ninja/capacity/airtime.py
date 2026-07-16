@@ -16,7 +16,7 @@ this way is provenance "reconstructed" (DESIGN.md P5).
 
 The §10 CSMA-backoff term defaults to 0 µs before calibration: mean backoff is
 idle listening rather than channel occupancy, and the channel-budget
-denominator's η already discounts CSMA overhead — a calibrated per-mesh factor
+denominator's η already discounts CSMA overhead: a calibrated per-mesh factor
 can replace either knob later without double counting.
 """
 

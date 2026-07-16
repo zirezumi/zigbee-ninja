@@ -52,7 +52,7 @@ def seed(db: Database, spread: bool = False):
     record("z2m-b", 400, 30.0, None, True, {"z2m_version": "2.9.0",
                                             "coordinator_type": "EmberZNet",
                                             "coordinator_revision": "7.4.4"})
-    # Aborted runs never contribute a knee — but their window (1021–1029,
+    # Aborted runs never contribute a knee: but their window (1021–1029,
     # overlapping the ts=1020 rollup) is still self-traffic and must be
     # excluded from the headroom aggregates like any benchmark window.
     conn.execute(
@@ -87,7 +87,7 @@ def test_summarize_joins_knees_rates_and_scatter(tmp_path):
     assert a["denominators"]["channel_budget"]["pct"] > 0
 
     # The 16 eps window falls inside the aborted run's benchmark window and is
-    # excluded from every aggregate (§11.5) — rates come from 2 and 4 only.
+    # excluded from every aggregate (§11.5): rates come from 2 and 4 only.
     assert a["benchmark_windows_excluded"] == 1
     assert a["rates"] == {"p50_eps": 4.0, "p95_eps": 4.0, "max_eps": 4.0, "windows": 2}
     assert a["headroom"]["steady_eps"] == 12.0

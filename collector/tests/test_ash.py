@@ -9,7 +9,7 @@ from zigbee_ninja.decode.ash import (
 
 
 def test_crc16_ccitt_known_vector():
-    # CRC-CCITT (false) of "123456789" is 0x29B1 — standard check value.
+    # CRC-CCITT (false) of "123456789" is 0x29B1: standard check value.
     assert crc16_ccitt(b"123456789") == 0x29B1
 
 

@@ -431,7 +431,7 @@ class Engine:
 
     def _alert_knees(self) -> dict[str, float]:
         """Headline knee eps per instance (spread preferred over single, like
-        the headroom view), cached ~60 s — knees only change when a
+        the headroom view), cached ~60 s: knees only change when a
         calibration completes."""
         now = time.time()
         if self._knees_cache is None or now - self._knees_cache[0] > 60.0:
