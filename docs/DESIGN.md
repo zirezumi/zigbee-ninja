@@ -559,6 +559,9 @@ Everything embedded, no external services (P7):
   `ledger_daily` per (instance, day, commander) and `ledger_device_daily` per
   (instance, day, device), µs stored, each row carrying provenance plus the
   pricing parameters in force when it was last written; 365-day retention.
+  The **change journal** (V2_PROPOSAL.md §V2-3) rides beside it: `journal`
+  rows (ts, instance, kind, subject, detail) derived by diffing the live
+  registries, 90-day retention.
 - **Hourly Parquet segments**: raw event stream for the burst-inspector window
   (~48 h, quota-capped), queried in place by **embedded DuckDB** (MIT) for ad-hoc
   forensics without a series-cardinality explosion. Implementation: events

@@ -92,6 +92,17 @@ verification (§V2-6), (c) generalize the existing "recalibrate?" nudge, and
 changes that are visible in registries. Zero new footholds; pure derivation
 from what T0 already sees.
 
+> **Implementation (V2.M1):** the registry diffs each `bridge/devices` /
+> `bridge/groups` / `bridge/info` refresh against what it already held:
+> device added / removed / renamed / rejoined (network address change),
+> group added / removed / renamed / membership changed, Z2M version /
+> channel / coordinator firmware changed. The first sight of an instance
+> after boot is a baseline, so retained republishes and collector restarts
+> journal nothing. A device added within a day of its removal from a
+> different instance is annotated `moved_from`: the move-between-instances
+> signal. Rows persist in `journal` (90-day retention). Controller-link
+> events (HA connected / reconfigured) are a later addition.
+
 ## §V2-4 Budgets & regression watch
 
 The ledger makes cost a first-class metric, so the existing alert engine

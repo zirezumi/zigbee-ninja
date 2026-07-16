@@ -102,12 +102,21 @@ def _binding_count(entry: dict) -> int:
 
 
 class Registry:
-    def __init__(self):
+    def __init__(self, on_change=None):
+        # on_change(instance, kind, subject, detail): the passive change
+        # journal (V2_PROPOSAL.md §V2-3). Fired only on real field diffs;
+        # the first sight of an instance after boot is a baseline, never an
+        # event, so retained republishes and restarts stay silent.
+        self._on_change = on_change
         self._instances: dict[str, dict] = {}
         self._devices: dict[str, list[dict]] = {}
         self._groups: dict[str, list[dict]] = {}
         self._ieee_to_name: dict[str, dict[str, str]] = {}
         self._name_to_nwk: dict[str, dict[str, int]] = {}
+
+    def _emit(self, instance: str, kind: str, subject: str, detail: dict) -> None:
+        if self._on_change is not None:
+            self._on_change(instance, kind, subject, detail)
 
     def _instance(self, base: str) -> dict:
         return self._instances.setdefault(
@@ -168,6 +177,20 @@ class Registry:
         else:
             discovery_prefix = None
         instance = self._instance(base)
+        # Regime-boundary fields (§V2-3): journal a change only when a prior
+        # value existed; the first info after boot just sets the baseline.
+        for kind, subject, old, new in (
+            ("z2m_version_changed", "version", instance["version"], data.get("version")),
+            ("channel_changed", "channel", instance["channel"], network.get("channel")),
+            (
+                "coordinator_firmware_changed",
+                "coordinator_firmware",
+                instance["coordinator_revision"],
+                meta.get("revision"),
+            ),
+        ):
+            if old is not None and new is not None and new != old:
+                self._emit(base, kind, subject, {"from": old, "to": new})
         instance.update(
             version=data.get("version"),
             channel=network.get("channel"),
@@ -210,7 +233,10 @@ class Registry:
                     "binding_count": _binding_count(entry),
                 }
             )
+        previous = self._devices.get(base)
         self._devices[base] = devices
+        if previous is not None:
+            self._diff_devices(base, previous, devices)
         self._ieee_to_name[base] = {
             device["ieee_address"]: device["friendly_name"]
             for device in devices
@@ -249,8 +275,112 @@ class Registry:
                     ],
                 }
             )
+        previous = self._groups.get(base)
         self._groups[base] = groups
+        if previous is not None:
+            self._diff_groups(base, previous, groups)
         self._instance(base)["group_count"] = len(groups)
+
+    def _diff_devices(self, base: str, previous: list[dict], current: list[dict]) -> None:
+        old = {d["ieee_address"]: d for d in previous if d.get("ieee_address")}
+        new = {d["ieee_address"]: d for d in current if d.get("ieee_address")}
+        for ieee in new.keys() - old.keys():
+            device = new[ieee]
+            self._emit(
+                base,
+                "device_added",
+                device.get("friendly_name") or ieee,
+                {
+                    "ieee": ieee,
+                    "type": device.get("type"),
+                    "vendor": device.get("vendor"),
+                    "model": device.get("model"),
+                },
+            )
+        for ieee in old.keys() - new.keys():
+            self._emit(
+                base,
+                "device_removed",
+                old[ieee].get("friendly_name") or ieee,
+                {"ieee": ieee},
+            )
+        for ieee in new.keys() & old.keys():
+            before, after = old[ieee], new[ieee]
+            if before.get("friendly_name") != after.get("friendly_name"):
+                self._emit(
+                    base,
+                    "device_renamed",
+                    after.get("friendly_name") or ieee,
+                    {
+                        "ieee": ieee,
+                        "from": before.get("friendly_name"),
+                        "to": after.get("friendly_name"),
+                    },
+                )
+            old_nwk, new_nwk = before.get("network_address"), after.get("network_address")
+            if (
+                isinstance(old_nwk, int)
+                and isinstance(new_nwk, int)
+                and old_nwk != new_nwk
+            ):
+                # A new short address means the device rejoined the network.
+                self._emit(
+                    base,
+                    "device_rejoined",
+                    after.get("friendly_name") or ieee,
+                    {"ieee": ieee, "from": old_nwk, "to": new_nwk},
+                )
+
+    def _diff_groups(self, base: str, previous: list[dict], current: list[dict]) -> None:
+        names = self._ieee_to_name.get(base, {})
+        old = {g["id"]: g for g in previous if g.get("id") is not None}
+        new = {g["id"]: g for g in current if g.get("id") is not None}
+        for group_id in new.keys() - old.keys():
+            group = new[group_id]
+            self._emit(
+                base,
+                "group_added",
+                group.get("friendly_name") or str(group_id),
+                {"id": group_id, "members": len(group.get("member_ieee", []))},
+            )
+        for group_id in old.keys() - new.keys():
+            self._emit(
+                base,
+                "group_removed",
+                old[group_id].get("friendly_name") or str(group_id),
+                {"id": group_id},
+            )
+        for group_id in new.keys() & old.keys():
+            before, after = old[group_id], new[group_id]
+            if before.get("friendly_name") != after.get("friendly_name"):
+                self._emit(
+                    base,
+                    "group_renamed",
+                    after.get("friendly_name") or str(group_id),
+                    {
+                        "id": group_id,
+                        "from": before.get("friendly_name"),
+                        "to": after.get("friendly_name"),
+                    },
+                )
+            old_members = set(before.get("member_ieee", []))
+            new_members = set(after.get("member_ieee", []))
+            if old_members != new_members:
+                self._emit(
+                    base,
+                    "group_membership_changed",
+                    after.get("friendly_name") or str(group_id),
+                    {
+                        "id": group_id,
+                        "added": sorted(
+                            names.get(ieee, ieee) for ieee in new_members - old_members
+                        ),
+                        "removed": sorted(
+                            names.get(ieee, ieee) for ieee in old_members - new_members
+                        ),
+                        "size": len(new_members),
+                    },
+                )
 
     def _on_state(self, base: str, payload: bytes) -> None:
         data = _json_or_none(payload)

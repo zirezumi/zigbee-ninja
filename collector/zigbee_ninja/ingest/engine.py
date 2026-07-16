@@ -39,6 +39,7 @@ from .topology import TopologyPuller
 DEFAULT_ROLLUP_RETENTION_DAYS = 14  # 10s tiers
 DEFAULT_CHAIN_RETENTION_HOURS = 48  # chain detail
 DEFAULT_TOPOLOGY_SNAPSHOTS = 20  # per instance
+JOURNAL_RETENTION_DAYS = 90  # change journal (V2_PROPOSAL.md §V2-3)
 
 
 class Engine:
@@ -50,7 +51,7 @@ class Engine:
         self._secrets = secrets
         self.events = events
         self._upgrade_secrets()
-        self.registry = Registry()
+        self.registry = Registry(on_change=self._on_registry_change)
         self.rates = RateTracker()
         self.class_rates = RateTracker()
         self.brokerlog = BrokerLogCorrelator()
@@ -108,6 +109,11 @@ class Engine:
         # books (DESIGN.md P4).
         self._ledger_autonomous: dict[tuple[str, str, str], int] = {}
         self._ledger_self: dict[tuple[str, str, str, bool], int] = {}
+        # Change-journal buffer (V2_PROPOSAL.md §V2-3), drained on the 10 s
+        # flush; recent removals let a device_added on another instance be
+        # recognized as a move between coordinators.
+        self._journal_pending: list[tuple[float, str, str, str, str]] = []
+        self._recent_removals: dict[str, tuple[float, str]] = {}
         self._ha_link: HaLink | None = None
         self._ha_task: asyncio.Task | None = None
         self._ingest: MqttIngest | None = None
@@ -125,6 +131,35 @@ class Engine:
 
     def _resolve_members(self, instance: str, target: str) -> list[str]:
         return self.registry.group_members(instance, target)
+
+    # Cross-instance moves complete within this window (remove from one
+    # coordinator, rejoin on another is minutes to hours of user work).
+    MOVE_MATCH_SECONDS = 24 * 3600.0
+
+    def _on_registry_change(
+        self, instance: str, kind: str, subject: str, detail: dict
+    ) -> None:
+        """Buffer a change-journal entry (V2_PROPOSAL.md §V2-3). A device
+        added shortly after being removed from a different instance is
+        annotated as a move between coordinators."""
+        now = time.time()
+        ieee = detail.get("ieee")
+        if kind == "device_removed" and ieee:
+            self._recent_removals[ieee] = (now, instance)
+        elif kind == "device_added" and ieee:
+            removal = self._recent_removals.pop(ieee, None)
+            if removal is not None:
+                removed_at, from_instance = removal
+                if now - removed_at <= self.MOVE_MATCH_SECONDS and from_instance != instance:
+                    detail = {**detail, "moved_from": from_instance}
+        stale = [
+            key
+            for key, (ts, _from) in self._recent_removals.items()
+            if now - ts > self.MOVE_MATCH_SECONDS
+        ]
+        for key in stale:
+            del self._recent_removals[key]
+        self._journal_pending.append((now, instance, kind, subject, json.dumps(detail)))
 
     def _on_probe_heartbeat(self, base: str, heartbeat: dict) -> None:
         self.tiles.on_heartbeat(base, heartbeat)
@@ -630,6 +665,19 @@ class Engine:
             written += len(finalized)
 
         written += self._flush_ledger(conn, finalized)
+
+        journal_pending, self._journal_pending = self._journal_pending, []
+        if journal_pending:
+            conn.executemany(
+                "INSERT INTO journal (ts, instance, kind, subject, detail) "
+                "VALUES (?, ?, ?, ?, ?)",
+                journal_pending,
+            )
+            conn.execute(
+                "DELETE FROM journal WHERE ts < ?",
+                (time.time() - JOURNAL_RETENTION_DAYS * 86400,),
+            )
+            written += len(journal_pending)
 
         if written:
             conn.commit()

@@ -173,6 +173,17 @@ _MIGRATIONS = [
     );
     CREATE INDEX idx_ledger_device_daily_day ON ledger_device_daily (day);
     """,
+    """
+    CREATE TABLE journal (
+        id       INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts       REAL NOT NULL,
+        instance TEXT NOT NULL,
+        kind     TEXT NOT NULL,
+        subject  TEXT NOT NULL,
+        detail   TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX idx_journal_ts ON journal (ts);
+    """,
 ]
 
 
