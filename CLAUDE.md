@@ -193,6 +193,22 @@ retry hotspots. Image tags ratified: main → :edge, releases → :latest
 (docs/RELEASING.md); the v0.1.0 tag itself remains the owner's call.
 Remaining: forensics leads (owner-interest-gated: incoming trailing byte
 0x02/0x04, EZSP 0x0024, rare tag mispairs).
+**V2.M1 BUILT (cost ledger + change journal + GUI)**: migration 10
+`ledger_daily`/`ledger_device_daily` (µs, provenance + pricing params per
+row, 365 d) filled at the 10 s flush: every finalized chain priced
+(group-vs-device via the registry, router-census amplification, measured
+per-flow avg_tx/retry_rate with §10 defaults recorded when absent),
+autonomous state publishes priced per device, zigbee-ninja's own mesh
+commands (benchmark reads) priced under the self commander TX-only.
+Migration 11 `journal` (90 d): registry diffs on devices/groups/info
+(added/removed/renamed/rejoined, membership, version/channel/firmware),
+first-sight-is-baseline so restarts and retained republishes journal
+nothing, cross-instance move annotated `moved_from`. GET /api/ledger
+(windows round out to whole UTC days; rates divide by elapsed wall clock
+since the earliest returned day, response states both) + GET /api/journal.
+GUI: Attribution cost columns + Top spenders (headline % of budget, µs/s
+alongside), Fleet Recent changes panel. V2.M1 remaining: live-validate on
+the reference deployment, then close.
 Roadmap: README.md.
 
 ## Hard rules
