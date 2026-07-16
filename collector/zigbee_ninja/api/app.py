@@ -20,6 +20,7 @@ from ..attribution import queries as attribution_queries
 from ..calibration.benchmark import CalibrationRejected
 from ..capacity import airtime as airtime_model
 from ..capacity import headroom as headroom_model
+from ..capacity import ledger as ledger_module
 from ..ingest import topology as topology_module
 from ..ingest.engine import Engine
 from ..ingest.hacontrol import HaConfig, test_ha
@@ -290,6 +291,33 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
         seconds = max(60, min(seconds, MAX_QUERY_WINDOW_SECONDS))
         engine.flush_rollups()
         return {"redundant": _label_clients(attribution_queries.redundant(db, seconds))}
+
+    @app.get("/api/ledger")
+    def ledger_get(request: Request, seconds: int = 86400) -> dict:
+        require_user(request)
+        # The ledger is daily; windows round out to whole UTC days, and its
+        # own retention (365 d) bounds the range rather than the rollup cap.
+        seconds = max(3600, min(seconds, ledger_module.RETENTION_DAYS * 86400))
+        engine.flush_rollups()
+        return ledger_module.summary(db, seconds)
+
+    @app.get("/api/journal")
+    def journal_get(request: Request, seconds: int = 7 * 86400, limit: int = 200) -> dict:
+        require_user(request)
+        seconds = max(60, min(seconds, 90 * 86400))
+        limit = max(1, min(limit, 1000))
+        engine.flush_rollups()
+        rows = db.connect().execute(
+            "SELECT ts, instance, kind, subject, detail FROM journal "
+            "WHERE ts >= ? ORDER BY ts DESC LIMIT ?",
+            (time.time() - seconds, limit),
+        ).fetchall()
+        return {
+            "window_seconds": seconds,
+            "entries": [
+                {**dict(row), "detail": json.loads(row["detail"] or "{}")} for row in rows
+            ],
+        }
 
     @app.get("/api/settings")
     def settings_get(request: Request) -> dict:

@@ -11,6 +11,8 @@ from a real traffic change.
 
 from __future__ import annotations
 
+import calendar
+import json
 import time
 from dataclasses import dataclass
 
@@ -111,3 +113,120 @@ def price_chain(
 def autonomous_publish_cost_us() -> float:
     """Modeled cost of one device-initiated report reaching the coordinator."""
     return airtime.incoming_airtime_us(ZCL_REPORT_BYTES, group_addressed=False, acked=True)
+
+
+# -- read side (GET /api/ledger) ---------------------------------------------
+
+TOP_LIMIT = 25
+
+
+def _day_start_epoch(day: str) -> float:
+    return float(calendar.timegm(time.strptime(day, "%Y-%m-%d")))
+
+
+def _days_covering(start: float, end: float) -> list[str]:
+    """UTC day strings intersecting [start, end], oldest first."""
+    days = [utc_day(start)]
+    t = start
+    last = utc_day(end)
+    while days[-1] != last:
+        t += 86400.0
+        day = utc_day(min(t, end))
+        if day != days[-1]:
+            days.append(day)
+    return days
+
+
+def _rates(total_us: float, effective_seconds: float) -> dict:
+    us_per_s = total_us / effective_seconds if effective_seconds > 0 else 0.0
+    return {
+        "us_per_s": round(us_per_s, 3),
+        "pct_of_budget": round(us_per_s / airtime.CHANNEL_BUDGET_US_PER_S * 100.0, 6),
+    }
+
+
+def summary(db, seconds: int) -> dict:
+    """Ledger rollup over the UTC days intersecting the window. The ledger is
+    daily, so the window rounds out to whole days; rates divide by the
+    elapsed wall clock since the earliest returned day began, and the
+    response says which days and denominator it used."""
+    now = time.time()
+    days = _days_covering(now - seconds, now)
+    effective_seconds = max(1.0, now - _day_start_epoch(days[0]))
+    conn = db.connect()
+    placeholders = ",".join("?" * len(days))
+
+    commanders: dict[tuple[str, str], dict] = {}
+    for row in conn.execute(
+        f"SELECT instance, day, commander, chains, tx_us, rx_us, provenance, params "
+        f"FROM ledger_daily WHERE day IN ({placeholders}) ORDER BY day",
+        days,
+    ):
+        entry = commanders.setdefault(
+            (row["instance"], row["commander"]),
+            {
+                "instance": row["instance"],
+                "commander": row["commander"],
+                "chains": 0,
+                "tx_us": 0.0,
+                "rx_us": 0.0,
+            },
+        )
+        entry["chains"] += row["chains"]
+        entry["tx_us"] += row["tx_us"]
+        entry["rx_us"] += row["rx_us"]
+        # Rows arrive day-ascending; the latest day's pricing context wins.
+        entry["provenance"] = row["provenance"]
+        entry["params"] = json.loads(row["params"] or "{}")
+
+    devices: dict[tuple[str, str], dict] = {}
+    for row in conn.execute(
+        f"SELECT instance, day, device, publishes, autonomous_us, provenance "
+        f"FROM ledger_device_daily WHERE day IN ({placeholders}) ORDER BY day",
+        days,
+    ):
+        entry = devices.setdefault(
+            (row["instance"], row["device"]),
+            {
+                "instance": row["instance"],
+                "device": row["device"],
+                "publishes": 0,
+                "autonomous_us": 0.0,
+            },
+        )
+        entry["publishes"] += row["publishes"]
+        entry["autonomous_us"] += row["autonomous_us"]
+        entry["provenance"] = row["provenance"]
+
+    commander_rows = sorted(
+        commanders.values(), key=lambda e: e["tx_us"] + e["rx_us"], reverse=True
+    )
+    device_rows = sorted(devices.values(), key=lambda e: e["autonomous_us"], reverse=True)
+    for entry in commander_rows:
+        entry["total_us"] = entry["tx_us"] + entry["rx_us"]
+        entry.update(_rates(entry["total_us"], effective_seconds))
+    for entry in device_rows:
+        entry.update(_rates(entry["autonomous_us"], effective_seconds))
+
+    commanded_us = sum(e["total_us"] for e in commander_rows)
+    autonomous_us = sum(e["autonomous_us"] for e in device_rows)
+    totals = {
+        "chains": sum(e["chains"] for e in commander_rows),
+        "tx_us": sum(e["tx_us"] for e in commander_rows),
+        "rx_us": sum(e["rx_us"] for e in commander_rows),
+        "autonomous_publishes": sum(e["publishes"] for e in device_rows),
+        "autonomous_us": autonomous_us,
+        "total_us": commanded_us + autonomous_us,
+        **_rates(commanded_us + autonomous_us, effective_seconds),
+    }
+
+    return {
+        "window_seconds": seconds,
+        "days": days,
+        "effective_seconds": round(effective_seconds, 1),
+        "commander_count": len(commander_rows),
+        "device_count": len(device_rows),
+        "commanders": commander_rows[:TOP_LIMIT],
+        "devices": device_rows[:TOP_LIMIT],
+        "totals": totals,
+    }

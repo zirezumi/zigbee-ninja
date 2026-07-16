@@ -173,6 +173,61 @@ def test_self_mesh_commands_priced_under_self_commander(client):
     assert row["rx_us"] == 0
 
 
+def test_ledger_api_reports_costs_rates_and_rankings(client):
+    engine, clock = _prepare_engine(client)
+    engine.on_message("z2m-test/lamp/set", b'{"state":"ON"}')
+    clock.now += 0.3
+    engine.on_message("z2m-test/lamp", b'{"state":"ON"}')
+    engine.on_message("z2m-test/motion", b'{"occupancy":true}')
+    clock.now += 20
+
+    view = client.get("/api/ledger?seconds=86400").json()
+    assert view["days"] and view["effective_seconds"] > 0
+    assert view["commander_count"] == 1
+    row = view["commanders"][0]
+    assert row["commander"] == ledger.UNATTRIBUTED
+    assert row["total_us"] == row["tx_us"] + row["rx_us"]
+    assert row["us_per_s"] > 0
+    assert row["pct_of_budget"] >= 0
+    assert row["params"]["n_routers"] == 2
+    assert row["provenance"].startswith("inferred")
+
+    device = view["devices"][0]
+    assert device["device"] == "motion"
+    assert device["publishes"] == 1
+    assert device["autonomous_us"] == ledger.autonomous_publish_cost_us()
+
+    totals = view["totals"]
+    assert totals["total_us"] == totals["tx_us"] + totals["rx_us"] + totals["autonomous_us"]
+    assert totals["chains"] == 1
+
+
+def test_journal_api_returns_parsed_entries(client):
+    engine, _clock = _prepare_engine(client)
+    devices = list(DEVICES) + [
+        {
+            "ieee_address": "0x05",
+            "friendly_name": "new_plug",
+            "type": "Router",
+            "power_source": "Mains",
+            "definition": {"vendor": "V", "model": "M"},
+        }
+    ]
+    engine.on_message("z2m-test/bridge/devices", json.dumps(devices).encode())
+
+    view = client.get("/api/journal?seconds=3600").json()
+    entries = view["entries"]
+    assert len(entries) == 1
+    assert entries[0]["kind"] == "device_added"
+    assert entries[0]["subject"] == "new_plug"
+    assert entries[0]["detail"]["ieee"] == "0x05"
+
+
+def test_ledger_and_journal_require_auth(client):
+    assert client.get("/api/ledger").status_code == 401
+    assert client.get("/api/journal").status_code == 401
+
+
 def test_group_chain_uses_amplification_and_measured_avg_tx():
     price = ledger.price_chain(
         verb="set", group_target=True, n_routers=20, echo_count=15, avg_tx=2.1

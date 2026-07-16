@@ -72,7 +72,11 @@ currency every V2 surface trades in.
 > report size. zigbee-ninja's own mesh commands (benchmark reads) are priced
 > under the `zigbee-ninja` commander; their state echoes are consumed by the
 > calibration engine and stay unpriced, so self rows are TX-only lower
-> bounds, consistent with §10's posture.
+> bounds, consistent with §10's posture. `GET /api/ledger` serves the
+> rollup: because the ledger is daily, a window rounds out to whole UTC
+> days, and every rate divides by the elapsed wall clock since the earliest
+> returned day began (the response states both). `GET /api/journal` serves
+> the change journal.
 
 ## §V2-3 Change journal (the loop's clock)
 
