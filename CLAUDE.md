@@ -171,10 +171,20 @@ move `:latest` is an open owner decision (CI main-push semantics unchanged).
 (4) **docs/V2_PROPOSAL.md** drafted (optimization loop: cost ledger, change
 journal, budgets/regression alerts, counterfactual-replayed recommendations,
 migration manifest, applied-change verification) — iterate with the owner
-before building. (5) **T1/T2 fusion built** (see the M4 entry above); full
-match rates activate once the owner updates the fleet's probes to v0.4 from
-Footprint. Remaining: forensics leads (owner-interest-gated: incoming
-trailing byte 0x02/0x04, EZSP 0x0024, rare tag mispairs).
+before building. (5) **T1/T2 fusion built** (see the M4 entry above); owner updated all five
+probes to v0.4 (2026-07-16, via the new one-click in-place Update button on
+drifted Footprint tiles) — fusion is live-fusing fleet-wide with ~0 ms clock
+offsets; a symmetric unmatched pattern (≈equal wire-only/probe-only beside
+matches) is under diagnosis via the per-sender `top_unmatched` fusion
+diagnostic (stale registry addresses ruled out against the topology map).
+**V2 RATIFIED 2026-07-16 (owner)**: all §V2-10 questions resolved in
+docs/V2_PROPOSAL.md; **V2.M1 (cost ledger + change journal + attribution
+cost columns) is green-lit** — reference-deployment detector order: pacing →
+groupcast economics → redundancy costing → reporting advisor → rebalancing →
+retry hotspots. Image tags ratified: main → :edge, releases → :latest
+(docs/RELEASING.md); the v0.1.0 tag itself remains the owner's call.
+Remaining: forensics leads (owner-interest-gated: incoming trailing byte
+0x02/0x04, EZSP 0x0024, rare tag mispairs).
 Roadmap: README.md.
 
 ## Hard rules
@@ -192,6 +202,10 @@ Roadmap: README.md.
   capability permission-gated and revocable via the footprint model; zigbee-ninja's
   own traffic self-attributed; every metric provenance-tagged
   (measured/modeled/inferred); single-image architecture — no sidecar services.
+- **GUI principle (owner mandate, 2026-07-16):** every view must be
+  understandable to someone with a cursory grasp of network engineering — all
+  granular data available, cogently presented; plain-language labels with
+  tooltips carrying the depth; no design-doc jargon in UI text.
 
 ## Dev commands
 

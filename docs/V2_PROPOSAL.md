@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Status** | PROPOSAL — not yet ratified; iterating with the project owner |
-| **Date** | 2026-07-15 |
+| **Status** | RATIFIED 2026-07-16 — V2.M1 green-lit; §V2-10 resolved below |
+| **Date** | 2026-07-15 (drafted) · 2026-07-16 (ratified) |
 | **Depends on** | DESIGN.md (V1, canonical) — everything there stays true |
 
 V1 answers *"how much of each coordinator's capacity is used, and by what."*
@@ -223,18 +223,27 @@ zigbee-ninja opens a verification window:
 Each milestone dogfoods on the reference deployment before the next starts,
 per V1 practice.
 
-## §V2-10 Open questions for the owner
+## §V2-10 Ratified decisions (owner, 2026-07-16)
 
-1. **Units:** should budgets/savings headline in µs/s, % of channel budget,
-   or both? (Ledger stores µs; display is the question.)
-2. **Regression sensitivity:** default K× and window for "got chattier"
-   alerts — start loose (2× over 14-day median, 24 h sustain)?
-3. **Manifest contract:** JSON schema proposed above — worth ratifying
-   field names early so controller-side tooling can build against it?
-4. **Applied-detection:** comfortable with journal-based auto-detection
-   marking recommendations applied, or should every transition be manual?
-5. **HA surfacing:** should new-recommendation events also publish through
-   the discovery tile (per-instance grant already covers it), or stay
-   GUI-only until asked?
-6. **Detector priorities:** the inventory is ordered by expected generic
-   value; reorder for the reference deployment?
+1. **Units:** both — the ledger stores µs, displays headline % of channel
+   budget with µs/s alongside.
+2. **Regression sensitivity:** start loose — default 2× over a 14-day
+   median with 24 h sustain, tunable per rule like every other alert.
+3. **Manifest contract:** ratified early — the JSON shape above is the
+   contract controller-side tooling builds against; field renames from here
+   on are breaking changes.
+4. **Applied-detection:** hybrid — journal-based auto-detection for
+   registry-visible changes (regroups, device moves), manual marking for
+   controller-side changes (pacing, dedupe).
+5. **HA surfacing:** yes — a `recommendations_open` sensor publishes through
+   the already-granted discovery tile so controller-side automations can
+   react.
+6. **Detector priorities:** for the reference deployment the build order is
+   pacing advisor → groupcast economics → redundant-command costing →
+   reporting-configuration advisor → rebalancing advisor → retry hotspots.
+   (The generic default ordering in §V2-5 stands for the product.)
+
+**Additionally ratified:** a standing GUI principle — every V2 surface must
+be understandable to someone with a cursory grasp of network engineering:
+all granular data available, cogently presented, plain-language labels with
+tooltips carrying the depth.

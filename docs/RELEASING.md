@@ -2,8 +2,9 @@
 
 Releases are cut by pushing an annotated version tag; everything else is
 automated by `.github/workflows/release.yml`. Nothing releases from ordinary
-pushes — `main` stays a moving development line (`:latest` + `:sha-*` images
-from CI, as today).
+pushes — `main` stays a moving development line (`:edge` + `:sha-*` images
+from CI), and **releases own `:latest`** alongside their immutable `vX.Y.Z`
+tag.
 
 ## Versioning
 
@@ -55,11 +56,8 @@ cosign verify \
 This proves the image was built by this repository's release workflow from
 the stated tag — the §15 image-signing posture.
 
-## Open decision (owner)
+## Image tag semantics (ratified 2026-07-16)
 
-Whether release tags should also move `:latest`. Today CI moves `:latest` on
-every `main` push (development semantics). The conventional alternative once
-releases exist: `main` pushes `:edge`, releases move `:latest`. Switching
-changes what `docker pull zigbee-ninja` gives existing users of the GHCR
-image, so it is deliberately **not** changed until ratified; the release
-workflow pushes only immutable `vX.Y.Z` tags until then.
+`main` pushes move `:edge` and `sha-*`; release tags move `:latest` and
+create the immutable `vX.Y.Z`. Ratified while the image had no external
+users, so the `:latest` semantics change was free.

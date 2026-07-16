@@ -68,10 +68,10 @@ jobs:
           file: deploy/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          # Immutable version tags only; whether releases also move :latest
-          # is an open decision recorded in docs/RELEASING.md.
+          # Releases own :latest; main pushes track :edge (docs/RELEASING.md).
           tags: |
             ghcr.io/zirezumi/zigbee-ninja:${{ github.ref_name }}
+            ghcr.io/zirezumi/zigbee-ninja:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Install cosign

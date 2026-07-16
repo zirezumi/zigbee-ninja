@@ -70,8 +70,10 @@ jobs:
           file: deploy/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          # main is the moving development line: releases own :latest
+          # (docs/RELEASING.md), main pushes track :edge.
           tags: |
-            ghcr.io/zirezumi/zigbee-ninja:latest
+            ghcr.io/zirezumi/zigbee-ninja:edge
             ghcr.io/zirezumi/zigbee-ninja:sha-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
