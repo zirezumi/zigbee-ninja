@@ -11,6 +11,7 @@ crashed detector's rows are left exactly as its last good run wrote them.
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable
 
@@ -44,6 +45,9 @@ class RecommendationEngine:
         self._started_at = clock()
         self._last_run_at: float | None = None
         self._last_result: dict | None = None
+        # A manual run-now can land while the hourly pass is mid-flight;
+        # serializing them keeps sync's read-reconcile-write races out.
+        self._run_lock = threading.Lock()
 
     def due(self) -> bool:
         now = self._clock()
@@ -74,26 +78,27 @@ class RecommendationEngine:
 
     def run(self) -> dict:
         """One full detector pass; safe on a worker thread (thread-local DB
-        connections, snapshot-style registry reads)."""
-        started = self._clock()
-        ctx = self._context()
-        detectors: dict[str, dict] = {}
-        for detector in self._detectors:
-            name = detector.NAME
-            try:
-                findings: list[Finding] = detector.detect(ctx)
-            except Exception as exc:  # isolate: one detector must not stop the rest
-                detectors[name] = {"error": f"{type(exc).__name__}: {exc}"}
-                continue
-            counts = self.store.sync(name, findings)
-            detectors[name] = {"findings": len(findings), **counts}
-        self._last_run_at = started
-        self._last_result = {
-            "ran_at": started,
-            "duration_ms": round((self._clock() - started) * 1000.0, 1),
-            "detectors": detectors,
-        }
-        return self._last_result
+        connections, snapshot-style registry reads, serialized passes)."""
+        with self._run_lock:
+            started = self._clock()
+            ctx = self._context()
+            detectors: dict[str, dict] = {}
+            for detector in self._detectors:
+                name = detector.NAME
+                try:
+                    findings: list[Finding] = detector.detect(ctx)
+                except Exception as exc:  # isolate: one crash must not stop the rest
+                    detectors[name] = {"error": f"{type(exc).__name__}: {exc}"}
+                    continue
+                counts = self.store.sync(name, findings)
+                detectors[name] = {"findings": len(findings), **counts}
+            self._last_run_at = started
+            self._last_result = {
+                "ran_at": started,
+                "duration_ms": round((self._clock() - started) * 1000.0, 1),
+                "detectors": detectors,
+            }
+            return self._last_result
 
     def status(self) -> dict:
         return {
