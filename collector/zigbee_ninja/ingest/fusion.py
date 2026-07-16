@@ -1,0 +1,169 @@
+"""T1/T2 frame fusion (DESIGN.md §8): incoming radio frames observed twice.
+
+One physical incoming frame is seen at the wire (T2 incomingMessageHandler:
+sender short address + the ZCL transaction sequence in the message header) and
+at the Z2M boundary (T1 probe deviceMessage — probe v0.4 emits the same ZCL
+sequence). Records fuse on (instance, sender nwk, zcl seq) inside a short
+watermark. The disagreement counters are the point of the exercise:
+**wire-only** frames quantify what Z2M-level observation misses (frames Z2M
+consumes without emitting a device event — default responses, interview
+traffic, unknown devices); **probe-only** frames flag wire-capture gaps.
+Matched pairs also yield a per-instance probe↔pcap clock-offset estimate,
+the §8 cross-source alignment signal.
+
+Outgoing frames have no Z2M-boundary *frame* event to fuse with (commands are
+observed as MQTT messages, not radio frames), so fusion is incoming-only.
+"""
+
+from __future__ import annotations
+
+import threading
+import time
+from collections import deque
+from collections.abc import Callable
+from dataclasses import dataclass, field
+
+WATERMARK_SECONDS = 5.0
+WINDOW_SECONDS = 300.0
+MAX_PENDING = 2048  # per instance per side; overflow drops the oldest, counted
+OFFSET_EWMA_ALPHA = 0.1
+
+
+@dataclass
+class _InstanceState:
+    # (nwk, seq) -> deque of (arrival_ts, source_ts); a device can legally
+    # reuse a sequence inside the watermark only after 256 messages, so the
+    # deque is nearly always length 1.
+    pending_wire: dict[tuple[int, int], deque] = field(default_factory=dict)
+    pending_probe: dict[tuple[int, int], deque] = field(default_factory=dict)
+    outcomes: deque = field(default_factory=deque)  # (arrival_ts, kind)
+    offset_ewma_ms: float | None = None
+    offset_samples: int = 0
+    overflow_drops: int = 0
+    last_wire_at: float | None = None
+    last_probe_seq_at: float | None = None
+
+
+class FusionTracker:
+    def __init__(self, clock: Callable[[], float] = time.time):
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._instances: dict[str, _InstanceState] = {}
+
+    # -- intake -----------------------------------------------------------------
+
+    def on_wire(self, instance: str, nwk: int, zcl_seq: int, pcap_ts: float) -> None:
+        now = self._clock()
+        with self._lock:
+            state = self._instances.setdefault(instance, _InstanceState())
+            state.last_wire_at = now
+            self._sweep(state, now)
+            key = (nwk, zcl_seq)
+            waiting = state.pending_probe.get(key)
+            if waiting:
+                _arrival, probe_ts = waiting.popleft()
+                if not waiting:
+                    del state.pending_probe[key]
+                self._record_match(state, now, probe_ts, pcap_ts)
+                return
+            self._enqueue(state.pending_wire, key, (now, pcap_ts), state)
+
+    def on_probe(self, instance: str, nwk: int, zcl_seq: int, probe_ts: float) -> None:
+        now = self._clock()
+        with self._lock:
+            state = self._instances.setdefault(instance, _InstanceState())
+            state.last_probe_seq_at = now
+            self._sweep(state, now)
+            key = (nwk, zcl_seq)
+            waiting = state.pending_wire.get(key)
+            if waiting:
+                _arrival, pcap_ts = waiting.popleft()
+                if not waiting:
+                    del state.pending_wire[key]
+                self._record_match(state, now, probe_ts, pcap_ts)
+                return
+            self._enqueue(state.pending_probe, key, (now, probe_ts), state)
+
+    # -- internals ---------------------------------------------------------------
+
+    @staticmethod
+    def _enqueue(
+        pending: dict, key: tuple[int, int], entry: tuple, state: _InstanceState
+    ) -> None:
+        pending.setdefault(key, deque()).append(entry)
+        if sum(len(q) for q in pending.values()) > MAX_PENDING:
+            oldest_key = min(pending, key=lambda k: pending[k][0][0])
+            pending[oldest_key].popleft()
+            if not pending[oldest_key]:
+                del pending[oldest_key]
+            state.overflow_drops += 1
+
+    def _record_match(
+        self, state: _InstanceState, now: float, probe_ts: float, pcap_ts: float
+    ) -> None:
+        state.outcomes.append((now, "matched"))
+        offset_ms = (probe_ts - pcap_ts) * 1000.0
+        if state.offset_ewma_ms is None:
+            state.offset_ewma_ms = offset_ms
+        else:
+            state.offset_ewma_ms += OFFSET_EWMA_ALPHA * (offset_ms - state.offset_ewma_ms)
+        state.offset_samples += 1
+
+    @staticmethod
+    def _sweep(state: _InstanceState, now: float) -> None:
+        for pending, kind in (
+            (state.pending_wire, "wire_only"),
+            (state.pending_probe, "probe_only"),
+        ):
+            expired = []
+            for key, queue in pending.items():
+                while queue and now - queue[0][0] > WATERMARK_SECONDS:
+                    queue.popleft()
+                    state.outcomes.append((now, kind))
+                if not queue:
+                    expired.append(key)
+            for key in expired:
+                del pending[key]
+        while state.outcomes and now - state.outcomes[0][0] > WINDOW_SECONDS:
+            state.outcomes.popleft()
+
+    # -- read side -----------------------------------------------------------------
+
+    def snapshot(self) -> dict[str, dict]:
+        now = self._clock()
+        result: dict[str, dict] = {}
+        with self._lock:
+            for instance, state in self._instances.items():
+                self._sweep(state, now)
+                counts = {"matched": 0, "wire_only": 0, "probe_only": 0}
+                for _ts, kind in state.outcomes:
+                    counts[kind] += 1
+                wire_recent = state.last_wire_at is not None and now - state.last_wire_at < 60
+                probe_recent = (
+                    state.last_probe_seq_at is not None
+                    and now - state.last_probe_seq_at < 120
+                )
+                if probe_recent and wire_recent:
+                    fusion_state = "fusing"
+                elif wire_recent:
+                    # Wire frames flow but no sequenced probe events: the
+                    # deployed probe predates v0.4 (or no probe at all).
+                    fusion_state = "awaiting probe v0.4"
+                elif probe_recent:
+                    fusion_state = "no wire coverage"
+                else:
+                    fusion_state = "idle"
+                result[instance] = {
+                    "state": fusion_state,
+                    "matched_5m": counts["matched"],
+                    "wire_only_5m": counts["wire_only"],
+                    "probe_only_5m": counts["probe_only"],
+                    "clock_offset_ms": (
+                        None
+                        if state.offset_ewma_ms is None
+                        else round(state.offset_ewma_ms, 1)
+                    ),
+                    "offset_samples": state.offset_samples,
+                    "overflow_drops": state.overflow_drops,
+                }
+        return result

@@ -5,6 +5,7 @@ import {
   api,
   FleetMessage,
   fleetSocketUrl,
+  FusionView,
   TapStats,
   WireFlow,
   WireLatencyStats,
@@ -50,14 +51,29 @@ function AirtimeBar({ buckets }: { buckets: AirtimeLive["buckets"] }) {
   );
 }
 
+function fusionText(fusion: FusionView | undefined): string {
+  if (!fusion || fusion.state === "idle") return "—";
+  if (fusion.state === "awaiting probe v0.4") {
+    return "awaiting probe v0.4 — update the extension from Footprint";
+  }
+  if (fusion.state === "no wire coverage") return "no wire frames to fuse with";
+  const offset =
+    fusion.clock_offset_ms !== null ? ` · clocks Δ${fusion.clock_offset_ms} ms` : "";
+  return (
+    `${fusion.matched_5m} matched · ${fusion.wire_only_5m} wire-only · ` +
+    `${fusion.probe_only_5m} probe-only (5 min)${offset}`
+  );
+}
+
 interface FlowCardProps {
   flow: WireFlow;
   airtime?: AirtimeLive;
   latency?: WireLatencyStats;
+  fusion?: FusionView;
   now: number;
 }
 
-function FlowCard({ flow, airtime, latency, now }: FlowCardProps) {
+function FlowCard({ flow, airtime, latency, fusion, now }: FlowCardProps) {
   const wire = flow.wire;
   const fresh = now - flow.last_seen < 60;
   const ezspTop = Object.entries(flow.ezsp_frames)
@@ -162,6 +178,10 @@ function FlowCard({ flow, airtime, latency, now }: FlowCardProps) {
             </span>
           )}
         </span>
+        <span title="The same incoming frame seen at both the wire and inside Zigbee2MQTT, joined on the sender and its message sequence. Wire-only = frames Z2M handled without emitting a device event; probe-only = frames the capture missed. Matched pairs also measure the probe↔wire clock offset.">
+          Frame fusion
+        </span>
+        <span>{fusionText(fusion)}</span>
         <span title="Internal tallies the coordinator chip keeps (transmissions, retries, failures). Zigbee2MQTT polls them hourly; zigbee-ninja reads the answers passively.">
           Coordinator counters
         </span>
@@ -192,6 +212,7 @@ function FlowCard({ flow, airtime, latency, now }: FlowCardProps) {
 
 export default function Wire() {
   const [tap, setTap] = useState<TapStats | null>(null);
+  const [fusion, setFusion] = useState<Record<string, FusionView>>({});
   const [now, setNow] = useState(0);
   const [seconds, setSeconds] = useState(3600);
   const [stored, setStored] = useState<AirtimeWindow | null>(null);
@@ -211,6 +232,7 @@ export default function Wire() {
         if (!alive) return;
         const parsed = JSON.parse(event.data as string) as FleetMessage;
         setTap(parsed.tap);
+        setFusion(parsed.fusion ?? {});
         setNow(parsed.ts);
       };
       socket.onclose = () => {
@@ -292,6 +314,7 @@ export default function Wire() {
               flow={flow}
               airtime={flow.instance ? tap?.airtime[flow.instance] : undefined}
               latency={flow.instance ? tap?.latency[flow.instance] : undefined}
+              fusion={flow.instance ? fusion[flow.instance] : undefined}
               now={now}
             />
           ))}

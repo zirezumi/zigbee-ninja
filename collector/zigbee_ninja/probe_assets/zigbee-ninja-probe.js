@@ -14,7 +14,7 @@
 // payload contents. Kill switch: publish {"enabled": false} to
 // <base>/zigbee-ninja/probe/set.
 
-const PROBE_VERSION = "0.3.0";
+const PROBE_VERSION = "0.4.0";
 const FLUSH_MS = 1000;
 const MAX_BUFFER = 400;
 const HEARTBEAT_MS = 15000;
@@ -81,7 +81,29 @@ class ZigbeeNinjaProbe {
         size = -1;
       }
       const lqi = data.linkquality === undefined ? -1 : data.linkquality;
-      this.push(["dm", name, String(data.cluster || "?"), String(data.type || "?"), lqi, size]);
+      // The ZCL transaction sequence is the T1/T2 fusion join key; -1 when the
+      // message carries none (raw/non-ZCL) or this Z2M version omits it.
+      const meta = data.meta || {};
+      const seq =
+        typeof meta.zclTransactionSequenceNumber === "number"
+          ? meta.zclTransactionSequenceNumber
+          : -1;
+      const endpoint =
+        typeof data.endpoint === "number"
+          ? data.endpoint
+          : data.endpoint && typeof data.endpoint.ID === "number"
+            ? data.endpoint.ID
+            : -1;
+      this.push([
+        "dm",
+        name,
+        String(data.cluster || "?"),
+        String(data.type || "?"),
+        lqi,
+        size,
+        seq,
+        endpoint,
+      ]);
     });
 
     hook("onMQTTMessage", "mqttMessage", (data) => {

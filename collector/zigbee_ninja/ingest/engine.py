@@ -24,6 +24,7 @@ from ..tiles import (
     TileManager,
 )
 from .brokerlog import LOG_TOPIC_PREFIX, BrokerLogCorrelator
+from .fusion import FusionTracker
 from .hacontrol import HaAttribution, HaConfig, HaLink
 from .mqtt import BrokerConfig, MqttIngest
 from .probe import ProbeIngest
@@ -52,8 +53,11 @@ class Engine:
         self.class_rates = RateTracker()
         self.brokerlog = BrokerLogCorrelator()
         self.chains = ChainTracker(resolve_members=self._resolve_members)
+        self.fusion = FusionTracker()
         self.probes = ProbeIngest(
-            resolve_members=self._resolve_members, on_heartbeat=self._on_probe_heartbeat
+            resolve_members=self._resolve_members,
+            on_heartbeat=self._on_probe_heartbeat,
+            on_device_seq=self._on_probe_device_seq,
         )
         self.tiles = TileManager(db, publisher=self.publish)
         self.tap = TapIngest(
@@ -62,6 +66,7 @@ class Engine:
             on_event=lambda ts, instance, name, direction, size: self.events.record(
                 ts, "wire", instance, name, direction, None, size
             ),
+            on_zcl_incoming=self.fusion.on_wire,
         )
         self.topology = TopologyPuller(
             db,
@@ -114,6 +119,15 @@ class Engine:
 
     def _on_probe_heartbeat(self, base: str, heartbeat: dict) -> None:
         self.tiles.on_heartbeat(base, heartbeat)
+
+    def _on_probe_device_seq(
+        self, base: str, name: str, zcl_seq: int, probe_ts: float
+    ) -> None:
+        # The wire sees short addresses; probe events carry friendly names.
+        # The registry join is the fusion key's other half (DESIGN.md §8).
+        nwk = self.registry.network_address_for(base, name)
+        if nwk is not None:
+            self.fusion.on_probe(base, nwk, zcl_seq, probe_ts)
 
     async def publish(self, topic: str, payload: str, retain: bool = False) -> None:
         """Publish on the ingest connection; self-attributed (DESIGN.md P4)."""

@@ -107,6 +107,7 @@ class Registry:
         self._devices: dict[str, list[dict]] = {}
         self._groups: dict[str, list[dict]] = {}
         self._ieee_to_name: dict[str, dict[str, str]] = {}
+        self._name_to_nwk: dict[str, dict[str, int]] = {}
 
     def _instance(self, base: str) -> dict:
         return self._instances.setdefault(
@@ -215,6 +216,11 @@ class Registry:
             for device in devices
             if device.get("ieee_address") and device.get("friendly_name")
         }
+        self._name_to_nwk[base] = {
+            device["friendly_name"]: device["network_address"]
+            for device in devices
+            if device.get("friendly_name") and isinstance(device.get("network_address"), int)
+        }
         instance = self._instance(base)
         instance.update(
             device_count=len(devices),
@@ -268,6 +274,12 @@ class Registry:
         """Router census for the mesh-amplification model (0 until discovered)."""
         instance = self._instances.get(base)
         return int(instance.get("router_count") or 0) if instance else 0
+
+    def network_address_for(self, base: str, friendly_name: str) -> int | None:
+        """Short (nwk) address for a friendly name — the T1↔T2 fusion join
+        needs it because the wire sees short addresses (sender EUI64 arrives
+        zeroed) while probe events carry names."""
+        return self._name_to_nwk.get(base, {}).get(friendly_name)
 
     def discovery_prefix_for(self, base: str) -> str | None:
         """HA discovery prefix announced by the instance, if any."""

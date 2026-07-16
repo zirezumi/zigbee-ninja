@@ -106,9 +106,14 @@ class ProbeIngest:
         resolve_members: Callable[[str, str], list[str]] | None = None,
         on_heartbeat: Callable[[str, dict], None] | None = None,
         clock: Callable[[], float] = time.time,
+        on_device_seq: Callable[[str, str, int, float], None] | None = None,
     ):
         self._clock = clock
         self._on_heartbeat = on_heartbeat or (lambda _base, _hb: None)
+        # on_device_seq(base, device_name, zcl_seq, probe_ts): deviceMessage
+        # events that carry a ZCL transaction sequence (probe v0.4+) — the T1
+        # side of frame fusion (DESIGN.md §8).
+        self._on_device_seq = on_device_seq or (lambda _base, _name, _seq, _ts: None)
         self.latency = LatencyTracker(resolve_members)
         self._stats: dict[str, dict] = {}
 
@@ -171,9 +176,12 @@ class ProbeIngest:
                     if command is not None:
                         self.latency.on_command(base, command[0], float(ts))
             elif kind == "dm" and len(event) >= 4 and isinstance(event[2], str):
-                # dm event: [ts, "dm", name, cluster, type, lqi, size]
+                # dm event: [ts, "dm", name, cluster, type, lqi, size] with
+                # probe v0.4 appending [zcl_seq, endpoint].
                 cluster = event[3] if isinstance(event[3], str) else ""
                 self.latency.on_device_message(base, event[2], cluster, float(ts))
+                if len(event) >= 8 and isinstance(event[7], (int, float)) and event[7] >= 0:
+                    self._on_device_seq(base, event[2], int(event[7]), float(ts))
 
     def _handle_heartbeat(self, base: str, payload: bytes) -> None:
         stat = self._stat(base)

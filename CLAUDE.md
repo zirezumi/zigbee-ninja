@@ -45,8 +45,15 @@ wrong numbers. Spike S2 is resolved passively: Z2M's own readAndClearCounters re
 harvested off the wire and labeled (`decode/counters.py`, provenance inferred
 until live validation); wire-latency 10 s windows persist to `latency_10s`
 (`/api/latency`) as the latency-vs-load axis for continuous knee validation.
-Remaining for **M4**: T1/T2 frame fusion (exact matching wants the probe to
-emit APS/ZCL sequence numbers — probe v0.4).
+**M4 complete — T1/T2 fusion built**: incoming frames fuse on (instance,
+sender nwk via the registry name→nwk join, ZCL transaction sequence) in
+`ingest/fusion.py` — the wire side reads the sequence from the ZCL header
+(metadata only), probe v0.4 emits it per deviceMessage (appended fields, old
+collectors/probes stay compatible); matched/wire-only/probe-only rolling
+counters + probe↔pcap clock-offset EWMA per instance, on the fleet WS,
+/api/tap, and a Wiretap "Frame fusion" row. Deployed probes predate v0.4
+until the owner updates them from Footprint (drift chip → Deploy — consent
+per foothold); fusion honestly reports "awaiting probe v0.4" meanwhile.
 **M5 (started)**: per-frame airtime model (`capacity/airtime.py`, DESIGN §10)
 with PSDU reconstruction + mesh amplification over the discovered router
 census; per-instance airtime buckets (tx_unicast / tx_groupcast / rx / rx_mesh)
@@ -164,10 +171,10 @@ move `:latest` is an open owner decision (CI main-push semantics unchanged).
 (4) **docs/V2_PROPOSAL.md** drafted (optimization loop: cost ledger, change
 journal, budgets/regression alerts, counterfactual-replayed recommendations,
 migration manifest, applied-change verification) — iterate with the owner
-before building. Remaining §8: T1/T2 fusion (probe v0.4 emitting APS/ZCL
-sequence numbers; the fleet probe update rides the existing drift→redeploy
-tile flow, owner-actuated per instance), forensics leads (owner-interest-
-gated: incoming trailing byte 0x02/0x04, EZSP 0x0024, rare tag mispairs).
+before building. (5) **T1/T2 fusion built** (see the M4 entry above); full
+match rates activate once the owner updates the fleet's probes to v0.4 from
+Footprint. Remaining: forensics leads (owner-interest-gated: incoming
+trailing byte 0x02/0x04, EZSP 0x0024, rare tag mispairs).
 Roadmap: README.md.
 
 ## Hard rules

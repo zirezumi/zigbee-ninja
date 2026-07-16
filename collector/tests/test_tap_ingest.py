@@ -328,6 +328,24 @@ def test_passive_retry_rate_scales_unicast_airtime():
     )
 
 
+def test_incoming_zcl_callback_feeds_fusion_not_loopbacks():
+    """Radio incoming frames with a ZCL header reach the fusion callback with
+    (sender, zcl_seq, pcap_ts); loopbacks and ZDO-style frames never do."""
+    seen = []
+    tap = TapIngest(
+        resolve_instance=resolve,
+        router_count=lambda _base: 4,
+        on_zcl_incoming=lambda instance, sender, seq, ts: seen.append(
+            (instance, sender, seq, ts)
+        ),
+    )
+    tap.register_agent("agent-1", {})
+    tap.feed("agent-1", v14_wire_conversation())
+    # The conversation carries one radio incoming (ZCL seq 0x92 from 0x01E6 at
+    # pcap ts 200.20) and one loopback, which must not fuse.
+    assert seen == [("z2m-test", 0x01E6, 0x92, 200.20)]
+
+
 def test_avg_tx_accepts_hourly_counter_windows():
     """Z2M's ember watchdog polls counters on a fixed 1 h setInterval, so real
     windows are ~3600 s plus jitter — the old 3600 s ceiling rejected nearly

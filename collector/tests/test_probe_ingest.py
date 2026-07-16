@@ -141,3 +141,26 @@ def test_junk_payloads_counted_not_raised():
     ingest.handle("z2m-test", "zigbee-ninja/probe/events", b"\x00 not json")
     ingest.handle("z2m-test", "zigbee-ninja/probe/heartbeat", b"[]")
     assert ingest.stats()["z2m-test"]["parse_errors"] == 2
+
+
+def test_device_seq_callback_only_for_sequenced_events():
+    seen = []
+    ingest = ProbeIngest(
+        on_device_seq=lambda base, name, seq, ts: seen.append((base, name, seq, ts))
+    )
+    ingest.handle(
+        "z2m-test",
+        "zigbee-ninja/probe/events",
+        events_payload(
+            1,
+            [
+                # Probe v0.4 appends [zcl_seq, endpoint] to dm events.
+                [1000.0, "dm", "lamp", "genOnOff", "attributeReport", 120, 30, 146, 11],
+                # -1 marks a message without a ZCL sequence — never forwarded.
+                [1000.1, "dm", "lamp", "genOnOff", "attributeReport", 120, 30, -1, 11],
+                # v0.3 shape (no fusion fields) still parses for latency only.
+                [1000.2, "dm", "lamp", "genOnOff", "attributeReport", 120, 30],
+            ],
+        ),
+    )
+    assert seen == [("z2m-test", "lamp", 146, 1000.0)]

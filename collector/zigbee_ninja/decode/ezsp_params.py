@@ -155,6 +155,10 @@ class IncomingMessage:
     rssi: int
     payload_len: int
     trailing: bytes
+    # ZCL transaction sequence from the message contents' header — metadata
+    # only (never the payload body), the T1/T2 fusion join key (DESIGN.md §8).
+    # None for ZDO frames and payloads too short to carry a ZCL header.
+    zcl_seq: int | None = None
 
     @property
     def loopback(self) -> bool:
@@ -177,14 +181,26 @@ def parse_incoming(params: bytes) -> IncomingMessage | None:
     trailing_len = len(params) - 31 - payload_len
     if trailing_len < 0 or trailing_len > 2:
         return None
+    aps = _aps(params, 1)
+    contents = params[31 : 31 + payload_len]
+    # ZCL header: frame control, [manufacturer code u16 when bit 2 is set],
+    # transaction sequence, command id. ZDO (profile 0) has no ZCL header.
+    zcl_seq: int | None = None
+    if aps.profile_id != 0x0000 and payload_len >= 3:
+        if contents[0] & 0x04:
+            if payload_len >= 5:
+                zcl_seq = contents[3]
+        else:
+            zcl_seq = contents[1]
     return IncomingMessage(
         msg_type=params[0],
-        aps=_aps(params, 1),
+        aps=aps,
         sender=_le16(params, 12),
         lqi=params[24],
         rssi=int.from_bytes(params[25:26], "little", signed=True),
         payload_len=payload_len,
         trailing=bytes(params[31 + payload_len :]),
+        zcl_seq=zcl_seq,
     )
 
 

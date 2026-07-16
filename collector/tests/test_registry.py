@@ -100,6 +100,9 @@ def test_discovery_from_bridge_topics():
     assert light["published_measurements"] == ["device_temperature", "power"]
     assert light["binding_count"] == 2
     assert light["network_address"] == 4711
+    assert registry.network_address_for("z2m-test", "kitchen_light") == 4711
+    assert registry.network_address_for("z2m-test", "Coordinator") is None  # no nwk field
+    assert registry.network_address_for("z2m-test", "nope") is None
     sensor = devices["door_sensor"]
     assert sensor["get_attribute"] is None  # nothing gettable on the contact sensor
     assert devices["Coordinator"]["get_attribute"] is None

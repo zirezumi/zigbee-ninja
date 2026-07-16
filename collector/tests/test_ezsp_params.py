@@ -86,6 +86,26 @@ def test_parse_incoming_radio_frame():
     assert incoming.trailing == b"\x02"
     assert incoming.loopback is False
     assert incoming.acked is True
+    # ZCL header 18 92 0b: non-manufacturer frame → sequence at contents[1].
+    assert incoming.zcl_seq == 0x92
+
+
+def test_parse_incoming_zcl_seq_variants():
+    def frame(profile: bytes, contents: bytes) -> bytes:
+        aps = profile + bytes.fromhex("0800" "0b01" "0001" "0000" "8f")
+        packet_info = bytes.fromhex("e601") + bytes(8) + bytes.fromhex("ff20" "6cb7" "00000000")
+        return b"\x00" + aps + packet_info + bytes([len(contents)]) + contents
+
+    # Manufacturer-specific frame control (bit 2): sequence sits after the
+    # 2-byte manufacturer code.
+    mfg = ep.parse_incoming(frame(b"\x04\x01", bytes.fromhex("1c4312a701")))
+    assert mfg.zcl_seq == 0xA7
+    # ZDO (profile 0) has no ZCL header at all.
+    zdo = ep.parse_incoming(frame(b"\x00\x00", bytes.fromhex("189200")))
+    assert zdo.zcl_seq is None
+    # Too short to carry the advertised header shape.
+    short = ep.parse_incoming(frame(b"\x04\x01", bytes.fromhex("1c43")))
+    assert short.zcl_seq is None
 
 
 def test_parse_incoming_loopback():

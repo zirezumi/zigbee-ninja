@@ -266,7 +266,8 @@ instructions surfaced.
   endpoint, cluster, command, payload *size* (never payload contents by default —
   a toggleable deep-capture mode exists for burst forensics), status/error,
   request-response correlation where Z2M provides it, queue milestones where
-  observable.
+  observable, and (v0.4+) the ZCL transaction sequence per device message —
+  the T1/T2 fusion join key (§8).
 - **Self-limits:** fixed-size internal buffer, drop-and-count under pressure
   (drops reported in heartbeat — self-accounting extends to the probe itself),
   kill-switch topic, honors `extension/remove`.
@@ -351,11 +352,18 @@ flowchart LR
   paired observations — the same command seen at broker, extension, and wire
   within milliseconds is a natural alignment signal) and exposes residual skew as
   a data-quality metric.
-- **Fusion:** one physical frame may be observed at T1 and T2. Records fuse on
-  (instance, direction, address, sequence/APS counter, time proximity) into a
-  single FrameRecord carrying per-tier annotations. Disagreement is itself
-  signal: T2-only frames quantify what Z2M-level observation misses; T1-only
-  frames flag capture gaps.
+- **Fusion:** one physical frame may be observed at T1 and T2. Incoming
+  radio frames fuse on (instance, sender short address, ZCL transaction
+  sequence) inside a short watermark (~5 s): the wire side reads the
+  sequence from the message's ZCL header (metadata only, never the body),
+  the probe side emits it per deviceMessage as of probe v0.4, and the
+  registry joins friendly names to short addresses. Disagreement is itself
+  signal: **wire-only** frames quantify what Z2M-level observation misses
+  (default responses, interview traffic, unknown devices); **probe-only**
+  frames flag capture gaps. Matched pairs also measure the probe↔pcap clock
+  offset continuously — the per-source alignment signal above. Outgoing
+  frames have no Z2M-boundary *frame* event (commands are observed as MQTT
+  messages), so fusion is incoming-only.
 - **Watermarks:** attribution windows close on a lateness watermark (~2 s). Live
   views show provisional classifications immediately; storage persists finalized
   ones. A small reorder buffer absorbs cross-source jitter.

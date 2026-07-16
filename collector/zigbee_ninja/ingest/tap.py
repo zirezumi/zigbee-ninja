@@ -270,6 +270,7 @@ class TapIngest:
         router_count: Callable[[str], int] | None = None,
         clock: Callable[[], float] = time.time,
         on_event: Callable[[float, str, str, str, int], None] | None = None,
+        on_zcl_incoming: Callable[[str, int, int, float], None] | None = None,
     ):
         # resolve_instance(ip, port) -> base topic, from discovery adapter endpoints.
         self._resolve_instance = resolve_instance
@@ -278,6 +279,10 @@ class TapIngest:
         # on_event(pcap_ts, instance, frame_name, direction, size): every decoded
         # EZSP frame, for the raw event store (DESIGN.md §12).
         self._on_event = on_event
+        # on_zcl_incoming(instance, sender_nwk, zcl_seq, pcap_ts): every radio
+        # (non-loopback) incoming frame with a ZCL header — the T2 side of
+        # frame fusion (DESIGN.md §8).
+        self._on_zcl_incoming = on_zcl_incoming
         self._readers: dict[str, StreamingPcapReader] = {}
         self._flows: dict[tuple, FlowState] = {}
         self.agents: dict[str, dict] = {}
@@ -446,6 +451,8 @@ class TapIngest:
             if incoming.trailing:
                 key = incoming.trailing.hex()
                 flow.incoming_trailing[key] = flow.incoming_trailing.get(key, 0) + 1
+            if incoming.zcl_seq is not None and self._on_zcl_incoming is not None:
+                self._on_zcl_incoming(instance, incoming.sender, incoming.zcl_seq, ts)
             group_addressed = incoming.msg_type in (
                 ezsp_params.INCOMING_MULTICAST,
                 ezsp_params.INCOMING_BROADCAST,

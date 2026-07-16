@@ -192,6 +192,16 @@ export interface AlertBrief {
   name: string | null;
 }
 
+export interface FusionView {
+  state: string;
+  matched_5m: number;
+  wire_only_5m: number;
+  probe_only_5m: number;
+  clock_offset_ms: number | null;
+  offset_samples: number;
+  overflow_drops: number;
+}
+
 export interface FleetMessage {
   ts: number;
   broker: BrokerStatus;
@@ -200,6 +210,7 @@ export interface FleetMessage {
   latency: Record<string, LatencyStats>;
   probes: Record<string, ProbeStats>;
   tap: TapStats;
+  fusion: Record<string, FusionView>;
   alerts: AlertBrief[];
 }
 
