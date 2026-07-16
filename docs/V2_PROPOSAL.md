@@ -417,3 +417,127 @@ per V1 practice.
 be understandable to someone with a cursory grasp of network engineering:
 all granular data available, cogently presented, plain-language labels with
 tooltips carrying the depth.
+
+## §V2-11 The rebalancing simulator (V2.M4 design: DRAFT, awaiting owner review)
+
+An interactive what-if surface: drag devices and groups between
+coordinators and watch the predicted load change. It is a **component of
+the rebalancing advisor, not a replacement**: the advisor proposes move
+sets; the simulator lets the user explore, sanity-check, and compose their
+own scenarios. Both run on one shared scenario engine, so a hand-built
+scenario and an advisor proposal are priced by the same arithmetic and
+carry the same provenance. Nothing in either path transmits on the mesh:
+simulation is read-only analysis of recorded traffic, and the view says so
+the way the Recommendations footer does.
+
+### The scenario engine (shared, backend)
+
+A scenario is a list of moves: a device to another instance, or a whole
+group (its members travel with it). Pricing a scenario honors the physics
+the ledger already prices:
+
+1. **Router census shifts reprice everything.** Groupcast cost is
+   `(1 + N_routers) × frame × avg_tx`, so moving a router changes the
+   price of **every existing groupcast on both meshes**, not just the
+   moved traffic. The engine reports this second-order term separately
+   per mesh ("existing broadcast traffic repriced: +X µs/s here, −Y µs/s
+   there") because it is the part mental arithmetic always drops.
+2. **Autonomous reporting moves with the device** at its recorded
+   per-device ledger rate, repriced for the destination's measured retry
+   rate.
+3. **Commander traffic re-routes.** Recorded chains targeting the moved
+   device or group re-cost on the destination's router census and
+   measured avg_tx/retry_rate.
+4. **Groups live on one coordinator.** Moving a subset of a group's
+   members breaks the group; the engine models both resolutions and
+   shows each delta: per-device unicasts to the movers, or a new group
+   on the destination (which also shifts *its* router census term).
+5. **Burst overlay, not averages.** The recorded per-mesh event streams
+   align on their common clock; the moved subjects' identity-bearing
+   events (commands to them, their reports) reassign to the destination
+   stream; the engine re-composes sliding 1 s / 10 s peaks per mesh and
+   judges them against each mesh's measured sustained limit and hard
+   ceiling (the §V2-5 burst envelope machinery). Steady µs/s is shown
+   but is never the verdict: bursts are what bind.
+6. **Channel pooling.** Instances sharing a channel draw one pooled
+   airtime budget; the engine pools when a scenario or reality makes
+   channels collide (all five reference channels are distinct today).
+7. **Radio feasibility is an explicit unknown.** Whether the device can
+   even reach the destination coordinator well is not answerable from
+   recorded data; topology snapshots only know the mesh as it is. Every
+   cross-mesh move carries a "radio reach unknown" caveat, provenance
+   `modeled`, never a green check. The engine surfaces the nearest
+   available context (the device's current-parent LQI, the destination
+   channel) as context only.
+
+Provenance discipline: before-numbers come measured (wire envelope,
+ledger); after-numbers are recompositions of identity-bearing T0 streams
+(only T0 events carry device identity), so scenario peaks are tagged with
+their basis and shown beside the measured before-baseline rather than
+pretending to the same fidelity. Same currency as Top spenders: comparable
+estimates, not meter readings.
+
+### The GUI (one lane per coordinator)
+
+- **Lanes.** One column per instance. Lane header: steady µs/s and % of
+  budget, burst peak vs capacity limit, each rendering before → after with
+  delta chips once a scenario is staged; a warning state when the staged
+  after-peak crosses 80% of the sustained limit or any peak crosses the
+  hard ceiling.
+- **Chips.** Devices and groups as draggable chips inside their lane;
+  groups are containers whose member chips travel together, and dragging
+  a member out warns about the split with the two resolutions. Chips
+  carry a cost badge (recorded µs/s) and a router/end-device glyph, since
+  router moves shift the census. A fleet of a hundred-plus devices needs
+  the lane searchable and filterable (name, router/end device, cost) and
+  sortable by spend.
+- **Not drag-only.** Every chip also has a "Move to…" control; pointer
+  drag is the fast path (the topology graph already ships the pointer
+  machinery), not the only path.
+- **Staged-changes tray.** The scenario as an ordered list of moves, each
+  with its per-move delta and warnings (census repricing, group split,
+  radio unknown, channel pooling), individually removable; undo/reset;
+  an aggregate scenario delta per mesh and fleet-wide; named scenarios
+  saved server-side (settings-backed) for later comparison.
+- **Bridges into the M4 pipeline.** "Score with the advisor" runs the
+  rebalancing advisor's judgment over the staged scenario and shows the
+  result in place. "Export migration manifest" emits the frozen contract
+  for the user's own tooling; the change journal then auto-detects the
+  registry-visible moves when they actually happen, opening §V2-6
+  verification windows against the simulator's stated predictions.
+  Deliberately NOT offered: writing a user scenario into the
+  recommendations queue as if a detector had found it: detector passes
+  own their rows (sync deletes open rows a pass no longer emits), and a
+  user's scenario is not detector output.
+
+### Open questions for the owner (ratify before building)
+
+1. Nav placement: its own view (suggested nav label: **Rebalance**), or a
+   mode inside Headroom?
+2. The migration manifest contract must freeze at first ship. Proposed
+   shape: a versioned envelope (`manifest_version`, `generated_at`,
+   `source: simulator|advisor`), one entry per move carrying the subject's
+   identity (friendly name + IEEE + source instance), `to_instance`, the
+   group resolution when a split is involved, and the predicted per-move
+   delta with provenance and basis (the receipts §V2-6 verification
+   compares against); plus the predicted per-instance after-state. Ratify
+   fields, especially: is embedding predictions in the manifest right
+   (receipts), or should predictions live only in zigbee-ninja?
+3. Group subset moves: model both resolutions from day one, or refuse
+   subset moves in the first ship and only move whole groups?
+4. Scenario persistence: named server-side scenarios acceptable, or
+   session-local only?
+
+## §V2-12 V2.M4 sequencing (slices)
+
+1. **Burst envelope analysis** (shipped first; implementation note under
+   §V2-5): fine-grained peaks, per-commander worst bursts, observed
+   co-fire composition, cross-coordinator fan-outs, on the Headroom view.
+2. **Rebalancing advisor detector**: §V2-5 findings proposing move sets,
+   judged against burst envelopes and measured limits via the scenario
+   engine.
+3. **Scenario engine + simulator GUI** (after §V2-11 ratification).
+4. **Migration manifest export** (contract frozen at first ship).
+5. **Applied-recommendation verification** (§V2-6): journal-aligned
+   before/after windows drive applied → verified/regressed.
+6. **Retry-cost hotspots detector** (§V2-5 detector 6).
