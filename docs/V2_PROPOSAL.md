@@ -186,6 +186,19 @@ inputs materially change).
    Savings are replayed: last 24 h of each candidate device's traffic
    re-costed on the destination's router census, channel pooling, and
    measured amplification factor.
+
+   Its core is **burst envelope analysis**: steady-state budgets understate
+   real strain, because bursts are what bind a mesh sized to kill multicast
+   and delivery errors. A consolidation what-if therefore (a) **overlays the
+   recorded per-mesh event streams** from the raw store on a common clock
+   and re-costs them under the combined router census, comparing
+   fine-grained peaks against the *measured* knees rather than averages;
+   (b) composes each automation's **worst observed burst**, including
+   plausible co-trigger sets, to bound the theoretical worst case
+   statically; and (c) optionally verifies the prediction live with a
+   **controlled replay benchmark** on calibration's per-run-authorized
+   rails: which also settles empirically whether controller-side command
+   staggers are earning their keep.
 6. **Retry-cost hotspots.** Per-hop retry rates (validated counters) and
    LQI trends price the *overhead multiplier* per device; chronic
    multipliers get "investigate placement/route" findings. Low confidence
@@ -246,7 +259,7 @@ zigbee-ninja opens a verification window:
 | V2.M1 | Cost ledger (chain pricing, rollups, autonomous device costing) + change journal + Attribution cost columns | The currency is sound; regimes are visible |
 | V2.M2 | Budgets & regression watch on the alert engine + Top spenders | Cost is a standing guarantee, not a report |
 | V2.M3 | Recommendation engine w/ detectors 1–4 + Recommendations view + counterfactual replay | The tool says what to change, with receipts |
-| V2.M4 | Rebalancing advisor + migration manifest + applied-change verification | The loop closes: recommend → apply → verified delta |
+| V2.M4 | Rebalancing advisor w/ burst envelope analysis + migration manifest + applied-change verification | The loop closes: recommend → apply → verified delta |
 
 Each milestone dogfoods on the reference deployment before the next starts,
 per V1 practice.
