@@ -207,8 +207,19 @@ nothing, cross-instance move annotated `moved_from`. GET /api/ledger
 (windows round out to whole UTC days; rates divide by elapsed wall clock
 since the earliest returned day, response states both) + GET /api/journal.
 GUI: Attribution cost columns + Top spenders (headline % of budget, µs/s
-alongside), Fleet Recent changes panel. V2.M1 remaining: live-validate on
-the reference deployment, then close.
+alongside), Fleet Recent changes panel. **V2.M1 DEPLOYED + LIVE-VALIDATED
+2026-07-16**: commanders and devices priced live within minutes (Rendering
+automations named per instance, presence dimmers dominating autonomous,
+group-amplification arithmetic hand-checked exact); two defects the first
+live data exposed were fixed same-day (group state topics excluded from
+device costing: Z2M-synthetic, not mesh frames; rate denominators bounded
+by a seed-once `ledger_since` so fresh deployments divide by recorded
+time). Journal live-validated for baseline suppression (two restarts with
+full retained republishes journaled nothing); a positive-path live entry
+awaits the next natural registry change. Rates start `modeled/default`
+after each restart and flip to measured as hourly counter windows land.
+Next: V2.M2 (cost baselines + regression alerts + Top spenders trend,
+riding the alert engine).
 Roadmap: README.md.
 
 ## Hard rules
