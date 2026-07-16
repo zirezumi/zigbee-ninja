@@ -106,6 +106,11 @@ class SettingsBody(BaseModel):
     client_labels: dict[str, str] | None = None
 
 
+class RecommendationStateBody(BaseModel):
+    state: str
+    note: str | None = None
+
+
 def _set_session_cookie(response: Response, token: str) -> None:
     response.set_cookie(
         SESSION_COOKIE,
@@ -322,6 +327,40 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
                 {**dict(row), "detail": json.loads(row["detail"] or "{}")} for row in rows
             ],
         }
+
+    # -- recommendations (V2_PROPOSAL.md §V2-5) ------------------------------------
+
+    @app.get("/api/recommendations")
+    def recommendations_get(request: Request, state: str = "open") -> dict:
+        require_user(request)
+        try:
+            queue = engine.recommendations.store.queue(state)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {
+            "recommendations": queue,
+            "counts": engine.recommendations.store.counts(),
+            "run": engine.recommendations.status(),
+        }
+
+    @app.post("/api/recommendations/run", status_code=202)
+    async def recommendations_run(request: Request) -> dict:
+        """Run every detector now instead of waiting for the hourly pass."""
+        require_user(request)
+        return await asyncio.to_thread(engine.recommendations.run)
+
+    @app.post("/api/recommendations/{rec_id}/state")
+    def recommendations_set_state(
+        request: Request, rec_id: str, body: RecommendationStateBody
+    ) -> dict:
+        require_user(request)
+        try:
+            updated = engine.recommendations.store.set_state(rec_id, body.state, body.note)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if updated is None:
+            raise HTTPException(status_code=404, detail="No such recommendation")
+        return updated
 
     @app.get("/api/settings")
     def settings_get(request: Request) -> dict:

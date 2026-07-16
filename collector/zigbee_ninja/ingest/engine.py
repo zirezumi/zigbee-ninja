@@ -15,6 +15,7 @@ from ..capacity import headroom as headroom_model
 from ..capacity import ledger
 from ..capacity.headroom import TX_BUCKETS
 from ..ha_discovery import PUBLISH_INTERVAL_SECONDS, DiscoveryPublisher
+from ..recommend.runner import RecommendationEngine
 from ..store.config import ConfigStore
 from ..store.db import Database
 from ..store.events import RawEventLog
@@ -93,6 +94,9 @@ class Engine:
         )
         self.ha_attr = HaAttribution()
         self.alerts = AlertManager(db, config, provider=self._alert_metrics)
+        self.recommendations = RecommendationEngine(
+            db, registry=self.registry, pricing=self.tap.pricing_params
+        )
         self.discovery = DiscoveryPublisher(
             config,
             publish=self.publish,
@@ -672,8 +676,8 @@ class Engine:
         if finalized:
             conn.executemany(
                 "INSERT INTO chains (instance, target, verb, opened_at, client, "
-                "payload_size, echo_count, first_echo_ms, redundant) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "payload_size, echo_count, first_echo_ms, redundant, payload_digest) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     (
                         chain.instance,
@@ -685,6 +689,7 @@ class Engine:
                         chain.echoes,
                         chain.first_echo_ms,
                         int(chain.redundant),
+                        chain.payload_digest,
                     )
                     for chain in finalized
                 ],
@@ -846,5 +851,12 @@ class Engine:
                     quota_mb=settings["raw_event_quota_mb"],
                     horizon_hours=settings["raw_event_horizon_hours"],
                 )
+            except Exception:
+                pass
+            try:
+                # Detector pass on its own slow cadence, off the event loop:
+                # store reads can take a second or two on a full window.
+                if self.recommendations.due():
+                    await asyncio.to_thread(self.recommendations.run)
             except Exception:
                 pass

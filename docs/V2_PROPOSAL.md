@@ -227,6 +227,25 @@ each expandable to evidence; empty queue + green budgets is the product's
 definition of *"provably traffic-optimized: nothing left that the evidence
 supports changing."*
 
+> **Implementation (V2.M3, store + lifecycle):** findings persist in a
+> `recommendations` table keyed by a stable id per (detector, instance,
+> subject), so re-detection lands on the same row. Detector passes run a
+> few minutes after start and hourly after that, off the flush loop on a
+> worker thread, and read only persisted stores and registry snapshots.
+> An open row a completed detector pass no longer emits is deleted: the
+> queue only holds findings the evidence currently supports. A dismissed
+> row keeps the content it was dismissed with and reopens only when the
+> finding's input fingerprint moves materially (any numeric input changing
+> by 1.5×, or a structural change); applied, verified, and regressed rows
+> are never touched by detector passes (§V2-6 owns those transitions).
+> `GET /api/recommendations` serves the queue ordered by saving ×
+> confidence (latency-only findings rank among themselves by predicted
+> p95 improvement), `POST /api/recommendations/{id}/state` moves between
+> open, dismissed, and applied, and `POST /api/recommendations/run`
+> forces a pass. Finalized chains now persist a 12-character payload
+> digest (never contents): the identity evidence the groupcast detectors
+> join on.
+
 ## §V2-6 Verification (what closes the loop)
 
 When a recommendation's change is applied: auto-detected via the journal

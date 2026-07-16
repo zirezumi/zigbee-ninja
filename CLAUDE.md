@@ -279,8 +279,8 @@ Roadmap: README.md.
 
 ## Layout (DESIGN §17)
 
-`collector/zigbee_ninja/{ingest,decode,attribution,capacity,calibration,store,api}`
+`collector/zigbee_ninja/{ingest,decode,attribution,capacity,calibration,recommend,store,api}`
 holds tier adapters, ASH/EZSP decode, chains/classes, airtime math, benchmark engine,
-SQLite+Parquet, FastAPI. `frontend/` GUI. `probes/z2m-extension/` single-file JS
+recommendation store + detectors, SQLite+Parquet, FastAPI. `frontend/` GUI. `probes/z2m-extension/` single-file JS
 probe (M3). `agents/ninja-tap/` capture agent (M4). `deploy/` Dockerfile/compose.
 `tests/fixtures/` golden pcaps + MQTT cassettes (sanitized).

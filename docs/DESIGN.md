@@ -561,7 +561,12 @@ Everything embedded, no external services (P7):
   pricing parameters in force when it was last written; 365-day retention.
   The **change journal** (V2_PROPOSAL.md §V2-3) rides beside it: `journal`
   rows (ts, instance, kind, subject, detail) derived by diffing the live
-  registries, 90-day retention.
+  registries, 90-day retention. The **recommendations** table
+  (V2_PROPOSAL.md §V2-5) holds detector findings with lifecycle state,
+  evidence links, and an input fingerprint that keeps dismissals durable;
+  finalized chains additionally persist a short payload digest (never
+  payload contents) as the identity evidence the groupcast detectors join
+  on.
 - **Hourly Parquet segments**: raw event stream for the burst-inspector window
   (~48 h, quota-capped), queried in place by **embedded DuckDB** (MIT) for ad-hoc
   forensics without a series-cardinality explosion. Implementation: events
@@ -758,6 +763,7 @@ zigbee-ninja/
 │   │   ├── attribution/   #   chains, classes, taxonomy joins
 │   │   ├── capacity/      #   airtime model, denominators, knees
 │   │   ├── calibration/   #   benchmark engine + rails
+│   │   ├── recommend/     #   recommendation store + detectors (V2)
 │   │   ├── store/         #   SQLite + Parquet/DuckDB, retention
 │   │   └── api/           #   FastAPI REST + WS
 │   └── tests/

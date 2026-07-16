@@ -184,6 +184,27 @@ _MIGRATIONS = [
     );
     CREATE INDEX idx_journal_ts ON journal (ts);
     """,
+    """
+    CREATE TABLE recommendations (
+        id               TEXT PRIMARY KEY,
+        detector         TEXT NOT NULL,
+        instance         TEXT NOT NULL,
+        subject          TEXT NOT NULL,
+        finding          TEXT NOT NULL,
+        action           TEXT NOT NULL DEFAULT '{}',
+        saving           TEXT NOT NULL DEFAULT '{}',
+        confidence       TEXT NOT NULL DEFAULT 'low',
+        evidence         TEXT NOT NULL DEFAULT '[]',
+        state            TEXT NOT NULL DEFAULT 'open',
+        fingerprint      TEXT NOT NULL DEFAULT '{}',
+        state_note       TEXT,
+        created_at       REAL NOT NULL,
+        updated_at       REAL NOT NULL,
+        state_changed_at REAL
+    );
+    CREATE INDEX idx_recommendations_state ON recommendations (state);
+    ALTER TABLE chains ADD COLUMN payload_digest TEXT;
+    """,
 ]
 
 
