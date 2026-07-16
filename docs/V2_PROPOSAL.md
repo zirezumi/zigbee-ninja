@@ -340,6 +340,18 @@ zigbee-ninja opens a verification window:
 - Everything stays in the single image (P7); DuckDB does the replay math;
   no new dependencies anticipated beyond what V1 ships. No GPL (P8).
 
+> **Implementation (V2.M3, surfaces):** the Recommendations view is a
+> new nav item: state tabs with counts, a scan-now control, cards
+> carrying the detector, confidence, and the saving headline with its
+> basis in a tooltip, expandable evidence rendered in plain language,
+> and dismiss / mark-applied / reopen controls (dismissing offers an
+> optional note kept with the row). The open-tab empty state is the
+> product's traffic-optimized statement. The discovery publisher's
+> sensor set gains `recommendations_open` (a bare count, no unit) per
+> granted instance; configs republish on the payload change with
+> unique_ids stable, per the granted-tile consent model (§V2-10.5).
+> The cost/day sensor named above remains future work.
+
 ## §V2-8 What V2 explicitly does not do
 
 - **No write path to the mesh, broker, or controller: not even opt-in.**

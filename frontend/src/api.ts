@@ -654,6 +654,61 @@ export interface BurstChain {
   redundant: number;
 }
 
+export interface RecommendationSaving {
+  us_per_s?: number;
+  pct_of_budget?: number;
+  p95_ms?: number;
+  basis?: string;
+  provenance?: string;
+}
+
+export interface Recommendation {
+  id: string;
+  detector: string;
+  instance: string;
+  subject: string;
+  finding: string;
+  action: Record<string, unknown>;
+  saving: RecommendationSaving;
+  confidence: "high" | "medium" | "low";
+  evidence: Array<Record<string, unknown>>;
+  state: string;
+  state_note: string | null;
+  created_at: number;
+  updated_at: number;
+  state_changed_at: number | null;
+}
+
+export interface RecommendationRunDetector {
+  findings?: number;
+  inserted?: number;
+  updated?: number;
+  reopened?: number;
+  deleted?: number;
+  held?: number;
+  error?: string;
+}
+
+export interface RecommendationRunStatus {
+  last_run_at: number | null;
+  next_run_due: number;
+  detectors: string[];
+  last_result: {
+    ran_at: number;
+    duration_ms: number;
+    detectors: Record<string, RecommendationRunDetector>;
+  } | null;
+}
+
+export interface RecommendationsView {
+  recommendations: Recommendation[];
+  counts: {
+    by_state: Record<string, number>;
+    open_by_instance: Record<string, number>;
+  };
+  run: RecommendationRunStatus;
+}
+
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
     credentials: "same-origin",

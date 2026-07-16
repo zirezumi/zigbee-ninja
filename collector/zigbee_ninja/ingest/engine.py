@@ -481,6 +481,9 @@ class Engine:
             "msg_rate": (
                 None if rates is None else round(rates.get("total_60s", 0) / 60.0, 2)
             ),
+            "recommendations_open": self.recommendations.store.counts()[
+                "open_by_instance"
+            ].get(base, 0),
             "alerts": [alert["name"] for alert in briefs],
             "severity": severity,
         }

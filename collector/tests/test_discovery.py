@@ -48,6 +48,7 @@ def harness(tmp_path):
         "knee_utilization_pct": 3.2,
         "wire_p95_ms": 81.5,
         "msg_rate": 5.4,
+        "recommendations_open": 2,
         "alerts": [],
         "severity": None,
     }
@@ -67,9 +68,15 @@ def test_cycle_publishes_retained_configs_and_states(harness):
         "homeassistant/sensor/zigbee_ninja_z2m-1/knee_utilization_pct/config",
         "homeassistant/sensor/zigbee_ninja_z2m-1/wire_p95_ms/config",
         "homeassistant/sensor/zigbee_ninja_z2m-1/msg_rate/config",
+        "homeassistant/sensor/zigbee_ninja_z2m-1/recommendations_open/config",
         "homeassistant/binary_sensor/zigbee_ninja_z2m-1/alert_active/config",
     }
     assert all(retain for _, _, retain in harness.published)
+
+    recommendations_config = json.loads(dict(configs)[
+        "homeassistant/sensor/zigbee_ninja_z2m-1/recommendations_open/config"
+    ])
+    assert "unit_of_measurement" not in recommendations_config  # a bare count
 
     budget_config = json.loads(dict(configs)[
         "homeassistant/sensor/zigbee_ninja_z2m-1/budget_pct/config"
@@ -82,6 +89,7 @@ def test_cycle_publishes_retained_configs_and_states(harness):
     states = {topic: payload for topic, payload, _ in harness.published}
     assert states["zigbee-ninja/z2m-1/budget_pct"] == "0.73"
     assert states["zigbee-ninja/z2m-1/msg_rate"] == "5.4"
+    assert states["zigbee-ninja/z2m-1/recommendations_open"] == "2"
     assert states["zigbee-ninja/z2m-1/alert_active"] == "OFF"
     attributes = json.loads(states["zigbee-ninja/z2m-1/alert_attributes"])
     assert attributes == {"alerts": [], "count": 0, "severity": None}

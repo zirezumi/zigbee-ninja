@@ -60,6 +60,14 @@ SENSORS = (
         "unit": "msg/s",
         "icon": "mdi:swap-horizontal",
     },
+    # V2_PROPOSAL.md §V2-10.5: controller-side automations react to open
+    # recommendations through the already-granted tile.
+    {
+        "key": "recommendations_open",
+        "name": "Open recommendations",
+        "unit": None,
+        "icon": "mdi:lightbulb-on-outline",
+    },
 )
 
 Publish = Callable[..., Awaitable[None]]  # (topic, payload, retain=False)
@@ -110,20 +118,19 @@ class DiscoveryPublisher:
         payloads: dict[str, str] = {}
         for sensor in SENSORS:
             topic = f"{prefix}/sensor/zigbee_ninja_{slug}/{sensor['key']}/config"
-            payloads[topic] = json.dumps(
-                {
-                    "name": sensor["name"],
-                    "unique_id": f"zigbee_ninja_{slug}_{sensor['key']}",
-                    "state_topic": self._state_topic(base, sensor["key"]),
-                    "unit_of_measurement": sensor["unit"],
-                    "state_class": "measurement",
-                    "icon": sensor["icon"],
-                    "expire_after": EXPIRE_AFTER_SECONDS,
-                    "device": device,
-                    "origin": origin,
-                },
-                sort_keys=True,
-            )
+            config = {
+                "name": sensor["name"],
+                "unique_id": f"zigbee_ninja_{slug}_{sensor['key']}",
+                "state_topic": self._state_topic(base, sensor["key"]),
+                "state_class": "measurement",
+                "icon": sensor["icon"],
+                "expire_after": EXPIRE_AFTER_SECONDS,
+                "device": device,
+                "origin": origin,
+            }
+            if sensor["unit"]:  # unitless sensors (counts) omit the field
+                config["unit_of_measurement"] = sensor["unit"]
+            payloads[topic] = json.dumps(config, sort_keys=True)
         alert_topic = f"{prefix}/binary_sensor/zigbee_ninja_{slug}/alert_active/config"
         payloads[alert_topic] = json.dumps(
             {

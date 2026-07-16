@@ -9,6 +9,7 @@ import Calibration from "./views/Calibration";
 import Fleet from "./views/Fleet";
 import Footprint from "./views/Footprint";
 import Headroom from "./views/Headroom";
+import Recommendations from "./views/Recommendations";
 import Settings from "./views/Settings";
 import Topology from "./views/Topology";
 import Wire from "./views/Wire";
@@ -19,6 +20,7 @@ type View =
   | "attribution"
   | "wiretap"
   | "headroom"
+  | "recommendations"
   | "topology"
   | "calibration"
   | "permissions"
@@ -34,6 +36,7 @@ const ROUTES: ReadonlySet<string> = new Set([
   "attribution",
   "wiretap",
   "headroom",
+  "recommendations",
   "benchmark",
   "topology",
   "calibration",
@@ -82,6 +85,7 @@ const NAV_ITEMS: Array<{ label: string; view?: View }> = [
   { label: "Attribution", view: "attribution" },
   { label: "Wiretap", view: "wiretap" },
   { label: "Headroom", view: "headroom" },
+  { label: "Recommendations", view: "recommendations" },
   { label: "Benchmark", view: "benchmark" },
   { label: "Topology", view: "topology" },
   { label: "Calibration", view: "calibration" },
@@ -95,6 +99,7 @@ const VIEW_TITLES: Record<View, string> = {
   attribution: "Attribution",
   wiretap: "Wiretap",
   headroom: "Headroom",
+  recommendations: "Recommendations",
   topology: "Topology",
   calibration: "Calibration",
   permissions: "Permissions",
@@ -342,6 +347,8 @@ export default function App() {
           <Wire />
         ) : view === "headroom" ? (
           <Headroom />
+        ) : view === "recommendations" ? (
+          <Recommendations />
         ) : view === "topology" ? (
           <Topology />
         ) : view === "calibration" ? (

@@ -658,6 +658,13 @@ stay stable.
 9. **Alerts**: rules and notification center (§14).
 10. **Settings**: retention knobs (§12), client labels for the Attribution
     explorer, and the wire-tap agent token (revealed on demand).
+11. **Recommendations**: the V2 queue (V2_PROPOSAL.md §V2-5): findings
+    ordered by saving × confidence, plain-language detector labels,
+    expandable evidence, dismiss / mark-applied / reopen controls, an
+    on-demand scan, and an empty state that states the
+    provably-traffic-optimized claim. Backed by `/api/recommendations`;
+    the discovery tile adds a `recommendations_open` sensor per granted
+    instance.
 
 ## §14 Alerting
 
