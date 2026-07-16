@@ -50,9 +50,13 @@ def frame_airtime_us(psdu_len: int, *, acked: bool = False) -> float:
     return airtime
 
 
-def unicast_airtime_us(aps_payload_len: int) -> float:
-    """One unicast data frame + its MAC ACK (single hop)."""
-    return frame_airtime_us(UNICAST_OVERHEAD_BYTES + aps_payload_len, acked=True)
+def unicast_airtime_us(aps_payload_len: int, retry_rate: float = 0.0) -> float:
+    """One unicast data frame + its MAC ACK (single hop), scaled by the
+    coordinator's measured MAC retry rate: each retry re-burns the frame,
+    its IFS, and the ACK wait (§10 unicast cost, (1 + retry_rate) term).
+    Defaults to 0 until counter windows produce a measured rate."""
+    per_attempt = frame_airtime_us(UNICAST_OVERHEAD_BYTES + aps_payload_len, acked=True)
+    return per_attempt * (1.0 + max(retry_rate, 0.0))
 
 
 def groupcast_airtime_us(

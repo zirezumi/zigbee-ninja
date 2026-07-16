@@ -263,6 +263,71 @@ def test_passive_avg_tx_from_counter_windows():
     assert wire["avg_tx_last"]["raw"] == pytest.approx(9.8, abs=0.01)
 
 
+def test_passive_retry_rate_scales_unicast_airtime():
+    """Each clearing counter read is a self-contained window: the coordinator's
+    own MAC unicast retry/success ratio feeds the §10 (1 + retry_rate) term,
+    and unicast TX airtime recorded afterwards carries the measured
+    multiplier."""
+    from zigbee_ninja.decode.ash import encode_data_frame
+
+    def counters_frame(seq: int, success: int, retries: int) -> bytes:
+        values = [0] * 40
+        values[3] = success  # mac_tx_unicast_success
+        values[4] = retries  # mac_tx_unicast_retry
+        return _ext(seq, 0x80, 0x0065, b"".join(v.to_bytes(2, "little") for v in values))
+
+    c1 = counters_frame(1, success=800, retries=80)  # 10% → sample 0.1
+    # Below the success floor: must not move the EWMA.
+    c2 = counters_frame(2, success=10, retries=30)
+    su = _ext(3, 0x00, 0x0034,
+              bytes([0x00, 0xCD, 0x4D]) + APS + bytes([0x34, 0x12, 0x03, 1, 2, 3]))
+
+    packets = []
+    host_seq, coord_seq = 5000, 9000
+    frm_to = frm_from = 0
+
+    def send(ts: float, payload: bytes, to_coord: bool):
+        nonlocal host_seq, coord_seq, frm_to, frm_from
+        if to_coord:
+            wire = encode_data_frame(payload, frm_num=frm_to, ack_num=frm_from)
+            frm_to = (frm_to + 1) % 8
+            packets.append((ts, tcp_packet(HOST, COORD, host_seq, wire)))
+            host_seq += len(wire)
+        else:
+            wire = encode_data_frame(payload, frm_num=frm_from, ack_num=frm_to)
+            frm_from = (frm_from + 1) % 8
+            packets.append((ts, tcp_packet(COORD, HOST, coord_seq, wire)))
+            coord_seq += len(wire)
+
+    send(100.0, c1, False)
+    send(200.0, c2, False)
+    send(300.0, su, True)
+
+    now = [1000.0]
+    tap = TapIngest(
+        resolve_instance=resolve, router_count=lambda _base: 4, clock=lambda: now[0]
+    )
+    tap.register_agent("agent-1", {})
+    tap.feed("agent-1", build_pcap(packets))
+
+    now[0] = 1002.0
+    stats = tap.stats()
+    wire = stats["flows"][0]["wire"]
+    assert wire["retry_rate"] == 0.1
+    assert wire["retry_rate_samples"] == 1  # the tiny window is guarded out
+    assert wire["retry_rate_last"] == {
+        "sample": 0.1,
+        "mac_tx_unicast_success": 800,
+        "mac_tx_unicast_retry": 80,
+    }
+    assert wire["retry_rate_provenance"].startswith("measured")
+
+    buckets = stats["airtime"]["z2m-test"]["buckets"]
+    assert buckets["tx_unicast"]["airtime_us_60s"] == pytest.approx(
+        airtime.unicast_airtime_us(3, retry_rate=0.1)
+    )
+
+
 def test_avg_tx_accepts_hourly_counter_windows():
     """Z2M's ember watchdog polls counters on a fixed 1 h setInterval, so real
     windows are ~3600 s plus jitter — the old 3600 s ceiling rejected nearly

@@ -85,6 +85,10 @@ export interface WireStats {
   avg_tx_rejected: number;
   avg_tx_last: Record<string, number | boolean | string> | null;
   avg_tx_provenance: string;
+  retry_rate: number | null;
+  retry_rate_samples: number;
+  retry_rate_last: Record<string, number> | null;
+  retry_rate_provenance: string;
 }
 
 export interface WireFlow {

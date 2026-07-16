@@ -427,7 +427,15 @@ payload→ZCL mapping table (`inferred`).
 
 **Unicast cost:** `hops × (frame + ACK + IFS) × (1 + retry_rate)`. Hop counts
 come from topology snapshots (parent/route data); unknown routes default to a
-conservative 1–2 hops, tagged accordingly.
+conservative 1–2 hops, tagged accordingly. **retry_rate is measured
+passively, per coordinator**, from the harvested `readAndClearCounters`
+windows: `mac_tx_unicast_retry / mac_tx_unicast_success` per clearing read
+(each response is a self-contained window, so no window length or prior
+harvest is needed), EWMA'd across windows, floor-guarded on the success
+count and clamped to the macMaxFrameRetries ceiling of 3. It defaults to 0
+until samples arrive and reflects the coordinator's own hop — retries on
+farther hops remain invisible until T3, consistent with the TX lower-bound
+posture above.
 
 **Groupcast/broadcast cost (mesh amplification):** a group command is a single
 coordinator TX, but it rides an NWK broadcast that every router relays — with up

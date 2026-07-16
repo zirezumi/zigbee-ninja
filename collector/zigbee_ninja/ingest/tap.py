@@ -63,6 +63,19 @@ _IDX_MAC_TX_BROADCAST = 1
 _IDX_APS_TX_BROADCAST = 7
 _IDX_ROUTE_DISCOVERY = 12
 
+# Passive per-hop MAC retry rate (§10 unicast (1 + retry_rate) term): each
+# readAndClearCounters response is a self-contained window, so the ratio
+# mac_tx_unicast_retry / mac_tx_unicast_success needs no window length and no
+# prior harvest. Measured at the coordinator's own hop; applied to unicast TX
+# airtime, which is itself a single-hop lower-bound reconstruction.
+RETRY_RATE_MIN_UNICASTS = 50  # denominator floor for a usable sample
+RETRY_RATE_EWMA_ALPHA = 0.2  # samples arrive once per counter window
+# macMaxFrameRetries is 3, so even a mesh where every success needed the full
+# retry budget stays ≤ 3; anything above that is a counter anomaly, clamped.
+RETRY_RATE_MAX = 3.0
+_IDX_MAC_TX_UNICAST_SUCCESS = 3
+_IDX_MAC_TX_UNICAST_RETRY = 4
+
 
 class AirtimeTracker:
     """1 s airtime buckets per (instance, bucket) with watermarked 10 s drains."""
@@ -245,6 +258,9 @@ class FlowState:
     avg_tx_samples: int = 0
     avg_tx_rejected: int = 0
     avg_tx_last: dict | None = None
+    retry_rate_ewma: float | None = None
+    retry_rate_samples: int = 0
+    retry_rate_last: dict | None = None
 
 
 class TapIngest:
@@ -352,7 +368,11 @@ class TapIngest:
                     return
                 self._track_pending(flow, sent.tag, ts, "unicast")
                 self.airtime.record(
-                    instance, "tx_unicast", airtime.unicast_airtime_us(sent.payload_len)
+                    instance,
+                    "tx_unicast",
+                    airtime.unicast_airtime_us(
+                        sent.payload_len, retry_rate=flow.retry_rate_ewma or 0.0
+                    ),
                 )
             elif name == "sendMulticast":
                 sent = ezsp_params.parse_send_multicast(params)
@@ -389,10 +409,14 @@ class TapIngest:
                 counter_values = ezsp_params.parse_counters(params)
                 if counter_values is not None:
                     now = self._clock()
-                    if name == "readAndClearCounters" and flow.counters_at is not None:
-                        # Clearing reads make each response a per-window delta;
-                        # the window length is the gap between harvests.
-                        self._update_avg_tx(flow, counter_values, now - flow.counters_at)
+                    if name == "readAndClearCounters":
+                        if flow.counters_at is not None:
+                            # avg_tx needs the window length (link-status
+                            # subtraction), so it waits for a second harvest.
+                            self._update_avg_tx(flow, counter_values, now - flow.counters_at)
+                        # The retry ratio is scale-invariant, so every
+                        # clearing read is a self-contained sample.
+                        self._update_retry_rate(flow, counter_values)
                     flow.counters_last = counter_values
                     flow.counters_at = now
             return
@@ -558,6 +582,35 @@ class TapIngest:
         flow.avg_tx_samples += 1
         flow.avg_tx_last = {**detail, "sample": round(sample, 3), "accepted": True}
 
+    def _update_retry_rate(self, flow: FlowState, values: list[int]) -> None:
+        """One per-hop MAC retry-rate sample per clearing counter window.
+
+        retry_rate = mac_tx_unicast_retry / mac_tx_unicast_success — the share
+        of unicast transmissions the coordinator's own radio had to repeat.
+        Retries for eventually-failed frames count in the numerator (their
+        airtime burned all the same), so the ratio can exceed the per-success
+        retry budget on very lossy links; RETRY_RATE_MAX bounds anomalies.
+        Feeds the §10 unicast (1 + retry_rate) term for this flow's TX cost;
+        the multiplier reflects the coordinator hop only.
+        """
+        if len(values) <= _IDX_MAC_TX_UNICAST_RETRY:
+            return
+        success = values[_IDX_MAC_TX_UNICAST_SUCCESS]
+        retries = values[_IDX_MAC_TX_UNICAST_RETRY]
+        if success < RETRY_RATE_MIN_UNICASTS:
+            return
+        sample = min(retries / success, RETRY_RATE_MAX)
+        if flow.retry_rate_ewma is None:
+            flow.retry_rate_ewma = sample
+        else:
+            flow.retry_rate_ewma += RETRY_RATE_EWMA_ALPHA * (sample - flow.retry_rate_ewma)
+        flow.retry_rate_samples += 1
+        flow.retry_rate_last = {
+            "sample": round(sample, 4),
+            "mac_tx_unicast_success": success,
+            "mac_tx_unicast_retry": retries,
+        }
+
     def _track_pending(self, flow: FlowState, tag: int, ts: float, kind: str) -> None:
         flow.pending[tag] = (ts, kind)
         if len(flow.pending) > PENDING_MAX:
@@ -630,6 +683,20 @@ class TapIngest:
                                 if flow.avg_tx_rejected
                                 else ""
                             )
+                        ),
+                        # §10 unicast (1 + retry_rate) term, from the same
+                        # harvested counter windows.
+                        "retry_rate": (
+                            None
+                            if flow.retry_rate_ewma is None
+                            else round(flow.retry_rate_ewma, 4)
+                        ),
+                        "retry_rate_samples": flow.retry_rate_samples,
+                        "retry_rate_last": flow.retry_rate_last,
+                        "retry_rate_provenance": (
+                            "measured (coordinator hop, MAC counters)"
+                            if flow.retry_rate_ewma is not None
+                            else "default (0 — awaiting counter windows)"
                         ),
                     },
                 }

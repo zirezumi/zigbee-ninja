@@ -12,6 +12,13 @@ def test_unicast_airtime_hand_computed():
     assert airtime.unicast_airtime_us(8) == 2880.0
 
 
+def test_unicast_retry_rate_scales_cost():
+    # 10% of transmissions retried → 10% more airtime; negatives are ignored.
+    assert airtime.unicast_airtime_us(8, retry_rate=0.1) == 2880.0 * 1.1
+    assert airtime.unicast_airtime_us(8, retry_rate=0.0) == 2880.0
+    assert airtime.unicast_airtime_us(8, retry_rate=-0.5) == 2880.0
+
+
 def test_groupcast_amplification():
     # payload 8 → PSDU 54 → frame (6+54)*32=1920 + LIFS 640 = 2560 per TX,
     # amplified by (1 + 10 routers) × avg_tx 1.3.

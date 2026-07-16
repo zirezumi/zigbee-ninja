@@ -120,6 +120,14 @@ function FlowCard({ flow, airtime, latency, now }: FlowCardProps) {
             ? `LQI ${Math.round(wire.lqi_ewma)} · RSSI ${Math.round(wire.rssi_ewma ?? 0)} dBm`
             : "—"}
         </span>
+        <span title="Share of unicast transmissions this coordinator's radio had to repeat (measured from its own counters). Every retry re-burns the frame's airtime, so this scales the unicast cost.">
+          Unicast retries
+        </span>
+        <span>
+          {wire.retry_rate != null
+            ? `${(wire.retry_rate * 100).toFixed(1)}% per hop (measured, ${wire.retry_rate_samples} window${wire.retry_rate_samples === 1 ? "" : "s"})`
+            : "0% assumed — awaiting counter windows"}
+        </span>
         <span title="How many times each router transmits a group/broadcast command on average, including automatic repeats — this multiplies the airtime cost of every group command across the mesh">
           Broadcast relays
         </span>
