@@ -218,8 +218,25 @@ time). Journal live-validated for baseline suppression (two restarts with
 full retained republishes journaled nothing); a positive-path live entry
 awaits the next natural registry change. Rates start `modeled/default`
 after each restart and flip to measured as hourly counter windows land.
-Next: V2.M2 (cost baselines + regression alerts + Top spenders trend,
-riding the alert engine).
+**V2.M2 BUILT + DEPLOYED + LIVE-VALIDATED 2026-07-16 (same day)**: rolling
+14-day-median baselines per commander/device over completed recording
+days (min 3 days + nonzero median, else freeze); metrics
+`commander_cost_ratio` / `device_cost_ratio` / `commander_cost_us_per_s` /
+`instance_cost_us_per_s` ride the evaluator with state machines keyed on
+spender names ('*' watches all); four rules seeded DISABLED at the
+ratified defaults (regressions 2x / 24 h sustain, budgets placeholder)
+and the seeder inserts new builtins on an already-seeded install without
+resurrecting deletions (live-verified: 16 rules, old names untouched).
+Self spend excluded from the regression ratio (benchmarks are
+operator-initiated), visible to budgets. GUI: Top spenders Trend column
+(same ratio at row grain), Fleet "Cost ledger" fact per instance,
+scope-aware rule-editor key label. Trends and ratios report from three
+completed recording days (2026-07-20 minus restarts); enabling the
+regression/budget rules is the owner's opt-in.
+Next: V2.M3 (recommendation engine; reference-deployment detector order
+pacing → groupcast economics → redundancy costing → reporting advisor;
+Recommendations view; counterfactual replay; `recommendations_open` HA
+sensor via the granted discovery tiles).
 Roadmap: README.md.
 
 ## Hard rules
