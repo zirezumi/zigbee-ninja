@@ -233,6 +233,12 @@ operator-initiated), visible to budgets. GUI: Top spenders Trend column
 scope-aware rule-editor key label. Trends and ratios report from three
 completed recording days (2026-07-20 minus restarts); enabling the
 regression/budget rules is the owner's opt-in.
+**Post-M2 owner round (2026-07-16)**: the owner enabled ALL 16 rules; a
+master enable/disable-all checkbox landed in the Alerts rules header
+(`set_all_enabled` + POST /api/alerts/rules/set_all; disabling closes
+open events like a per-rule disable), and the standing tooltip backlog
+was cleared (Calibration candidates columns, every Alerts editor field,
+Benchmark event columns, Settings knobs, Permissions capability names).
 Next: V2.M3 (recommendation engine; reference-deployment detector order
 pacing → groupcast economics → redundancy costing → reporting advisor;
 Recommendations view; counterfactual replay; `recommendations_open` HA
