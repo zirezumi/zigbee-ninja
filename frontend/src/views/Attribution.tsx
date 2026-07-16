@@ -119,7 +119,7 @@ export default function Attribution() {
       instance: row.instance,
       us_per_s: row.us_per_s,
       pct_of_budget: row.pct_of_budget,
-      traffic: `${row.chains} chains`,
+      traffic: `${row.chains} ${row.chains === 1 ? "chain" : "chains"}`,
       title:
         `Priced with ${row.params.n_routers} routers, ` +
         `broadcast relay factor ${row.params.avg_tx}` +
@@ -134,7 +134,7 @@ export default function Attribution() {
       instance: row.instance,
       us_per_s: row.us_per_s,
       pct_of_budget: row.pct_of_budget,
-      traffic: `${row.publishes} reports`,
+      traffic: `${row.publishes} ${row.publishes === 1 ? "report" : "reports"}`,
       title: row.provenance,
     })),
   ]
