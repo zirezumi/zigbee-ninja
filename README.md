@@ -15,9 +15,10 @@ discovery, live fleet rates, command-chain attribution, the Z2M extension
 probe, the passive wire tap with full ASH/EZSP decode, per-frame airtime
 accounting, the wire-tier latency SLI, the calibration wizard (single, spread,
 and fleet-batch modes), headroom dashboards, threshold alerting, HA entities
-via MQTT discovery, secrets-at-rest encryption, and settings-backed retention
-all work. The raw-event burst inspector is not built yet. Not yet generally
-usable.
+via MQTT discovery, secrets-at-rest encryption, settings-backed retention, and
+the raw-event burst inspector (zoomable timeline over an embedded
+DuckDB/Parquet store) all work. Not yet generally usable — no signed release
+images yet.
 
 ## Principles
 
@@ -49,7 +50,8 @@ usable.
 | M3 ✓ | Z2M extension probe + permission tiles + queue latency |
 | M4 ◐ | Wire tap agent + ASH/EZSP decode live; T1/T2 fusion pending |
 | M5 ✓ | Airtime/capacity model + calibration wizard (single/spread/bulk) + headroom dashboards |
-| **M6 ← current** | Alerting + MQTT-discovery entities + secrets-at-rest + settings → **V1** |
+| M6 ✓ | Alerting + MQTT-discovery entities + secrets-at-rest + settings + burst inspector → **V1** |
+| **← current** | Hardening toward first release: signed images, T1/T2 fusion, retry-factor model input |
 | follow-ups | Home Assistant add-on packaging, ZHA support, what-if rebalancing advisor |
 
 ## Development
