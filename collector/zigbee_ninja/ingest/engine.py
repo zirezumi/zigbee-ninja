@@ -102,6 +102,7 @@ class Engine:
             version=__version__,
         )
         self._knees_cache: tuple[float, dict[str, float]] | None = None
+        self._cost_metrics_cache: tuple[float, dict] | None = None
         # Cost-ledger accumulators, drained by reference swap on the 10 s
         # flush (V2_PROPOSAL.md §V2-2): autonomous state publishes per
         # (instance, day, device), and zigbee-ninja's own mesh commands per
@@ -505,6 +506,23 @@ class Engine:
             self._knees_cache = (now, knees)
         return self._knees_cache[1]
 
+    COST_METRIC_NAMES = frozenset(
+        {
+            "commander_cost_ratio",
+            "device_cost_ratio",
+            "commander_cost_us_per_s",
+            "instance_cost_us_per_s",
+        }
+    )
+
+    def _ledger_cost_metrics(self) -> dict:
+        """Ledger-derived samples, cached ~60 s: daily rollups move slowly and
+        the evaluator ticks every 10 s."""
+        now = time.time()
+        if self._cost_metrics_cache is None or now - self._cost_metrics_cache[0] > 60.0:
+            self._cost_metrics_cache = (now, ledger.cost_metrics(self._db, now))
+        return self._cost_metrics_cache[1]
+
     def _alert_metrics(self, names: set[str]) -> dict[str, dict[str, float | None]]:
         """Samples for the alert evaluator. Global metrics report under '*';
         counter-kind metrics report cumulative totals (the evaluator
@@ -565,6 +583,10 @@ class Engine:
                 instance: float(view["p95_ms"])
                 for instance, view in self.tap.latency.snapshot().items()
             }
+        if self.COST_METRIC_NAMES & names:
+            for name, samples in self._ledger_cost_metrics().items():
+                if name in names:
+                    out[name] = samples
         if {"budget_pct", "load_eps", "knee_utilization_pct", "steady_headroom_eps"} & names:
             snapshot = self.tap.airtime.snapshot()
             loads = {

@@ -123,6 +123,37 @@ METRICS: dict[str, dict] = {
         "unit": "x",
         "description": "Measured broadcast retransmission factor (passive avg_tx)",
     },
+    # Cost-ledger metrics (V2_PROPOSAL.md §V2-4). Rules on commander/device
+    # scopes key their state machines on commander or device names rather
+    # than instance base topics; '*' watches every spender the ledger knows.
+    "commander_cost_ratio": {
+        "scope": "commander",
+        "kind": "gauge",
+        "unit": "x",
+        "description": "Trailing 24 h airtime cost vs the commander's 14-day median "
+        "(absent until 3 completed days of ledger history)",
+    },
+    "device_cost_ratio": {
+        "scope": "device",
+        "kind": "gauge",
+        "unit": "x",
+        "description": "Trailing 24 h reporting cost vs the device's 14-day median "
+        "(absent until 3 completed days of ledger history)",
+    },
+    "commander_cost_us_per_s": {
+        "scope": "commander",
+        "kind": "gauge",
+        "unit": "µs/s",
+        "description": "Trailing 24 h airtime spend rate per commander, for explicit "
+        "cost budgets",
+    },
+    "instance_cost_us_per_s": {
+        "scope": "instance",
+        "kind": "gauge",
+        "unit": "µs/s",
+        "description": "Trailing 24 h ledger cost rate per coordinator (commands plus "
+        "device reporting)",
+    },
 }
 
 SEED_RULES: list[dict] = [
@@ -270,6 +301,56 @@ SEED_RULES: list[dict] = [
         "clear_threshold": 1.8,
         "sustain_seconds": 600,
         "severity": "info",
+        "enabled": 0,
+    },
+    # V2 cost regression + budget rules (§V2-10: loose defaults, 2x over the
+    # 14-day median sustained 24 h; seeded disabled like all capacity rules).
+    {
+        "builtin": "commander_cost_regression",
+        "name": "Commander cost regression",
+        "metric": "commander_cost_ratio",
+        "instance": "*",
+        "op": ">",
+        "threshold": 2.0,
+        "clear_threshold": 1.5,
+        "sustain_seconds": 86400,
+        "severity": "warning",
+        "enabled": 0,
+    },
+    {
+        "builtin": "device_cost_regression",
+        "name": "Device cost regression",
+        "metric": "device_cost_ratio",
+        "instance": "*",
+        "op": ">",
+        "threshold": 2.0,
+        "clear_threshold": 1.5,
+        "sustain_seconds": 86400,
+        "severity": "warning",
+        "enabled": 0,
+    },
+    {
+        "builtin": "commander_cost_budget",
+        "name": "Commander cost budget",
+        "metric": "commander_cost_us_per_s",
+        "instance": "*",
+        "op": ">",
+        "threshold": 2000.0,
+        "clear_threshold": 1500.0,
+        "sustain_seconds": 3600,
+        "severity": "warning",
+        "enabled": 0,
+    },
+    {
+        "builtin": "instance_cost_budget",
+        "name": "Coordinator cost budget",
+        "metric": "instance_cost_us_per_s",
+        "instance": "*",
+        "op": ">",
+        "threshold": 35000.0,
+        "clear_threshold": 28000.0,
+        "sustain_seconds": 3600,
+        "severity": "warning",
         "enabled": 0,
     },
 ]
