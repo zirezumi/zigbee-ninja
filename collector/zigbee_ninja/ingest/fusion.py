@@ -29,6 +29,9 @@ MAX_PENDING = 2048  # per instance per side; overflow drops the oldest, counted
 OFFSET_EWMA_ALPHA = 0.1
 
 
+_UNMATCHED_SENDERS_CAP = 512
+
+
 @dataclass
 class _InstanceState:
     # (nwk, seq) -> deque of (arrival_ts, source_ts); a device can legally
@@ -37,6 +40,13 @@ class _InstanceState:
     pending_wire: dict[tuple[int, int], deque] = field(default_factory=dict)
     pending_probe: dict[tuple[int, int], deque] = field(default_factory=dict)
     outcomes: deque = field(default_factory=deque)  # (arrival_ts, kind)
+    # nwk -> [wire_only, probe_only] cumulative expiry counts: the diagnostic
+    # that says WHICH devices fail to fuse, and from which side. A device
+    # failing equally on both sides points at a join-key disagreement (its
+    # sequences differ between tiers); one-sided failure points at
+    # visibility (frames one tier never sees).
+    unmatched_by_nwk: dict[int, list[int]] = field(default_factory=dict)
+    matched_by_nwk: dict[int, int] = field(default_factory=dict)
     offset_ewma_ms: float | None = None
     offset_samples: int = 0
     overflow_drops: int = 0
@@ -64,7 +74,7 @@ class FusionTracker:
                 _arrival, probe_ts = waiting.popleft()
                 if not waiting:
                     del state.pending_probe[key]
-                self._record_match(state, now, probe_ts, pcap_ts)
+                self._record_match(state, now, nwk, probe_ts, pcap_ts)
                 return
             self._enqueue(state.pending_wire, key, (now, pcap_ts), state)
 
@@ -80,7 +90,7 @@ class FusionTracker:
                 _arrival, pcap_ts = waiting.popleft()
                 if not waiting:
                     del state.pending_wire[key]
-                self._record_match(state, now, probe_ts, pcap_ts)
+                self._record_match(state, now, nwk, probe_ts, pcap_ts)
                 return
             self._enqueue(state.pending_probe, key, (now, probe_ts), state)
 
@@ -99,9 +109,10 @@ class FusionTracker:
             state.overflow_drops += 1
 
     def _record_match(
-        self, state: _InstanceState, now: float, probe_ts: float, pcap_ts: float
+        self, state: _InstanceState, now: float, nwk: int, probe_ts: float, pcap_ts: float
     ) -> None:
         state.outcomes.append((now, "matched"))
+        state.matched_by_nwk[nwk] = state.matched_by_nwk.get(nwk, 0) + 1
         offset_ms = (probe_ts - pcap_ts) * 1000.0
         if state.offset_ewma_ms is None:
             state.offset_ewma_ms = offset_ms
@@ -111,15 +122,21 @@ class FusionTracker:
 
     @staticmethod
     def _sweep(state: _InstanceState, now: float) -> None:
-        for pending, kind in (
-            (state.pending_wire, "wire_only"),
-            (state.pending_probe, "probe_only"),
+        for pending, kind, side in (
+            (state.pending_wire, "wire_only", 0),
+            (state.pending_probe, "probe_only", 1),
         ):
             expired = []
             for key, queue in pending.items():
                 while queue and now - queue[0][0] > WATERMARK_SECONDS:
                     queue.popleft()
                     state.outcomes.append((now, kind))
+                    if (
+                        key[0] in state.unmatched_by_nwk
+                        or len(state.unmatched_by_nwk) < _UNMATCHED_SENDERS_CAP
+                    ):
+                        counts = state.unmatched_by_nwk.setdefault(key[0], [0, 0])
+                        counts[side] += 1
                 if not queue:
                     expired.append(key)
             for key in expired:
@@ -153,6 +170,18 @@ class FusionTracker:
                     fusion_state = "no wire coverage"
                 else:
                     fusion_state = "idle"
+                top_unmatched = sorted(
+                    (
+                        {
+                            "nwk": nwk,
+                            "wire_only": wire_count,
+                            "probe_only": probe_count,
+                            "matched": state.matched_by_nwk.get(nwk, 0),
+                        }
+                        for nwk, (wire_count, probe_count) in state.unmatched_by_nwk.items()
+                    ),
+                    key=lambda row: -(row["wire_only"] + row["probe_only"]),
+                )[:8]
                 result[instance] = {
                     "state": fusion_state,
                     "matched_5m": counts["matched"],
@@ -165,5 +194,8 @@ class FusionTracker:
                     ),
                     "offset_samples": state.offset_samples,
                     "overflow_drops": state.overflow_drops,
+                    # Cumulative since start: which senders fail to fuse, and
+                    # from which side — the fusion-quality drill-down.
+                    "top_unmatched": top_unmatched,
                 }
         return result

@@ -586,7 +586,7 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
         return {
             "token": engine.tap_token(),
             "stats": engine.tap.stats(),
-            "fusion": engine.fusion.snapshot(),
+            "fusion": engine.fusion_view(),
         }
 
     @app.websocket("/api/ws/tap")
@@ -646,7 +646,7 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
                         "latency": engine.probes.latency.snapshot(),
                         "probes": engine.probes.stats(),
                         "tap": engine.tap.stats(),
-                        "fusion": engine.fusion.snapshot(),
+                        "fusion": engine.fusion_view(),
                         "alerts": engine.alerts.active_brief(),
                     }
                 )

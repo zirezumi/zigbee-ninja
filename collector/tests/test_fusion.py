@@ -69,6 +69,22 @@ def test_state_reports_awaiting_probe_when_only_wire_flows():
     assert fusion.snapshot()["z2m-test"]["state"] == "idle"
 
 
+def test_top_unmatched_attributes_failures_per_sender_and_side():
+    now = [1000.0]
+    fusion = make(now)
+    # Sender 7 fuses fine; sender 9 disagrees on the key from both sides.
+    fusion.on_wire("z2m-test", 7, 1, pcap_ts=1000.0)
+    fusion.on_probe("z2m-test", 7, 1, probe_ts=1000.1)
+    fusion.on_wire("z2m-test", 9, 10, pcap_ts=1000.0)
+    fusion.on_wire("z2m-test", 9, 11, pcap_ts=1000.1)
+    fusion.on_probe("z2m-test", 9, 200, probe_ts=1000.2)
+    now[0] = 1006.0
+    view = fusion.snapshot()["z2m-test"]
+    assert view["top_unmatched"] == [
+        {"nwk": 9, "wire_only": 2, "probe_only": 1, "matched": 0}
+    ]
+
+
 def test_same_key_twice_pairs_each_occurrence_once():
     now = [1000.0]
     fusion = make(now)

@@ -129,6 +129,18 @@ class Engine:
         if nwk is not None:
             self.fusion.on_probe(base, nwk, zcl_seq, probe_ts)
 
+    def fusion_view(self) -> dict:
+        """Fusion snapshot with unmatched senders resolved to friendly names."""
+        view = self.fusion.snapshot()
+        for base, entry in view.items():
+            names = {
+                device.get("network_address"): device.get("friendly_name")
+                for device in self.registry.devices(base)
+            }
+            for row in entry.get("top_unmatched", []):
+                row["name"] = names.get(row["nwk"])
+        return view
+
     async def publish(self, topic: str, payload: str, retain: bool = False) -> None:
         """Publish on the ingest connection; self-attributed (DESIGN.md P4)."""
         if self._ingest is None:
