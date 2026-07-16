@@ -131,6 +131,25 @@ def test_small_group_on_router_heavy_mesh_loses_to_unicast(tmp_path):
     assert finding.fingerprint["members"] == 2
 
 
+def test_single_member_group_reads_as_pure_overhead(tmp_path):
+    # One member: singular phrasing, and no simultaneity claim (there is
+    # nothing to change "in the same instant").
+    ctx = _context(tmp_path, groups={"tos_phantom": ["tos_light"]}, routers=29)
+    _insert(
+        ctx,
+        [
+            (NOW - 1800 + i * 30, "tos_phantom", "automation: TOS", f"d{i}")
+            for i in range(10)
+        ],
+    )
+
+    (finding,) = groupcast.detect(ctx)
+    assert "has 1 member," in finding.finding
+    assert "1 individual command would cost" in finding.finding
+    assert "gains nothing from broadcast delivery" in finding.finding
+    assert "same instant" not in finding.finding
+
+
 def test_large_group_keeps_its_groupcast(tmp_path):
     members = [f"light_{i}" for i in range(15)]
     ctx = _context(tmp_path, groups={"chandelier": members}, routers=3)

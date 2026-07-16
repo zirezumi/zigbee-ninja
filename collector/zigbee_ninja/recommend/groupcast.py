@@ -300,20 +300,36 @@ def _amplification_losers(
             name = row["client"] or UNATTRIBUTED
             commanders[name] = commanders.get(name, 0) + 1
         pct = (groupcast - unicast_sum) / groupcast * 100.0
+        count = len(members)
+        if count == 1:
+            # A single-member group has no simultaneity to lose; the group
+            # wrapper is pure amplification overhead.
+            alternative = (
+                f"1 individual command would cost about "
+                f"{unicast_sum / 1000.0:.1f}k µs ({pct:.0f}% less). "
+                f"{len(rows)} commands in the last 24 h. A single-member group "
+                f"gains nothing from broadcast delivery."
+            )
+        else:
+            alternative = (
+                f"{count} individual commands would cost about "
+                f"{unicast_sum / 1000.0:.1f}k µs ({pct:.0f}% less). "
+                f"{len(rows)} commands in the last 24 h. Individual commands "
+                f"arrive one after another, so the members would no longer "
+                f"change in the same instant."
+            )
         findings.append(
             Finding(
                 detector=NAME,
                 instance=instance,
                 subject=f"group {group}",
                 finding=(
-                    f"Group {group} has {len(members)} members, but every router on "
-                    f"this mesh relays a group command ({prices['routers']} routers, "
-                    f"about {prices['avg_tx']:.1f} transmissions each), costing about "
-                    f"{groupcast / 1000.0:.1f}k µs per command; {len(members)} individual "
-                    f"commands would cost about {unicast_sum / 1000.0:.1f}k µs "
-                    f"({pct:.0f}% less). {len(rows)} commands in the last 24 h. "
-                    f"Individual commands arrive one after another, so the members "
-                    f"would no longer change in the same instant."
+                    f"Group {group} has {count} "
+                    f"{'member' if count == 1 else 'members'}, but every router "
+                    f"on this mesh relays a group command ({prices['routers']} "
+                    f"routers, about {prices['avg_tx']:.1f} transmissions each), "
+                    f"costing about {groupcast / 1000.0:.1f}k µs per command; "
+                    f"{alternative}"
                 ),
                 action={
                     "kind": "retarget",
