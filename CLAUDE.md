@@ -146,6 +146,28 @@ knee_* — DESIGN §13 terminology note); "Wire tap" → **Wiretap**; "Burst
 inspector" → nav label **Benchmark**; Footprint grant-tile rows no longer
 repeat the extension probe's hooks/drops; HA discovery sensor renamed
 "Capacity utilization" (unique_id stable — verified renamed in live HA).
+**Post-V1 §8 tail (same day)**: (1) **retry-factor hook** — unicast TX airtime
+× (1 + retry_rate), measured per flow from mac_tx_unicast_retry/_success on
+every clearing counter read (self-contained ratio, no window length needed;
+EWMA 0.2, ≥50-success floor, clamped at macMaxFrameRetries 3), surfaced as the
+Wiretap "Unicast retries" row; live samples land with Z2M's hourly counter
+polls. (2) **Topology force-directed graph**: GET /api/topology/graph reduces
+the stored raw map server-side (one edge per pair keeping the worse
+direction's LQI; `routes_via` counts ACTIVE routing-table rows per next-hop
+node = observed relay load), rendered with d3-force (ISC, §16 named
+inclusion) settled synchronously — weak links dashed, routers sized by
+degree + routed paths; live-verified 5/5 instance graphs. (3) **Release
+pipeline**: tag-triggered `.github/workflows/release.yml` (gates re-run →
+immutable vX.Y.Z multi-arch image → cosign keyless signing → GitHub release);
+process + verification command in docs/RELEASING.md; whether releases also
+move `:latest` is an open owner decision (CI main-push semantics unchanged).
+(4) **docs/V2_PROPOSAL.md** drafted (optimization loop: cost ledger, change
+journal, budgets/regression alerts, counterfactual-replayed recommendations,
+migration manifest, applied-change verification) — iterate with the owner
+before building. Remaining §8: T1/T2 fusion (probe v0.4 emitting APS/ZCL
+sequence numbers; the fleet probe update rides the existing drift→redeploy
+tile flow, owner-actuated per instance), forensics leads (owner-interest-
+gated: incoming trailing byte 0x02/0x04, EZSP 0x0024, rare tag mispairs).
 Roadmap: README.md.
 
 ## Hard rules
