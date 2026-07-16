@@ -265,6 +265,26 @@ supports changing."*
 > says to consider recalibrating), when bursts recur fewer than three
 > times, or when only a per-device limit exists to judge aggregate
 > pressure against.
+>
+> **Implementation (V2.M3, groupcast economics):** all three directions
+> price recorded chains in the ledger's own currency (fixed ZCL byte
+> estimates, the instance's router census, measured avg_tx and MAC retry
+> rate when present, defaults otherwise), so savings are comparable with
+> the Top spenders numbers. (a) Fan-outs are clusters of same-payload
+> unicasts to four or more devices inside 3 s, recurring at least three
+> times: joined on the persisted chain payload digest, so only traffic
+> recorded after V2.M3 is visible to them. A fan-out that rides beside
+> an identical group command is double delivery (a dedupe finding)
+> regardless of which shape is cheaper; otherwise a finding appears only
+> when the amplified groupcast actually undercuts the unicast sum, and
+> retargets to a group with exactly that membership (high confidence)
+> or proposes creating one (medium). (b) A group whose per-member
+> unicasts undercut its amplified groupcast by at least 30% gets a
+> retarget-to-unicast finding, always medium confidence with the loss of
+> same-instant member changes stated. (c) A group whose commands arrive
+> at least 90% of the time alongside an identical-payload command to a
+> containing group is redundant traffic. Findings below 10 µs/s of
+> replayed saving stay out of the queue.
 
 ## §V2-6 Verification (what closes the loop)
 
