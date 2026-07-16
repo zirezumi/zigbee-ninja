@@ -82,3 +82,21 @@ def test_rule_validation_errors(client):
     assert post({"clear_threshold": 200.0}) == 400  # wrong side for op '>'
     assert post({"metric": "tap_agents", "op": "<", "instance": "z2m-1"}) == 400
     assert post({"sustain_seconds": 999999}) == 400
+
+
+def test_set_all_toggles_every_rule(client):
+    authed(client)
+    baseline = client.get("/api/alerts").json()["rules"]
+    assert any(rule["enabled"] for rule in baseline)
+    assert any(not rule["enabled"] for rule in baseline)
+
+    rules = client.post("/api/alerts/rules/set_all", json={"enabled": True}).json()["rules"]
+    assert rules and all(rule["enabled"] for rule in rules)
+    rules = client.post("/api/alerts/rules/set_all", json={"enabled": False}).json()["rules"]
+    assert rules and all(not rule["enabled"] for rule in rules)
+
+
+def test_set_all_requires_auth(client):
+    assert (
+        client.post("/api/alerts/rules/set_all", json={"enabled": True}).status_code == 401
+    )

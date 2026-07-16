@@ -518,6 +518,18 @@ class AlertManager:
         self._refresh_rules()
         return {**self._rules_by_id[rule_id], "enabled": bool(fields["enabled"])}
 
+    def set_all_enabled(self, enabled: bool) -> list[dict]:
+        """Flip every rule at once; disabling closes any open events the same
+        way a per-rule disable does. Thresholds and rows are untouched."""
+        conn = self._db.connect()
+        conn.execute("UPDATE alert_rules SET enabled = ?", (1 if enabled else 0,))
+        conn.commit()
+        if not enabled:
+            for rule_id in list(self._rules_by_id):
+                self._close_rule_events(rule_id, "rule disabled")
+        self._refresh_rules()
+        return self.rules()
+
     def delete_rule(self, rule_id: int) -> bool:
         conn = self._db.connect()
         cursor = conn.execute("DELETE FROM alert_rules WHERE id = ?", (rule_id,))

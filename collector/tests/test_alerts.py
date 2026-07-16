@@ -266,6 +266,27 @@ def test_disabling_or_deleting_a_rule_closes_its_events(harness):
     assert harness.manager.active() == []
 
 
+def test_set_all_enabled_flips_every_rule_and_closes_events(harness):
+    rule = make_rule(harness, sustain_seconds=0)
+    harness.values["wire_p95_ms"] = {"z2m-1": 900.0}
+    harness.tick_after(0)
+    assert len(harness.manager.active()) == 1
+
+    rules = harness.manager.set_all_enabled(False)
+    assert all(not r["enabled"] for r in rules)
+    assert harness.manager.active() == []
+    events = harness.manager.history(seconds=86400)
+    assert events[0]["cleared_at"] is not None
+    assert events[0]["context"]["closed"] == "rule disabled"
+
+    rules = harness.manager.set_all_enabled(True)
+    assert all(r["enabled"] for r in rules)
+    harness.tick_after(10)  # the breach still holds, so the event re-opens
+    active = harness.manager.active()
+    assert len(active) == 1
+    assert active[0]["rule_id"] == rule["id"]
+
+
 def test_validation_rejects_bad_rules(harness):
     with pytest.raises(ValueError):
         make_rule(harness, metric="not_a_metric")

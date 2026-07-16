@@ -151,7 +151,7 @@ function RuleEditor({ rule, metrics, onSaved, onCancel }: RuleEditorProps) {
   return (
     <form className="stack" onSubmit={(event) => void handleSubmit(event)}>
       <div className="row">
-        <label className="grow">
+        <label className="grow" title="Names the alert in the banner, fleet chips, and history">
           Rule name
           <input
             value={form.name}
@@ -159,7 +159,7 @@ function RuleEditor({ rule, metrics, onSaved, onCancel }: RuleEditorProps) {
             required
           />
         </label>
-        <label>
+        <label title="How an open alert is presented: info, warning, or critical; severity changes presentation only, never behavior">
           Severity
           <select
             value={form.severity}
@@ -174,7 +174,10 @@ function RuleEditor({ rule, metrics, onSaved, onCancel }: RuleEditorProps) {
         </label>
       </div>
       <div className="row">
-        <label className="grow">
+        <label
+          className="grow"
+          title="What the rule watches; the description below follows your pick"
+        >
           Metric
           <select value={form.metric} onChange={(event) => set("metric", event.target.value)}>
             {metrics.map((metric) => (
@@ -184,7 +187,7 @@ function RuleEditor({ rule, metrics, onSaved, onCancel }: RuleEditorProps) {
             ))}
           </select>
         </label>
-        <label>
+        <label title="Which coordinator (or, for cost metrics, which commander or device name) this rule watches; * watches every one reporting the metric">
           {keyLabel}
           <input
             value={globalMetric ? "*" : form.instance}
@@ -196,14 +199,14 @@ function RuleEditor({ rule, metrics, onSaved, onCancel }: RuleEditorProps) {
       </div>
       {metricInfo && <p className="hint">{metricInfo.description}</p>}
       <div className="row">
-        <label>
+        <label title="Alert when the value sits above or below the threshold">
           Condition
           <select value={form.op} onChange={(event) => set("op", event.target.value)}>
             <option value=">">above (&gt;)</option>
             <option value="<">below (&lt;)</option>
           </select>
         </label>
-        <label>
+        <label title="The value that starts the clock: the condition must hold this side of it for the whole sustain window before the alert opens">
           Threshold
           <input
             type="number"
@@ -213,7 +216,7 @@ function RuleEditor({ rule, metrics, onSaved, onCancel }: RuleEditorProps) {
             required
           />
         </label>
-        <label>
+        <label title="The value the metric must return past before the alert closes (hysteresis keeps it from flapping); empty reuses the threshold">
           Clear threshold
           <input
             type="number"
@@ -223,7 +226,7 @@ function RuleEditor({ rule, metrics, onSaved, onCancel }: RuleEditorProps) {
             placeholder="= threshold"
           />
         </label>
-        <label>
+        <label title="How long the condition must hold continuously before opening; the same time (minimum 60 s) of OK readings closes it again">
           Sustain (s)
           <input
             type="number"
@@ -361,9 +364,28 @@ export default function Alerts() {
     }
   }
 
+  async function toggleAllRules(enabled: boolean) {
+    setBusy(-1);
+    setError(null);
+    try {
+      await api("/api/alerts/rules/set_all", {
+        method: "POST",
+        body: JSON.stringify({ enabled }),
+      });
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Action failed");
+    } finally {
+      setBusy(null);
+      void refresh();
+    }
+  }
+
   if (view === null) {
     return <p className="hint">loading…</p>;
   }
+
+  const allEnabled = view.rules.length > 0 && view.rules.every((rule) => rule.enabled);
+  const noneEnabled = view.rules.every((rule) => !rule.enabled);
 
   return (
     <>
@@ -380,7 +402,22 @@ export default function Alerts() {
         <table className="table">
           <thead>
             <tr>
-              <th></th>
+              <th>
+                <input
+                  type="checkbox"
+                  checked={allEnabled}
+                  ref={(el) => {
+                    if (el) el.indeterminate = !allEnabled && !noneEnabled;
+                  }}
+                  disabled={busy !== null || view.rules.length === 0}
+                  onChange={() => void toggleAllRules(!allEnabled)}
+                  title={
+                    allEnabled
+                      ? "Disable every rule at once: open alerts close, thresholds are kept"
+                      : "Enable every rule at once"
+                  }
+                />
+              </th>
               <th>Rule</th>
               <th>Condition</th>
               <th>Instance</th>

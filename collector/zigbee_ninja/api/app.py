@@ -93,6 +93,10 @@ class AlertRuleBody(BaseModel):
     enabled: bool = True
 
 
+class RulesSetAllBody(BaseModel):
+    enabled: bool
+
+
 class SettingsBody(BaseModel):
     retention_rollup_days: int | None = None
     retention_chains_hours: int | None = None
@@ -520,6 +524,11 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
             return engine.alerts.create_rule(body.model_dump())
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/alerts/rules/set_all")
+    def alerts_rules_set_all(request: Request, body: RulesSetAllBody) -> dict:
+        require_user(request)
+        return {"rules": engine.alerts.set_all_enabled(body.enabled)}
 
     @app.put("/api/alerts/rules/{rule_id}")
     def alerts_rule_update(request: Request, rule_id: int, body: AlertRuleBody) -> dict:
