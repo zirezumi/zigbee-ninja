@@ -92,6 +92,69 @@ def summarize(value: dict) -> dict:
     }
 
 
+def graph(value: dict) -> dict:
+    """Reduce a raw Z2M networkmap to the render-ready graph the view draws.
+
+    A raw link is one neighbor-table row: `target` heard `source` at `lqi`,
+    so most pairs appear twice (once per direction) with asymmetric LQIs —
+    the graph keeps one edge per pair carrying the *worst* of the two, the
+    same pessimistic reading the weak-links table uses. A link's `routes`
+    are the reporting node's routing-table rows via that neighbor; every
+    ACTIVE row names the next hop that relays for it, so counting ACTIVE
+    rows per next-hop node measures how many known paths flow through it
+    (`routes_via` — the relay-load input for node sizing).
+    """
+    nodes = value.get("nodes") or []
+    links = value.get("links") or []
+
+    by_nwk: dict[int, str] = {}
+    out_nodes: dict[str, dict] = {}
+    for node in nodes:
+        ieee = str(node.get("ieeeAddr") or "")
+        if not ieee:
+            continue
+        nwk = node.get("networkAddress")
+        if isinstance(nwk, int):
+            by_nwk[nwk] = ieee
+        out_nodes[ieee] = {
+            "id": ieee,
+            "name": str(node.get("friendlyName") or ieee),
+            "type": str(node.get("type") or "Unknown"),
+            "failed": bool(node.get("failed")),
+            "degree": 0,
+            "routes_via": 0,
+        }
+
+    edges: dict[tuple[str, str], dict] = {}
+    for link in links:
+        source = str(
+            link.get("sourceIeeeAddr") or (link.get("source") or {}).get("ieeeAddr") or ""
+        )
+        target = str(
+            link.get("targetIeeeAddr") or (link.get("target") or {}).get("ieeeAddr") or ""
+        )
+        for route in link.get("routes") or []:
+            if str(route.get("status") or "").upper() != "ACTIVE":
+                continue
+            hop_ieee = by_nwk.get(route.get("nextHopAddress"))
+            if hop_ieee in out_nodes:
+                out_nodes[hop_ieee]["routes_via"] += 1
+        if source not in out_nodes or target not in out_nodes or source == target:
+            continue
+        lqi = link.get("lqi", link.get("linkquality"))
+        lqi = int(lqi) if isinstance(lqi, (int, float)) else None
+        key = (min(source, target), max(source, target))
+        entry = edges.get(key)
+        if entry is None:
+            edges[key] = {"source": key[0], "target": key[1], "lqi": lqi}
+            out_nodes[key[0]]["degree"] += 1
+            out_nodes[key[1]]["degree"] += 1
+        elif lqi is not None and (entry["lqi"] is None or lqi < entry["lqi"]):
+            entry["lqi"] = lqi
+
+    return {"nodes": list(out_nodes.values()), "links": list(edges.values())}
+
+
 class TopologyPuller:
     def __init__(
         self,

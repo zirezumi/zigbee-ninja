@@ -618,13 +618,15 @@ stay stable.
    tighter windows at finer buckets, an event table at the zoomed range, and
    the window's command chains as spans (opened → first echo) — the
    micro-gantt in its V1 form.
-6. **Topology** — mesh graph from the latest snapshot (LQI-weighted edges,
-   relay-load-sized routers), freshness-stamped. First slice shipped: per-
-   instance grant-gated on-demand pulls (15 min rate limit, one scan at a
-   time), stored snapshots with summaries (router census, weak links, node
-   degree, per-query sweep answers — a node that answers Mgmt_Lqi but omits
-   Mgmt_Rtg is a firmware quirk, not unreachable); the force-directed graph
-   rides on the stored raw maps later.
+6. **Topology** — per-instance grant-gated on-demand pulls (15 min rate
+   limit, one scan at a time), stored snapshots with summaries (router
+   census, weak links, node degree, per-query sweep answers — a node that
+   answers Mgmt_Lqi but omits Mgmt_Rtg is a firmware quirk, not
+   unreachable), and the **force-directed mesh graph** over the stored raw
+   map (d3-force, settled synchronously): LQI-weighted edges with weak
+   links dashed, one edge per pair carrying the worse direction's LQI, and
+   routers sized by neighbor links plus ACTIVE routing-table paths observed
+   through them (`GET /api/topology/graph`).
 7. **Calibration** — wizard + history + knee-drift indicators. Shipped:
    ranked target picker, dry-run preview with per-run authorization, the
    fleet-batch flow (one authorization per enumerated batch, queue progress,
@@ -719,8 +721,9 @@ cleanup sweep finishes the job when it returns.
 - **Dependency policy:** no GPL/AGPL code in distributed artifacts. Named
   exclusions: bellows, zigpy, scapy. Named inclusions: zigbee-herdsman as a
   porting *reference* (MIT), dpkt (BSD) if packet-parsing helpers are needed,
-  DuckDB (MIT), uPlot (MIT), FastAPI (MIT), tcpdump invoked as an external system
-  binary (BSD). A NOTICE file and a CI license check (`tools/license_check.py`)
+  DuckDB (MIT), uPlot (MIT), FastAPI (MIT), d3-force (ISC), tcpdump invoked as
+  an external system binary (BSD). A NOTICE file and a CI license check
+  (`tools/license_check.py`)
   enforce the policy.
 - **Trademark:** "Zigbee" is a CSA mark; community-tool naming precedent
   (zigbee2mqtt) applies.

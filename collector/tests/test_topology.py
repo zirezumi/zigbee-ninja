@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from zigbee_ninja.ingest.topology import PullRejected, TopologyPuller, summarize
+from zigbee_ninja.ingest.topology import PullRejected, TopologyPuller, graph, summarize
 from zigbee_ninja.store.db import Database
 
 # Synthetic map (sanitized fixtures only — no real IEEE addresses).
@@ -46,6 +46,48 @@ def test_summarize_counts_weak_links_and_degrees():
     ]
     degrees = {row["node"]: row["links"] for row in summary["top_degree"]}
     assert degrees == {"coordinator": 2, "lamp-a": 3, "lamp-b": 2, "button": 1}
+
+
+def test_graph_dedupes_directions_and_counts_active_routes():
+    raw = {
+        "nodes": [
+            {"ieeeAddr": "0x01", "friendlyName": "coordinator", "type": "Coordinator",
+             "networkAddress": 0},
+            {"ieeeAddr": "0x02", "friendlyName": "lamp-a", "type": "Router",
+             "networkAddress": 100},
+            {"ieeeAddr": "0x03", "friendlyName": "lamp-b", "type": "Router",
+             "networkAddress": 200, "failed": ["routingTable"]},
+        ],
+        "links": [
+            # The same physical pair reported from both ends with asymmetric
+            # LQIs — one edge survives, carrying the worse reading.
+            {"sourceIeeeAddr": "0x02", "targetIeeeAddr": "0x01", "lqi": 210},
+            {"source": {"ieeeAddr": "0x01"}, "target": {"ieeeAddr": "0x02"},
+             "linkquality": 150},
+            # ACTIVE routing rows via lamp-a; the INACTIVE row must not count.
+            {"sourceIeeeAddr": "0x03", "targetIeeeAddr": "0x01", "lqi": 90,
+             "routes": [
+                 {"destinationAddress": 200, "nextHopAddress": 100, "status": "ACTIVE"},
+                 {"destinationAddress": 0, "nextHopAddress": 0, "status": "INACTIVE"},
+             ]},
+            # A link to an unknown node contributes its ACTIVE route but no edge.
+            {"sourceIeeeAddr": "0x09", "targetIeeeAddr": "0x01", "lqi": 40,
+             "routes": [
+                 {"destinationAddress": 300, "nextHopAddress": 100, "status": "ACTIVE"},
+             ]},
+        ],
+    }
+    view = graph(raw)
+    nodes = {node["id"]: node for node in view["nodes"]}
+    assert set(nodes) == {"0x01", "0x02", "0x03"}
+    assert nodes["0x02"]["routes_via"] == 2  # both ACTIVE rows point through lamp-a
+    assert nodes["0x03"]["failed"] is True
+    assert nodes["0x01"]["degree"] == 2 and nodes["0x02"]["degree"] == 1
+
+    links = {(link["source"], link["target"]): link for link in view["links"]}
+    assert set(links) == {("0x01", "0x02"), ("0x01", "0x03")}
+    assert links[("0x01", "0x02")]["lqi"] == 150  # worst of 210/150
+    assert links[("0x01", "0x03")]["lqi"] == 90
 
 
 class FakePublisher:

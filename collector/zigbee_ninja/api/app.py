@@ -20,6 +20,7 @@ from ..attribution import queries as attribution_queries
 from ..calibration.benchmark import CalibrationRejected
 from ..capacity import airtime as airtime_model
 from ..capacity import headroom as headroom_model
+from ..ingest import topology as topology_module
 from ..ingest.engine import Engine
 from ..ingest.hacontrol import HaConfig, test_ha
 from ..ingest.mqtt import BrokerConfig, test_connection
@@ -345,6 +346,20 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
         require_user(request)
         return {
             "instances": engine.topology.latest(instance, include_raw=full),
+        }
+
+    @app.get("/api/topology/graph")
+    def topology_graph(request: Request, instance: str) -> dict:
+        require_user(request)
+        entry = engine.topology.latest(instance, include_raw=True).get(instance)
+        if entry is None:
+            raise HTTPException(
+                status_code=404, detail="No topology snapshot for this instance"
+            )
+        return {
+            "instance": instance,
+            "pulled_at": entry["pulled_at"],
+            **topology_module.graph(entry["raw"]),
         }
 
     @app.post("/api/topology/pull")

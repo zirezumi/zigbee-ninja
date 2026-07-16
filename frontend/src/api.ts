@@ -164,6 +164,28 @@ export interface TopologyView {
   instances: Record<string, TopologySummary>;
 }
 
+export interface TopologyGraphNode {
+  id: string;
+  name: string;
+  type: string;
+  failed: boolean;
+  degree: number;
+  routes_via: number;
+}
+
+export interface TopologyGraphLink {
+  source: string;
+  target: string;
+  lqi: number | null;
+}
+
+export interface TopologyGraph {
+  instance: string;
+  pulled_at: number;
+  nodes: TopologyGraphNode[];
+  links: TopologyGraphLink[];
+}
+
 export interface AlertBrief {
   instance: string;
   severity: string | null;

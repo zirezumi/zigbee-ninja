@@ -388,6 +388,22 @@ main h1 {
   padding-top: 0;
 }
 
+/* ---- topology mesh graph ---- */
+.mesh-graph {
+  width: 100%;
+  height: auto;
+  background: color-mix(in srgb, var(--paper) 60%, var(--panel));
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-top: 10px;
+}
+
+.mesh-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  fill: var(--ink-2);
+}
+
 .instance-card {
   background: var(--panel);
   border: 1px solid var(--line);
