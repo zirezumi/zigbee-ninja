@@ -30,6 +30,45 @@ function when(ts: number | null | undefined): string {
   return new Date(ts * 1000).toLocaleString();
 }
 
+/** Copy text to the clipboard. The async Clipboard API needs a secure
+ * context, and installations reached over plain http (a LAN IP) do not
+ * have one; the hidden-textarea path is the working fallback there. */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // fall through to the textarea path
+  }
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.position = "fixed";
+  area.style.opacity = "0";
+  document.body.appendChild(area);
+  area.select();
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  }
+  document.body.removeChild(area);
+  return copied;
+}
+
+/** The record a per-card Copy places on the clipboard: the full API
+ * record plus the human detector label. */
+function copyPayload(rec: Recommendation): string {
+  return JSON.stringify(
+    { detector_label: DETECTOR_LABELS[rec.detector] ?? rec.detector, ...rec },
+    null,
+    2,
+  );
+}
+
 function savingLine(rec: Recommendation): string {
   const saving = rec.saving || {};
   if (saving.us_per_s && saving.us_per_s > 0) {
@@ -114,6 +153,14 @@ function Card({
   rec: Recommendation;
   onState: (rec: Recommendation, state: string) => void;
 }) {
+  const [copyLabel, setCopyLabel] = useState("Copy");
+
+  async function copyCard() {
+    const copied = await copyText(copyPayload(rec));
+    setCopyLabel(copied ? "Copied" : "Copy failed");
+    window.setTimeout(() => setCopyLabel("Copy"), 1500);
+  }
+
   return (
     <div className="panel">
       <div className="toolbar">
@@ -162,6 +209,13 @@ function Card({
             Reopen
           </button>
         )}
+        <button
+          className="ghost"
+          title="Copy this recommendation as JSON: detector, coordinator, finding text, saving, and evidence"
+          onClick={() => void copyCard()}
+        >
+          {copyLabel}
+        </button>
       </div>
     </div>
   );
@@ -201,6 +255,21 @@ export default function Recommendations() {
     } finally {
       setScanning(false);
     }
+  }
+
+  function exportJson() {
+    if (!view || view.recommendations.length === 0) return;
+    const blob = new Blob([JSON.stringify(view.recommendations, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `recommendations-${stateFilter}-${new Date()
+      .toISOString()
+      .slice(0, 10)}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
   }
 
   async function setState(rec: Recommendation, state: string) {
@@ -246,6 +315,14 @@ export default function Recommendations() {
         </div>
         <button className="ghost" onClick={() => void scanNow()} disabled={scanning}>
           {scanning ? "Scanning…" : "Scan now"}
+        </button>
+        <button
+          className="ghost"
+          onClick={exportJson}
+          disabled={!view || view.recommendations.length === 0}
+          title="Download every recommendation the current tab shows as a JSON file"
+        >
+          Export JSON
         </button>
         <span
           className="hint"

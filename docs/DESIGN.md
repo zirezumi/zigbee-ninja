@@ -662,9 +662,13 @@ stay stable.
     ordered by saving × confidence, plain-language detector labels,
     expandable evidence, dismiss / mark-applied / reopen controls, an
     on-demand scan, and an empty state that states the
-    provably-traffic-optimized claim. Backed by `/api/recommendations`;
-    the discovery tile adds a `recommendations_open` sensor per granted
-    instance.
+    provably-traffic-optimized claim. The toolbar exports the current
+    tab's list as a JSON file, and each card carries a one-click Copy
+    that puts the full record (detector, coordinator, finding, saving,
+    evidence) on the clipboard; plain-http installations get the
+    textarea copy fallback since the async Clipboard API needs a secure
+    context. Backed by `/api/recommendations`; the discovery tile adds
+    a `recommendations_open` sensor per granted instance.
 
 ## §14 Alerting
 
