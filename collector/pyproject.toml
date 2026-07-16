@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "zigbee-ninja"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "Coordinator-throughput observability for Zigbee2MQTT systems"
 license = "Apache-2.0"
 requires-python = ">=3.11"
