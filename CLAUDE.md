@@ -173,10 +173,18 @@ journal, budgets/regression alerts, counterfactual-replayed recommendations,
 migration manifest, applied-change verification) — iterate with the owner
 before building. (5) **T1/T2 fusion built** (see the M4 entry above); owner updated all five
 probes to v0.4 (2026-07-16, via the new one-click in-place Update button on
-drifted Footprint tiles) — fusion is live-fusing fleet-wide with ~0 ms clock
-offsets; a symmetric unmatched pattern (≈equal wire-only/probe-only beside
-matches) is under diagnosis via the per-sender `top_unmatched` fusion
-diagnostic (stale registry addresses ruled out against the topology map).
+drifted Footprint tiles) — and after diagnosis, **fusion is live-validated
+fleet-wide: 89–100% of wire frames match a probe event, probe-only is ZERO
+(no capture gaps), clock offsets ~0.1 ms**. The initial ~⅓ match rate was a
+transport bug the diagnostics chain isolated (per-sender `top_unmatched` →
+seq-delta histogram dominated by delta 0 = same key arriving >5 s apart):
+the ninja-tap agent pumped tcpdump output with `read(16384)`, which blocks
+until a full block accumulates — quiet flows' frames were delayed tens of
+seconds. Fixed with `read1()` (agent redeployed on the capture host); every
+pcap-timestamp consumer was always correct, but live-view freshness on
+quiet flows improved too. The surviving wire-only residue (7–11%, zero on
+the quietest instance) is the designed signal: frames Z2M consumes without
+emitting a device event (default responses to commands, interview traffic).
 **V2 RATIFIED 2026-07-16 (owner)**: all §V2-10 questions resolved in
 docs/V2_PROPOSAL.md; **V2.M1 (cost ledger + change journal + attribution
 cost columns) is green-lit** — reference-deployment detector order: pacing →
