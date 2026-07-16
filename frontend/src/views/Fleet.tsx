@@ -11,6 +11,7 @@ import {
   InstanceInfo,
   LatencyStats,
   ProbeStats,
+  Tile,
   WireLatencyStats,
   api,
   fleetSocketUrl,
@@ -156,6 +157,37 @@ function Fact({
   );
 }
 
+function ProbeFactValue({
+  tile,
+  busy,
+  onUpdate,
+}: {
+  tile?: Tile;
+  busy: boolean;
+  onUpdate: () => void;
+}) {
+  if (!tile || !["deployed", "deploying"].includes(tile.status)) {
+    return <span>Not deployed — deploy from Permissions</span>;
+  }
+  if (tile.status === "deploying") return <span>Deploying…</span>;
+  if (tile.drift) {
+    return (
+      <span>
+        Deployed ·{" "}
+        <button
+          className="linkish"
+          disabled={busy}
+          title={`Replace the running v${tile.probe.version} extension with the bundled v${tile.bundled_version} in place — the grant is untouched`}
+          onClick={onUpdate}
+        >
+          {busy ? "updating…" : `Update to v${tile.bundled_version}`}
+        </button>
+      </span>
+    );
+  }
+  return <span title={`v${tile.probe.version ?? tile.version}`}>Deployed · up to date</span>;
+}
+
 interface InstanceRowProps {
   instance: InstanceInfo;
   kinds: Record<string, number> | undefined;
@@ -163,6 +195,9 @@ interface InstanceRowProps {
   endTs: number;
   latency?: LatencyStats;
   probe?: ProbeStats;
+  tile?: Tile;
+  probeBusy: boolean;
+  onProbeUpdate: () => void;
   airtime?: AirtimeLive;
   wireLatency?: WireLatencyStats;
   headroom?: HeadroomInstance;
@@ -177,6 +212,9 @@ function InstanceRow({
   endTs,
   latency,
   probe,
+  tile,
+  probeBusy,
+  onProbeUpdate,
   airtime,
   wireLatency,
   headroom,
@@ -238,11 +276,13 @@ function InstanceRow({
         </Fact>
         <Fact
           label="Probe"
-          title="zigbee-ninja's extension running inside this Zigbee2MQTT instance — deployed and removed from the Footprint page"
+          title="zigbee-ninja's extension running inside this Zigbee2MQTT instance — deployed and removed from the Permissions page"
         >
-          {probe?.version
-            ? `v${probe.version}${probe.enabled === false ? " (paused)" : ""}`
-            : "not deployed"}
+          {probe?.enabled === false ? (
+            <span>Deployed · paused</span>
+          ) : (
+            <ProbeFactValue tile={tile} busy={probeBusy} onUpdate={onProbeUpdate} />
+          )}
         </Fact>
         <Fact
           label="Airtime"
@@ -304,6 +344,44 @@ export default function Fleet({ onReconfigure, brokerInfo }: FleetProps) {
   const historyRef = useRef<Record<string, number[]>>({});
 
   const [headroom, setHeadroom] = useState<HeadroomView | null>(null);
+  const [probeTiles, setProbeTiles] = useState<Record<string, Tile>>({});
+  const [probeBusy, setProbeBusy] = useState<string | null>(null);
+
+  const loadTiles = async () => {
+    try {
+      const data = await api<{ tiles: Tile[] }>("/api/tiles");
+      setProbeTiles(
+        Object.fromEntries(
+          data.tiles
+            .filter((tile) => tile.capability === "z2m_extension")
+            .map((tile) => [tile.target, tile]),
+        ),
+      );
+    } catch {
+      // probe facts fall back to "not deployed" until the next poll
+    }
+  };
+
+  useEffect(() => {
+    void loadTiles();
+    const interval = window.setInterval(() => void loadTiles(), 30000);
+    return () => window.clearInterval(interval);
+  }, []);
+
+  async function updateProbe(base: string) {
+    setProbeBusy(base);
+    try {
+      await api("/api/tiles/deploy", {
+        method: "POST",
+        body: JSON.stringify({ capability: "z2m_extension", target: base }),
+      });
+    } catch {
+      // the tile poll below shows the true state either way
+    } finally {
+      setProbeBusy(null);
+      void loadTiles();
+    }
+  }
 
   useEffect(() => {
     let alive = true;
@@ -428,6 +506,9 @@ export default function Fleet({ onReconfigure, brokerInfo }: FleetProps) {
                 endTs={now}
                 latency={message?.latency[base]}
                 probe={probe}
+                tile={probeTiles[base]}
+                probeBusy={probeBusy === base}
+                onProbeUpdate={() => void updateProbe(base)}
                 airtime={message?.tap.airtime[base]}
                 wireLatency={message?.tap.latency[base]}
                 headroom={headroom?.instances[base]}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   forceCenter,
   forceCollide,
@@ -52,9 +52,70 @@ function nodeColor(node: TopologyGraphNode): string {
 /** Force-directed mesh graph over the stored raw networkmap: LQI-weighted
  * edges (weak links dashed), routers sized by how many links and observed
  * routing paths lean on them. The simulation settles synchronously — small
- * meshes need no animation loop. */
+ * meshes need no animation loop. Wheel zooms, drag pans, clicking a node
+ * opens its detail panel. */
 function MeshGraph({ base, pulledAt }: { base: string; pulledAt: number }) {
   const [graphData, setGraphData] = useState<TopologyGraph | null>(null);
+  const [viewBox, setViewBox] = useState({ x: 0, y: 0, w: GRAPH_WIDTH, h: GRAPH_HEIGHT });
+  const [selected, setSelected] = useState<SimNode | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const dragRef = useRef<{ x: number; y: number; moved: boolean } | null>(null);
+
+  // Wheel zoom needs a native non-passive listener: React's synthetic wheel
+  // handler can't call preventDefault, so the page would scroll too.
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      setViewBox((box) => {
+        const factor = event.deltaY > 0 ? 1.2 : 1 / 1.2;
+        const w = Math.min(GRAPH_WIDTH * 1.5, Math.max(GRAPH_WIDTH / 10, box.w * factor));
+        const h = w * (GRAPH_HEIGHT / GRAPH_WIDTH);
+        const rect = svg.getBoundingClientRect();
+        const cx = box.x + ((event.clientX - rect.left) / rect.width) * box.w;
+        const cy = box.y + ((event.clientY - rect.top) / rect.height) * box.h;
+        return {
+          x: cx - ((cx - box.x) / box.w) * w,
+          y: cy - ((cy - box.y) / box.h) * h,
+          w,
+          h,
+        };
+      });
+    };
+    svg.addEventListener("wheel", onWheel, { passive: false });
+    return () => svg.removeEventListener("wheel", onWheel);
+  }, []);
+
+  function onPointerDown(event: React.PointerEvent<SVGSVGElement>) {
+    dragRef.current = { x: event.clientX, y: event.clientY, moved: false };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function onPointerMove(event: React.PointerEvent<SVGSVGElement>) {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const dx = event.clientX - drag.x;
+    const dy = event.clientY - drag.y;
+    if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+    if (!drag.moved) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    setViewBox((box) => ({
+      ...box,
+      x: box.x - (dx / rect.width) * box.w,
+      y: box.y - (dy / rect.height) * box.h,
+    }));
+    drag.x = event.clientX;
+    drag.y = event.clientY;
+  }
+
+  function onPointerUp() {
+    dragRef.current = null;
+  }
+
+  function selectNode(node: SimNode) {
+    if (!dragRef.current?.moved) setSelected(node);
+  }
 
   useEffect(() => {
     let alive = true;
@@ -63,7 +124,10 @@ function MeshGraph({ base, pulledAt }: { base: string; pulledAt: number }) {
         const data = await api<TopologyGraph>(
           `/api/topology/graph?instance=${encodeURIComponent(base)}`,
         );
-        if (alive) setGraphData(data);
+        if (alive) {
+          setGraphData(data);
+          setSelected(null);
+        }
       } catch {
         if (alive) setGraphData(null);
       }
@@ -105,13 +169,31 @@ function MeshGraph({ base, pulledAt }: { base: string; pulledAt: number }) {
   }, [graphData]);
 
   if (!layout) return null;
+  const zoomed =
+    viewBox.x !== 0 || viewBox.y !== 0 || viewBox.w !== GRAPH_WIDTH || viewBox.h !== GRAPH_HEIGHT;
+  const selectedLinks = selected
+    ? layout.links
+        .map((link) => {
+          const source = link.source as SimNode;
+          const target = link.target as SimNode;
+          if (source.id !== selected.id && target.id !== selected.id) return null;
+          const peer = source.id === selected.id ? target : source;
+          return { peer, lqi: link.lqi };
+        })
+        .filter((row): row is { peer: SimNode; lqi: number | null } => row !== null)
+        .sort((a, b) => (b.lqi ?? 0) - (a.lqi ?? 0))
+    : [];
   return (
     <>
       <svg
+        ref={svgRef}
         className="mesh-graph"
-        viewBox={`0 0 ${GRAPH_WIDTH} ${GRAPH_HEIGHT}`}
+        viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`}
         role="img"
         aria-label={`Mesh graph for ${base}`}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
       >
         {layout.links.map((link, index) => {
           const source = link.source as SimNode;
@@ -143,8 +225,16 @@ function MeshGraph({ base, pulledAt }: { base: string; pulledAt: number }) {
               cy={node.y}
               r={nodeRadius(node)}
               fill={nodeColor(node)}
-              stroke={node.failed ? "var(--danger)" : "var(--line)"}
-              strokeWidth={node.failed ? 2 : 1}
+              stroke={
+                selected?.id === node.id
+                  ? "var(--accent-ink)"
+                  : node.failed
+                    ? "var(--danger)"
+                    : "var(--line)"
+              }
+              strokeWidth={selected?.id === node.id ? 3 : node.failed ? 2 : 1}
+              style={{ cursor: "pointer" }}
+              onClick={() => selectNode(node)}
             >
               <title>
                 {node.name} · {node.type}
@@ -168,11 +258,59 @@ function MeshGraph({ base, pulledAt }: { base: string; pulledAt: number }) {
         ))}
       </svg>
       <p className="hint">
-        Hover a node or link for detail. Node size = how much the mesh leans on it
-        (neighbor links + routing paths observed through it); line strength = link
-        quality, with links under LQI {WEAK_LQI} dashed red. Labels mark the coordinator
-        and the five most-leaned-on routers.
+        Scroll to zoom, drag to pan, click a node for detail. Node size = how much the
+        mesh leans on it (neighbor links + routing paths observed through it); line
+        strength = link quality, with links under LQI {WEAK_LQI} dashed red. Labels mark
+        the coordinator and the five most-leaned-on routers.
+        {zoomed && (
+          <>
+            {" "}
+            <button
+              className="linkish"
+              onClick={() => setViewBox({ x: 0, y: 0, w: GRAPH_WIDTH, h: GRAPH_HEIGHT })}
+            >
+              Reset view
+            </button>
+          </>
+        )}
       </p>
+      {selected && (
+        <div className="panel node-detail">
+          <div className="toolbar">
+            <p className="panel-kicker">
+              {selected.name} · {selected.type}
+            </p>
+            <button className="ghost small" onClick={() => setSelected(null)}>
+              Close
+            </button>
+          </div>
+          <p className="hint">
+            {selected.degree} link{selected.degree === 1 ? "" : "s"}
+            {selected.routes_via > 0
+              ? ` · ${selected.routes_via} routed path${selected.routes_via === 1 ? "" : "s"} through it`
+              : ""}
+            {selected.failed ? " · did not answer part of the sweep" : ""}
+          </p>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Neighbor</th>
+                <th className="num" title="Link quality 0–255, worse direction of the pair">
+                  LQI
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {selectedLinks.map((row) => (
+                <tr key={row.peer.id}>
+                  <td>{row.peer.name}</td>
+                  <td className="num">{row.lqi ?? "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </>
   );
 }
@@ -196,7 +334,7 @@ function InstancePanel({ base, summary, granted, busy, onPull }: InstancePanelPr
         <button
           className="small"
           disabled={!granted || busy}
-          title={granted ? "Run a networkmap sweep now" : "Grant topology pulls in Footprint first"}
+          title={granted ? "Run a networkmap sweep now" : "Grant topology pulls in Permissions first"}
           onClick={onPull}
         >
           {busy ? "Scanning…" : "Pull now"}
@@ -206,7 +344,7 @@ function InstancePanel({ base, summary, granted, busy, onPull }: InstancePanelPr
         <p className="hint">
           {granted
             ? "Pull a snapshot to map this mesh."
-            : "Topology pulls are not granted for this instance — grant them on the Footprint page."}
+            : "Topology pulls are not granted for this instance — grant them on the Permissions page."}
         </p>
       ) : (
         <>

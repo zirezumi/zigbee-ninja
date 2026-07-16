@@ -11,8 +11,9 @@
   --mono: "Cascadia Code", "JetBrains Mono", "SF Mono", Consolas, monospace;
 }
 
+/* Theme: follows the system by default; an explicit data-theme wins. */
 @media (prefers-color-scheme: light) {
-  :root {
+  :root:not([data-theme="dark"]) {
     --paper: #fafbfa;
     --panel: #ffffff;
     --line: #dde5e2;
@@ -23,6 +24,18 @@
     --danger: #a8412f;
     --amber: #9a6b1a;
   }
+}
+
+:root[data-theme="light"] {
+  --paper: #fafbfa;
+  --panel: #ffffff;
+  --line: #dde5e2;
+  --ink: #1c2422;
+  --ink-2: #4c5b57;
+  --accent: #23836c;
+  --accent-ink: #175c4c;
+  --danger: #a8412f;
+  --amber: #9a6b1a;
 }
 
 * {
@@ -402,6 +415,18 @@ main h1 {
   font-family: var(--mono);
   font-size: 10px;
   fill: var(--ink-2);
+}
+
+/* Inline action rendered inside a fact value, styled as a link. */
+button.linkish {
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: inherit;
+  font-weight: 600;
+  color: var(--accent-ink);
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 .instance-card {

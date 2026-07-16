@@ -54,7 +54,7 @@ function AirtimeBar({ buckets }: { buckets: AirtimeLive["buckets"] }) {
 function fusionText(fusion: FusionView | undefined): string {
   if (!fusion || fusion.state === "idle") return "—";
   if (fusion.state === "awaiting probe v0.4") {
-    return "awaiting probe v0.4 — update the extension from Footprint";
+    return "awaiting probe v0.4 — update the extension from Permissions";
   }
   if (fusion.state === "no wire coverage") return "no wire frames to fuse with";
   const offset =
@@ -294,7 +294,7 @@ export default function Wire() {
             </span>
           )}
         </span>
-        <span className="hint">reads the coordinator links passively — never transmits</span>
+        <span className="hint">reads the coordinator links passively; it never transmits</span>
       </div>
 
       {flows.length === 0 ? (

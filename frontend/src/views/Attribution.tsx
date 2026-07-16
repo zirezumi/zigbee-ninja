@@ -17,6 +17,21 @@ const CLASS_ORDER = [
   "self",
 ];
 
+const CLASS_TITLES: Record<string, string> = {
+  commanded:
+    "Commands sent because something outside Zigbee2MQTT asked — automations, scripts, or users publishing to …/set and …/get",
+  provoked:
+    "Replies those commands caused: read responses and the state echoes that follow a set",
+  autonomous:
+    "Traffic devices generate on their own — sensor reports, physical presses — outside any command's window",
+  "controller-housekeeping":
+    "Zigbee2MQTT's own radio work: availability pings, configuration reads, firmware-update checks",
+  "stack-housekeeping":
+    "The coordinator chip's internal network upkeep — modeled, since it never crosses an observable boundary",
+  "retry-overhead": "Extra transmissions spent repeating frames that failed the first time",
+  self: "zigbee-ninja's own traffic (topology pulls, calibration reads) — always counted separately",
+};
+
 function ClassBar({ classes }: { classes: Record<string, number> }) {
   const total = Object.values(classes).reduce((sum, count) => sum + count, 0);
   if (total === 0) return <div className="classbar empty" />;
@@ -27,7 +42,7 @@ function ClassBar({ classes }: { classes: Record<string, number> }) {
           key={klass}
           className={`classbar-seg seg-${klass}`}
           style={{ width: `${(classes[klass] / total) * 100}%` }}
-          title={`${klass}: ${classes[klass]}`}
+          title={`${klass}: ${classes[klass]} — ${CLASS_TITLES[klass] ?? ""}`}
         />
       ))}
     </div>
@@ -106,7 +121,11 @@ export default function Attribution() {
                 <span className="classrow-detail">
                   {CLASS_ORDER.filter((klass) => summary!.classes[instance][klass]).map(
                     (klass) => (
-                      <span key={klass} className={`kind legend-${klass}`}>
+                      <span
+                        key={klass}
+                        className={`kind legend-${klass}`}
+                        title={CLASS_TITLES[klass]}
+                      >
                         <span className="kind-name">{klass}</span>
                         <span className="kind-count">{summary!.classes[instance][klass]}</span>
                       </span>
@@ -170,8 +189,8 @@ export default function Attribution() {
             </tbody>
           </table>
           <p className="hint">
-            Commander identity comes from the Home Assistant integration (Footprint page):
-            a read-only HA connection names the automation or script behind each{" "}
+            Commander identity comes from the Home Assistant integration (Permissions
+            page): a read-only HA connection names the automation or script behind each{" "}
             <code>mqtt.publish</code>. Without it, commands show as (unattributed).
           </p>
         </div>

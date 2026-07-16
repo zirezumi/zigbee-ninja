@@ -17,14 +17,14 @@ type Phase = "loading" | "setup" | "login" | "ready" | "error";
 type View =
   | "fleet"
   | "attribution"
-  | "wire"
+  | "wiretap"
   | "headroom"
   | "topology"
   | "calibration"
-  | "footprint"
+  | "permissions"
   | "alerts"
   | "settings"
-  | "burst";
+  | "benchmark";
 // The broker-connection form is a route of its own so the browser's back
 // button leaves it, and every view survives a page refresh via the URL hash.
 type Route = View | "broker";
@@ -32,19 +32,27 @@ type Route = View | "broker";
 const ROUTES: ReadonlySet<string> = new Set([
   "fleet",
   "attribution",
-  "wire",
+  "wiretap",
   "headroom",
-  "burst",
+  "benchmark",
   "topology",
   "calibration",
-  "footprint",
+  "permissions",
   "alerts",
   "settings",
   "broker",
 ]);
 
+// Hashes from before the views took their current names keep working.
+const LEGACY_ROUTES: Record<string, Route> = {
+  wire: "wiretap",
+  burst: "benchmark",
+  footprint: "permissions",
+};
+
 function routeFromHash(): Route {
   const hash = window.location.hash.replace(/^#\/?/, "");
+  if (hash in LEGACY_ROUTES) return LEGACY_ROUTES[hash];
   return ROUTES.has(hash) ? (hash as Route) : "fleet";
 }
 
@@ -52,15 +60,32 @@ function navigate(route: Route) {
   window.location.hash = `/${route}`;
 }
 
+// Theme: "auto" follows the operating system; light/dark force a palette.
+type Theme = "auto" | "light" | "dark";
+const THEME_ORDER: Theme[] = ["auto", "light", "dark"];
+
+function applyTheme(theme: Theme) {
+  if (theme === "auto") {
+    document.documentElement.removeAttribute("data-theme");
+  } else {
+    document.documentElement.setAttribute("data-theme", theme);
+  }
+}
+
+function storedTheme(): Theme {
+  const saved = window.localStorage.getItem("zn-theme");
+  return saved === "light" || saved === "dark" ? saved : "auto";
+}
+
 const NAV_ITEMS: Array<{ label: string; view?: View }> = [
   { label: "Fleet", view: "fleet" },
   { label: "Attribution", view: "attribution" },
-  { label: "Wiretap", view: "wire" },
+  { label: "Wiretap", view: "wiretap" },
   { label: "Headroom", view: "headroom" },
-  { label: "Benchmark", view: "burst" },
+  { label: "Benchmark", view: "benchmark" },
   { label: "Topology", view: "topology" },
   { label: "Calibration", view: "calibration" },
-  { label: "Footprint", view: "footprint" },
+  { label: "Permissions", view: "permissions" },
   { label: "Alerts", view: "alerts" },
   { label: "Settings", view: "settings" },
 ];
@@ -68,14 +93,14 @@ const NAV_ITEMS: Array<{ label: string; view?: View }> = [
 const VIEW_TITLES: Record<View, string> = {
   fleet: "Fleet",
   attribution: "Attribution",
-  wire: "Wiretap",
+  wiretap: "Wiretap",
   headroom: "Headroom",
   topology: "Topology",
   calibration: "Calibration",
-  footprint: "Footprint & permissions",
+  permissions: "Permissions",
   alerts: "Alerts",
   settings: "Settings",
-  burst: "Benchmark",
+  benchmark: "Benchmark",
 };
 
 interface CredentialsFormProps {
@@ -148,12 +173,18 @@ export default function App() {
   const [username, setUsername] = useState("");
   const [broker, setBroker] = useState<BrokerView | null>(null);
   const [route, setRoute] = useState<Route>(routeFromHash);
+  const [theme, setTheme] = useState<Theme>(storedTheme);
 
   useEffect(() => {
     const onHashChange = () => setRoute(routeFromHash());
     window.addEventListener("hashchange", onHashChange);
     return () => window.removeEventListener("hashchange", onHashChange);
   }, []);
+
+  useEffect(() => {
+    applyTheme(theme);
+    window.localStorage.setItem("zn-theme", theme);
+  }, [theme]);
 
   const refreshBroker = useCallback(async () => {
     setBroker(await api<BrokerView>("/api/broker"));
@@ -276,6 +307,15 @@ export default function App() {
         </nav>
         <div className="aside-foot">
           <span className="mono">{version}</span>
+          <button
+            className="ghost"
+            title="Auto follows your operating system's light/dark setting"
+            onClick={() =>
+              setTheme(THEME_ORDER[(THEME_ORDER.indexOf(theme) + 1) % THEME_ORDER.length])
+            }
+          >
+            Theme: {theme}
+          </button>
           <button className="ghost" onClick={() => void handleLogout()}>
             Sign out {username}
           </button>
@@ -298,7 +338,7 @@ export default function App() {
           <Fleet onReconfigure={() => navigate("broker")} brokerInfo={broker} />
         ) : view === "attribution" ? (
           <Attribution />
-        ) : view === "wire" ? (
+        ) : view === "wiretap" ? (
           <Wire />
         ) : view === "headroom" ? (
           <Headroom />
@@ -310,7 +350,7 @@ export default function App() {
           <Alerts />
         ) : view === "settings" ? (
           <Settings />
-        ) : view === "burst" ? (
+        ) : view === "benchmark" ? (
           <Burst />
         ) : (
           <Footprint />

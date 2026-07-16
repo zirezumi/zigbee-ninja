@@ -187,7 +187,7 @@ export default function Burst() {
   return (
     <>
       <div className="panel">
-        <p className="panel-kicker">Raw event timeline</p>
+        <p className="panel-kicker">Event timeline</p>
         <p className="hint">
           Every observed event — MQTT messages and decoded coordinator-link frames — from
           the raw event store: the newest hour held in memory, older hours archived on disk
@@ -256,7 +256,7 @@ export default function Burst() {
               <tr>
                 <th>Opened</th>
                 <th>Target</th>
-                <th title="set changes state; get reads it">Verb</th>
+                <th title="set changes state; get reads it">Command</th>
                 <th title="Who issued the command — the Home Assistant automation, script, or user when the HA integration is connected, else the MQTT client">
                   Commander
                 </th>
