@@ -310,6 +310,18 @@ export default function Footprint() {
                             : "Deploy"}
                       </button>
                     )}
+                    {tile.capability === "z2m_extension" &&
+                      tile.status === "deployed" &&
+                      tile.drift && (
+                        <button
+                          className="small"
+                          disabled={busy !== null}
+                          title={`Replace the running extension with the bundled v${tile.bundled_version} in place — no revoke, the grant is untouched`}
+                          onClick={() => void act("/api/tiles/deploy", tile)}
+                        >
+                          {busy === key ? "…" : `Update to v${tile.bundled_version}`}
+                        </button>
+                      )}
                     {["deployed", "deploying", "granted"].includes(tile.status) && (
                       <button
                         className="ghost small"

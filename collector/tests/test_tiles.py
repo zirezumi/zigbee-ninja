@@ -48,6 +48,34 @@ def test_deploy_success_flow(tmp_path):
     assert len(publisher.published) == 1
 
 
+def test_redeploy_updates_in_place_without_revoke(tmp_path):
+    """A drifted probe updates by deploying again: extension/save replaces the
+    running code under the same name, so no revoke/re-grant round trip exists
+    — the contract the Footprint "Update" button relies on."""
+    db = Database(tmp_path)
+    manager = TileManager(db, publisher=None)
+
+    def responder(topic: str, payload: str) -> None:
+        body = json.loads(payload)
+        manager.on_bridge_response(
+            "z2m-test",
+            "save",
+            json.dumps({"status": "ok", "transaction": body["transaction"]}).encode(),
+        )
+
+    publisher = FakePublisher(responder)
+    manager._publish = publisher
+
+    # An older probe is already deployed; no revoke happens in between.
+    manager._upsert(
+        "z2m_extension", "z2m-test", status="deployed", version="0.3.0", deployed_at=1.0
+    )
+    tile = asyncio.run(manager.deploy_extension("z2m-test"))
+    assert tile["status"] == "deployed"
+    assert tile["version"] == probe_version()
+    assert all("extension/remove" not in topic for topic, _ in publisher.published)
+
+
 def test_deploy_error_response(tmp_path):
     db = Database(tmp_path)
     manager = TileManager(db, publisher=None)
