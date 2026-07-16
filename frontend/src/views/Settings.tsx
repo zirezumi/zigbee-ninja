@@ -55,7 +55,7 @@ function RetentionPanel({
       </p>
       <form className="stack" onSubmit={(event) => void handleSubmit(event)}>
         <div className="row">
-          <label>
+          <label title="How long the 10-second series (message rates, attribution classes, airtime, latency) are kept">
             Rollups (days)
             <input
               type="number"
@@ -66,7 +66,7 @@ function RetentionPanel({
               required
             />
           </label>
-          <label>
+          <label title="How long individual command chains are kept; the daily cost ledger and rollups persist beyond this">
             Chains (hours)
             <input
               type="number"
@@ -77,7 +77,7 @@ function RetentionPanel({
               required
             />
           </label>
-          <label>
+          <label title="How many stored network scans to keep per coordinator">
             Topology snapshots
             <input
               type="number"
@@ -88,7 +88,7 @@ function RetentionPanel({
               required
             />
           </label>
-          <label>
+          <label title="Disk cap for the Benchmark view's raw event store; once hit, the oldest hours are dropped first">
             Raw events (MB)
             <input
               type="number"
@@ -99,7 +99,7 @@ function RetentionPanel({
               required
             />
           </label>
-          <label>
+          <label title="How far back the raw event store reaches, within the disk cap">
             Raw events (hours)
             <input
               type="number"

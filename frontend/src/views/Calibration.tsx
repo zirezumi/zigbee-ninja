@@ -429,13 +429,34 @@ function CandidatesPanel({
         <table className="table">
           <thead>
             <tr>
-              <th>Router</th>
+              <th title="Mains-powered relay devices, ranked most-suitable first: strong link, then the least entangled (fewest bindings and groups)">
+                Router
+              </th>
               <th>Model</th>
-              <th className="num">LQI</th>
-              <th className="num">Links</th>
-              <th className="num">Bindings</th>
-              <th className="num">Groups</th>
-              <th>Read</th>
+              <th
+                className="num"
+                title="Link quality in the latest topology scan (0 to 255, higher is better); a weak link makes a poor benchmark target"
+              >
+                LQI
+              </th>
+              <th className="num" title="Neighbor links seen in the topology scan">
+                Links
+              </th>
+              <th
+                className="num"
+                title="Zigbee bindings on the device; each can fan a read's side effects outward, so fewer is safer to benchmark"
+              >
+                Bindings
+              </th>
+              <th
+                className="num"
+                title="Group memberships; group-entangled devices rank lower for the same reason"
+              >
+                Groups
+              </th>
+              <th title="The attribute the benchmark repeatedly reads: a benign request on the normal command path that actuates nothing">
+                Read
+              </th>
               <th></th>
             </tr>
           </thead>

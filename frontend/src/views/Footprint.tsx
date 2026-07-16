@@ -7,6 +7,21 @@ const CAPABILITY_LABELS: Record<string, string> = {
   mqtt_discovery: "HA entities via MQTT discovery (standing publisher)",
 };
 
+const CAPABILITY_TITLES: Record<string, string> = {
+  z2m_extension:
+    "A single-file extension deployed into Zigbee2MQTT over MQTT. It reports every " +
+    "Zigbee frame Z2M handles (sizes and metadata, never payload contents), is " +
+    "passive, and is removed the same way it was installed.",
+  topology_pull:
+    "Permission to request network scans from Zigbee2MQTT on demand. Scans query " +
+    "every device and load the mesh, so they are rate-limited to one per 15 " +
+    "minutes per coordinator and never run on their own.",
+  mqtt_discovery:
+    "A standing publisher of Home Assistant discovery entities (capacity, latency, " +
+    "alert state) on the shared broker. Revoking deletes every topic it ever " +
+    "claimed.",
+};
+
 const GRANT_CAPABILITIES = new Set(["topology_pull", "mqtt_discovery"]);
 
 function statusChip(tile: Tile): { label: string; className: string } {
@@ -280,7 +295,9 @@ export default function Footprint() {
               const counters = tile.probe.counters ?? {};
               return (
                 <tr key={key}>
-                  <td>{CAPABILITY_LABELS[tile.capability] ?? tile.capability}</td>
+                  <td title={CAPABILITY_TITLES[tile.capability]}>
+                    {CAPABILITY_LABELS[tile.capability] ?? tile.capability}
+                  </td>
                   <td className="mono">{tile.target}</td>
                   <td>
                     <span className={chip.className}>{chip.label}</span>

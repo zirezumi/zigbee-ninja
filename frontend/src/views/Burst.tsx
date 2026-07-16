@@ -295,12 +295,22 @@ export default function Burst() {
           <table className="table">
             <thead>
               <tr>
-                <th>Time</th>
-                <th>Source</th>
-                <th>Kind</th>
-                <th>Dir</th>
-                <th>Target</th>
-                <th className="num">Bytes</th>
+                <th title="Arrival time; wire events carry the capture timestamp">
+                  Time
+                </th>
+                <th title="mqtt = a broker message; wire = a decoded coordinator frame from the Wiretap">
+                  Source
+                </th>
+                <th title="Topic class for MQTT events; frame name for wire events">
+                  Kind
+                </th>
+                <th title="in = arrived at the observer; out = transmitted">Dir</th>
+                <th title="Device, group, or topic suffix the event addressed">
+                  Target
+                </th>
+                <th className="num" title="Payload size on the observed hop">
+                  Bytes
+                </th>
               </tr>
             </thead>
             <tbody>
