@@ -135,6 +135,17 @@ the window's chains as a micro-gantt-lite table — live-validated (both
 sources captured, HA-attributed chains render). Discovery tiles granted by
 the owner on all five instances — entities live in HA. **V1 is
 feature-complete; cosign image signing (§15) at first release.**
+**Post-V1 GUI comprehensibility pass (owner review round, `7ae9d87`)**:
+views are hash-routed (refresh/back preserve navigation; broker Reconfigure
+is a cancellable route); Fleet is a list of full-width rows with axis-labeled
+live rate charts (uPlot) and the broker host:port in the banner; coverage
+chips spell out the tiers instead of T0/T1/T2; every fleet fact and most
+Wiretap/Benchmark/Headroom metrics carry plain-language tooltips; the knee is
+presented as "capacity limit" in ALL user-facing text (metric ids stay
+knee_* — DESIGN §13 terminology note); "Wire tap" → **Wiretap**; "Burst
+inspector" → nav label **Benchmark**; Footprint grant-tile rows no longer
+repeat the extension probe's hooks/drops; HA discovery sensor renamed
+"Capacity utilization" (unique_id stable — verified renamed in live HA).
 Roadmap: README.md.
 
 ## Hard rules
