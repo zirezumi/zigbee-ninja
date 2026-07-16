@@ -148,12 +148,20 @@ def _rates(total_us: float, effective_seconds: float) -> dict:
 def summary(db, seconds: int) -> dict:
     """Ledger rollup over the UTC days intersecting the window. The ledger is
     daily, so the window rounds out to whole days; rates divide by the
-    elapsed wall clock since the earliest returned day began, and the
-    response says which days and denominator it used."""
+    elapsed wall clock since the earliest returned day began, bounded by
+    when ledger recording actually started, and the response says which
+    days and denominator it used."""
     now = time.time()
     days = _days_covering(now - seconds, now)
-    effective_seconds = max(1.0, now - _day_start_epoch(days[0]))
     conn = db.connect()
+    effective_start = _day_start_epoch(days[0])
+    since_row = conn.execute(
+        "SELECT value FROM settings WHERE key = 'ledger_since'"
+    ).fetchone()
+    recording_since = float(json.loads(since_row["value"])) if since_row else None
+    if recording_since is not None:
+        effective_start = max(effective_start, recording_since)
+    effective_seconds = max(1.0, now - effective_start)
     placeholders = ",".join("?" * len(days))
 
     commanders: dict[tuple[str, str], dict] = {}
@@ -224,6 +232,7 @@ def summary(db, seconds: int) -> dict:
         "window_seconds": seconds,
         "days": days,
         "effective_seconds": round(effective_seconds, 1),
+        "recording_since": recording_since,
         "commander_count": len(commander_rows),
         "device_count": len(device_rows),
         "commanders": commander_rows[:TOP_LIMIT],

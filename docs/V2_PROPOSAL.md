@@ -75,8 +75,10 @@ currency every V2 surface trades in.
 > bounds, consistent with §10's posture. `GET /api/ledger` serves the
 > rollup: because the ledger is daily, a window rounds out to whole UTC
 > days, and every rate divides by the elapsed wall clock since the earliest
-> returned day began (the response states both). `GET /api/journal` serves
-> the change journal.
+> returned day began, bounded by when ledger recording started (the
+> response states all three). Group state topics are excluded from
+> per-device costing: they are Zigbee2MQTT's synthetic optimistic state,
+> not mesh frames. `GET /api/journal` serves the change journal.
 
 ## §V2-3 Change journal (the loop's clock)
 

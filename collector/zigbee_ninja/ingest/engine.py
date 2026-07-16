@@ -224,6 +224,10 @@ class Engine:
         return BrokerConfig.from_dict(data)
 
     async def start(self) -> None:
+        # Seed-once mark of when ledger recording began: rate denominators
+        # divide by recorded time, not by days the ledger never saw.
+        if self._config.get("ledger_since") is None:
+            self._config.set("ledger_since", time.time())
         self._flush_task = asyncio.create_task(self._flush_loop())
         self._discovery_task = asyncio.create_task(self._discovery_loop())
         await self.restart_ingest()
@@ -365,9 +369,11 @@ class Engine:
                 return
             klass = self.chains.on_state(base, suffix)
             self.class_rates.record(base, klass)
-            if klass == "autonomous":
+            if klass == "autonomous" and not self.registry.is_group(base, suffix):
                 # Device-initiated report: the per-device side of the ledger
                 # (echoes inside a chain window are priced on the chain).
+                # Group state topics are Zigbee2MQTT's synthetic optimistic
+                # state, not mesh frames, so they carry no airtime.
                 key = (base, ledger.utc_day(time.time()), suffix)
                 self._ledger_autonomous[key] = self._ledger_autonomous.get(key, 0) + 1
         elif kind == "availability" and self.calibration.active:

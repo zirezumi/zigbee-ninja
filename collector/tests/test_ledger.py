@@ -173,6 +173,24 @@ def test_self_mesh_commands_priced_under_self_commander(client):
     assert row["rx_us"] == 0
 
 
+def test_group_state_topics_are_not_priced_as_device_reports(client):
+    engine, clock = _prepare_engine(client)
+    # No open chains: both publishes classify autonomous, but the group topic
+    # is Zigbee2MQTT's synthetic optimistic state, not a mesh frame.
+    engine.on_message("z2m-test/room_group", b'{"state":"ON"}')
+    engine.on_message("z2m-test/motion", b'{"occupancy":true}')
+    clock.now += 20
+    engine.flush_rollups()
+
+    device_rows = {
+        row["device"]
+        for row in client.app.state.db.connect().execute(
+            "SELECT device FROM ledger_device_daily"
+        )
+    }
+    assert device_rows == {"motion"}
+
+
 def test_ledger_api_reports_costs_rates_and_rankings(client):
     engine, clock = _prepare_engine(client)
     engine.on_message("z2m-test/lamp/set", b'{"state":"ON"}')
@@ -183,6 +201,10 @@ def test_ledger_api_reports_costs_rates_and_rankings(client):
 
     view = client.get("/api/ledger?seconds=86400").json()
     assert view["days"] and view["effective_seconds"] > 0
+    # Rates divide by recorded time (seeded at engine start moments ago),
+    # never by day-range hours the ledger did not exist for.
+    assert view["recording_since"] is not None
+    assert view["effective_seconds"] < 120
     assert view["commander_count"] == 1
     row = view["commanders"][0]
     assert row["commander"] == ledger.UNATTRIBUTED

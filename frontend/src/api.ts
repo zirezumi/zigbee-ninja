@@ -561,6 +561,7 @@ export interface LedgerView {
   window_seconds: number;
   days: string[];
   effective_seconds: number;
+  recording_since: number | null;
   commander_count: number;
   device_count: number;
   commanders: LedgerCommanderRow[];
