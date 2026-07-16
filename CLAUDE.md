@@ -276,9 +276,17 @@ claim. Known-honest tension: the advisor flags PASCL's deliberate
 `*_phantom` single-member groups as amplification overhead; the
 economics are true and the design intent is the owner's, so the
 dismissal mechanism (not detector tuning) is the answer.
+**Post-M3 owner round (2026-07-16)**: Recommendations toolbar gained
+Export JSON (downloads exactly the current tab's list as a JSON array)
+and every card a one-click Copy (full record incl. detector label,
+coordinator, finding, saving, evidence; plain-http installations have
+no secure context so copy rides the hidden-textarea fallback, verified
+live against the OS clipboard).
 Next: V2.M4 (rebalancing advisor with burst envelope analysis as the
 core, retry hotspots, migration manifest, applied-recommendation
-verification driving verified/regressed).
+verification driving verified/regressed) plus a drag-and-drop
+coordinator-rebalancing simulator GUI feeding it (owner direction
+2026-07-16).
 Roadmap: README.md.
 
 ## Hard rules
