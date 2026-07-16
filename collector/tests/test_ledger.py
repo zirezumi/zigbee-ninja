@@ -245,6 +245,19 @@ def test_journal_api_returns_parsed_entries(client):
     assert entries[0]["detail"]["ieee"] == "0x05"
 
 
+def test_engine_provider_serves_cost_metrics(client):
+    engine, clock = _prepare_engine(client)
+    engine.on_message("z2m-test/lamp/set", b'{"state":"ON"}')
+    clock.now += 20
+    engine.flush_rollups()
+
+    samples = engine._alert_metrics({"instance_cost_us_per_s", "commander_cost_us_per_s"})
+    assert samples["instance_cost_us_per_s"]["z2m-test"] > 0
+    assert samples["commander_cost_us_per_s"][ledger.UNATTRIBUTED] > 0
+    # Ratios stay absent (frozen) until three completed recording days exist.
+    assert "commander_cost_ratio" not in engine._alert_metrics({"commander_cost_ratio"})
+
+
 def test_ledger_and_journal_require_auth(client):
     assert client.get("/api/ledger").status_code == 401
     assert client.get("/api/journal").status_code == 401
