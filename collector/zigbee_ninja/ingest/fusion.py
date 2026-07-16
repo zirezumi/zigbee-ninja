@@ -30,6 +30,40 @@ OFFSET_EWMA_ALPHA = 0.1
 
 
 _UNMATCHED_SENDERS_CAP = 512
+_EXPIRED_ALIGN_WINDOW_SECONDS = 8.0
+_EXPIRED_RING = 64
+
+
+def _record_seq_delta(state: _InstanceState, side: int, arrival_ts: float, key: tuple) -> None:
+    """Align an expired-unmatched entry with a near-in-time expired entry from
+    the same sender on the OTHER side and histogram (probe_seq − wire_seq)
+    mod 256. A histogram dominated by one value = a systematic sequence shift
+    between the tiers; a flat histogram = the unmatched entries are simply
+    frames the other tier never saw."""
+    nwk, seq = key
+    own = state.expired_wire if side == 0 else state.expired_probe
+    other = state.expired_probe if side == 0 else state.expired_wire
+    # Closest-in-time counterpart from the same sender, consumed one-to-one so
+    # a burst of expiries pairs up cleanly instead of smearing onto one entry.
+    best: tuple[float, int, int] | None = None
+    for index, (other_ts, other_nwk, other_seq) in enumerate(other):
+        if other_nwk != nwk:
+            continue
+        gap = abs(other_ts - arrival_ts)
+        if gap > _EXPIRED_ALIGN_WINDOW_SECONDS:
+            continue
+        if best is None or gap < best[0]:
+            best = (gap, index, other_seq)
+    if best is not None:
+        _gap, index, other_seq = best
+        del other[index]
+        probe_seq, wire_seq = (other_seq, seq) if side == 0 else (seq, other_seq)
+        delta = (probe_seq - wire_seq) % 256
+        state.seq_delta_histogram[delta] = state.seq_delta_histogram.get(delta, 0) + 1
+        return
+    own.append((arrival_ts, nwk, seq))
+    while len(own) > _EXPIRED_RING:
+        own.popleft()
 
 
 @dataclass
@@ -47,6 +81,13 @@ class _InstanceState:
     # visibility (frames one tier never sees).
     unmatched_by_nwk: dict[int, list[int]] = field(default_factory=dict)
     matched_by_nwk: dict[int, int] = field(default_factory=dict)
+    # Expired-unmatched entries kept briefly per side so a probe expiry can be
+    # aligned with a near-in-time wire expiry from the same sender: the
+    # (probe_seq − wire_seq) mod 256 histogram exposes any systematic
+    # sequence shift between the tiers in one glance.
+    expired_wire: deque = field(default_factory=deque)  # (arrival_ts, nwk, seq)
+    expired_probe: deque = field(default_factory=deque)
+    seq_delta_histogram: dict[int, int] = field(default_factory=dict)
     offset_ewma_ms: float | None = None
     offset_samples: int = 0
     overflow_drops: int = 0
@@ -129,7 +170,7 @@ class FusionTracker:
             expired = []
             for key, queue in pending.items():
                 while queue and now - queue[0][0] > WATERMARK_SECONDS:
-                    queue.popleft()
+                    entry = queue.popleft()
                     state.outcomes.append((now, kind))
                     if (
                         key[0] in state.unmatched_by_nwk
@@ -137,6 +178,7 @@ class FusionTracker:
                     ):
                         counts = state.unmatched_by_nwk.setdefault(key[0], [0, 0])
                         counts[side] += 1
+                    _record_seq_delta(state, side, entry[0], key)
                 if not queue:
                     expired.append(key)
             for key in expired:
@@ -197,5 +239,11 @@ class FusionTracker:
                     # Cumulative since start: which senders fail to fuse, and
                     # from which side — the fusion-quality drill-down.
                     "top_unmatched": top_unmatched,
+                    "seq_delta_histogram": dict(
+                        sorted(
+                            state.seq_delta_histogram.items(),
+                            key=lambda kv: -kv[1],
+                        )[:8]
+                    ),
                 }
         return result

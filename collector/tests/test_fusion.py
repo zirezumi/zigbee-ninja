@@ -85,6 +85,20 @@ def test_top_unmatched_attributes_failures_per_sender_and_side():
     ]
 
 
+def test_seq_delta_histogram_exposes_systematic_shift():
+    now = [1000.0]
+    fusion = make(now)
+    # The same sender expires unmatched on both sides with sequences that
+    # differ by a constant 100 — the histogram must say so.
+    for offset in range(4):
+        fusion.on_wire("z2m-test", 5, 10 + offset, pcap_ts=1000.0 + offset / 10)
+        fusion.on_probe("z2m-test", 5, 110 + offset, probe_ts=1000.0 + offset / 10)
+    now[0] = 1006.0
+    view = fusion.snapshot()["z2m-test"]
+    assert view["matched_5m"] == 0
+    assert view["seq_delta_histogram"].get(100, 0) >= 3
+
+
 def test_same_key_twice_pairs_each_occurrence_once():
     now = [1000.0]
     fusion = make(now)
