@@ -9,6 +9,8 @@ import {
   HeadroomInstance,
   HeadroomView,
   InstanceInfo,
+  JournalEntry,
+  JournalView,
   LatencyStats,
   ProbeStats,
   Tile,
@@ -333,6 +335,106 @@ function InstanceRow({
   );
 }
 
+const JOURNAL_KIND_LABELS: Record<string, string> = {
+  device_added: "Device added",
+  device_removed: "Device removed",
+  device_renamed: "Device renamed",
+  device_rejoined: "Device rejoined",
+  group_added: "Group added",
+  group_removed: "Group removed",
+  group_renamed: "Group renamed",
+  group_membership_changed: "Group membership changed",
+  z2m_version_changed: "Zigbee2MQTT updated",
+  channel_changed: "Radio channel changed",
+  coordinator_firmware_changed: "Coordinator firmware changed",
+};
+
+function ago(ts: number): string {
+  const elapsed = Math.max(0, Date.now() / 1000 - ts);
+  if (elapsed < 60) return "just now";
+  if (elapsed < 3600) return `${Math.round(elapsed / 60)} min ago`;
+  if (elapsed < 86400) return `${Math.round(elapsed / 3600)} h ago`;
+  return `${Math.round(elapsed / 86400)} d ago`;
+}
+
+function journalDetail(entry: JournalEntry): string {
+  const detail = entry.detail;
+  const parts: string[] = [];
+  if (typeof detail.from !== "undefined" && typeof detail.to !== "undefined") {
+    parts.push(`${String(detail.from)} → ${String(detail.to)}`);
+  }
+  if (entry.kind === "device_added") {
+    const label = [detail.vendor, detail.model].filter(Boolean).join(" ");
+    if (label) parts.push(label);
+    if (detail.moved_from) parts.push(`moved from ${String(detail.moved_from)}`);
+  }
+  if (entry.kind === "group_membership_changed") {
+    const added = (detail.added as string[] | undefined) ?? [];
+    const removed = (detail.removed as string[] | undefined) ?? [];
+    if (added.length) parts.push(`+${added.join(", +")}`);
+    if (removed.length) parts.push(`-${removed.join(", -")}`);
+    parts.push(`now ${String(detail.size)} members`);
+  }
+  return parts.join(" · ");
+}
+
+/** Change journal: configuration changes are the points where traffic
+ * patterns can shift, so they anchor every before/after comparison. */
+function RecentChanges() {
+  const [entries, setEntries] = useState<JournalEntry[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const data = await api<JournalView>("/api/journal?seconds=604800&limit=15");
+        if (alive) setEntries(data.entries);
+      } catch {
+        // panel simply stays empty until the next poll succeeds
+      }
+    };
+    void load();
+    const interval = window.setInterval(() => void load(), 30000);
+    return () => {
+      alive = false;
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  return (
+    <div className="panel">
+      <p
+        className="panel-kicker"
+        title="Watched from the Zigbee2MQTT registries: no polling, no mesh traffic. Each entry marks a point where traffic patterns may have shifted."
+      >
+        Recent changes (7 days)
+      </p>
+      {entries.length === 0 ? (
+        <p className="hint">
+          No configuration changes seen. Devices joining or leaving, renames, group
+          edits, channel moves, and Zigbee2MQTT or firmware upgrades appear here.
+        </p>
+      ) : (
+        <table className="table">
+          <tbody>
+            {entries.map((entry, index) => (
+              <tr key={`${entry.ts}/${index}`}>
+                <td>{JOURNAL_KIND_LABELS[entry.kind] ?? entry.kind}</td>
+                <td className="mono">{entry.subject}</td>
+                <td className="mono">{entry.instance}</td>
+                <td>{journalDetail(entry)}</td>
+                <td className="num" title={new Date(entry.ts * 1000).toLocaleString()}>
+                  {ago(entry.ts)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 interface FleetProps {
   onReconfigure: () => void;
   brokerInfo: BrokerView | null;
@@ -523,6 +625,8 @@ export default function Fleet({ onReconfigure, brokerInfo }: FleetProps) {
           })}
         </div>
       )}
+
+      <RecentChanges />
     </>
   );
 }

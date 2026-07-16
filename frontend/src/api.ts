@@ -526,6 +526,70 @@ export interface RedundantRow {
   label?: string;
 }
 
+export interface LedgerParams {
+  n_routers: number;
+  avg_tx: number;
+  avg_tx_measured: boolean;
+  retry_rate: number;
+  retry_rate_measured: boolean;
+}
+
+export interface LedgerCommanderRow {
+  instance: string;
+  commander: string;
+  chains: number;
+  tx_us: number;
+  rx_us: number;
+  total_us: number;
+  us_per_s: number;
+  pct_of_budget: number;
+  provenance: string;
+  params: LedgerParams;
+}
+
+export interface LedgerDeviceRow {
+  instance: string;
+  device: string;
+  publishes: number;
+  autonomous_us: number;
+  us_per_s: number;
+  pct_of_budget: number;
+  provenance: string;
+}
+
+export interface LedgerView {
+  window_seconds: number;
+  days: string[];
+  effective_seconds: number;
+  commander_count: number;
+  device_count: number;
+  commanders: LedgerCommanderRow[];
+  devices: LedgerDeviceRow[];
+  totals: {
+    chains: number;
+    tx_us: number;
+    rx_us: number;
+    autonomous_publishes: number;
+    autonomous_us: number;
+    total_us: number;
+    us_per_s: number;
+    pct_of_budget: number;
+  };
+}
+
+export interface JournalEntry {
+  ts: number;
+  instance: string;
+  kind: string;
+  subject: string;
+  detail: Record<string, unknown>;
+}
+
+export interface JournalView {
+  window_seconds: number;
+  entries: JournalEntry[];
+}
+
 export interface RuntimeSettings {
   retention_rollup_days: number;
   retention_chains_hours: number;
