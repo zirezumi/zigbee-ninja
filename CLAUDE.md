@@ -239,10 +239,46 @@ master enable/disable-all checkbox landed in the Alerts rules header
 open events like a per-rule disable), and the standing tooltip backlog
 was cleared (Calibration candidates columns, every Alerts editor field,
 Benchmark event columns, Settings knobs, Permissions capability names).
-Next: V2.M3 (recommendation engine; reference-deployment detector order
-pacing → groupcast economics → redundancy costing → reporting advisor;
-Recommendations view; counterfactual replay; `recommendations_open` HA
-sensor via the granted discovery tiles).
+**V2.M3 BUILT + DEPLOYED + LIVE-VALIDATED 2026-07-16 (same day)**:
+recommendation engine (`recommend/` package). Migration 12:
+`recommendations` table (frozen §V2-5 JSON shape; stable ids
+sha1(detector|instance|subject) so re-detection lands on the same row)
+plus `chains.payload_digest` (digest only, never contents). Store
+lifecycle open/dismissed/applied/verified/regressed: sync reconciles
+open rows, deletes stale-open, reopens a dismissal only on material
+change (1.5x on the fingerprint), and never touches
+applied/verified/regressed (verification is M4's job). Engine rides the
+flush loop on a worker thread: first pass 5 min after start, hourly
+after, passes serialized behind a run lock, each detector
+crash-isolated. Detectors in the ratified order: pacing (command bursts
+vs the measured spread/single knees; p95 predictions interpolate this
+mesh's own calibration latency curve; stale-environment knees downgrade
+confidence and say recalibrate), groupcast economics (same-payload
+fan-out collapse via chain digests, so it only sees post-migration
+traffic; amplification losers; co-fired containing groups), redundancy
+costing (recorded duplicate chains re-priced in ledger currency),
+reporting advisor (hardware-peer medians, fleet-median fallback,
+presence hardware downgraded one step). Surfaces: GET
+/api/recommendations, POST .../run, POST .../{id}/state (verdict states
+rejected 400), Recommendations view (state tabs with counts, scan-now,
+plain-language evidence expanders, dismiss/apply/reopen),
+`recommendations_open` per-instance HA sensors on the granted discovery
+tiles. Live validation on real PASCL traffic: 34 findings across all
+four detectors, reconcile updates in place without id churn, lifecycle
+round-trip clean, HA sensor states sum exactly to the open queue. Two
+defects only live data exposed, fixed same-day: the reporting advisor
+read the raw Z2M nested `definition` where the registry stores
+vendor/model flattened (every device keyed to the unknown-hardware
+placeholder and the whole fleet became one 142-device "peer group";
+unknown hardware now never forms a peer group), and one-member groups
+were described with plural phrasing and a meaningless simultaneity
+claim. Known-honest tension: the advisor flags PASCL's deliberate
+`*_phantom` single-member groups as amplification overhead; the
+economics are true and the design intent is the owner's, so the
+dismissal mechanism (not detector tuning) is the answer.
+Next: V2.M4 (rebalancing advisor with burst envelope analysis as the
+core, retry hotspots, migration manifest, applied-recommendation
+verification driving verified/regressed).
 Roadmap: README.md.
 
 ## Hard rules
