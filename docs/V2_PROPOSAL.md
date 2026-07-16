@@ -245,6 +245,26 @@ supports changing."*
 > forces a pass. Finalized chains now persist a 12-character payload
 > digest (never contents): the identity evidence the groupcast detectors
 > join on.
+>
+> **Implementation (V2.M3, pacing advisor):** bursts are runs of recorded
+> command chains with gaps under 1 s. A burst flags when its peak 1 s rate
+> reaches 80% of the instance's measured capacity limit (the spread-mode
+> knee, read per instance from the calibration records, never assumed) or
+> when commands to one device exceed the measured per-device service
+> ceiling (the single-target knee). Findings group by (instance,
+> commander); a burst without a 60% majority commander reports as
+> "(multiple commanders)". The proposed stagger paces the worst burst to
+> half the limit. The predicted p95 improvement interpolates the
+> latency-vs-load points this mesh has produced (calibration per-step
+> curves plus natural 10 s wire-latency rollups); rates beyond every
+> observed point report the highest measured point as a floor and tag the
+> saving `modeled`. Pacing recovers no airtime, so `saving.us_per_s` is 0
+> and the saving is the latency number (`saving.p95_ms`). Confidence
+> drops to medium when the knee's calibration environment no longer
+> matches the running Zigbee2MQTT or firmware version (the finding then
+> says to consider recalibrating), when bursts recur fewer than three
+> times, or when only a per-device limit exists to judge aggregate
+> pressure against.
 
 ## §V2-6 Verification (what closes the loop)
 

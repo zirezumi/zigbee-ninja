@@ -11,38 +11,17 @@ crashed detector's rows are left exactly as its last good run wrote them.
 
 from __future__ import annotations
 
-import sqlite3
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 
 from ..store.db import Database
+from . import pacing
+from .context import DetectorContext
 from .store import Finding, RecommendationStore
 
 RUN_INTERVAL_SECONDS = 3600.0
 FIRST_RUN_DELAY_SECONDS = 300.0
 LOOKBACK_SECONDS = 24 * 3600.0
-
-
-@dataclass
-class DetectorContext:
-    """Everything a detector may read. Registry accessors are snapshot-style
-    (whole-list replacement on refresh), safe to call from the worker thread."""
-
-    conn: sqlite3.Connection
-    now: float
-    lookback_seconds: float
-    instances: list[str]
-    knees: dict  # headroom.latest_knees(): {instance: {mode: {...}}}
-    is_group: Callable[[str, str], bool]
-    group_members: Callable[[str, str], list[str]]
-    groups: Callable[[str], list[dict]]
-    devices: Callable[[str], list[dict]]
-    router_count_for: Callable[[str], int]
-    pricing: Callable[[str], tuple[float | None, float | None]]
-
-    def window_start(self) -> float:
-        return self.now - self.lookback_seconds
 
 
 class RecommendationEngine:
@@ -61,7 +40,7 @@ class RecommendationEngine:
         self._clock = clock
         self.store = RecommendationStore(db, clock=clock)
         # Ordered detector roster: modules exposing NAME and detect(ctx).
-        self._detectors: list = []
+        self._detectors: list = [pacing]
         self._started_at = clock()
         self._last_run_at: float | None = None
         self._last_result: dict | None = None
@@ -77,11 +56,13 @@ class RecommendationEngine:
     def _context(self) -> DetectorContext:
         from ..capacity import headroom
 
+        snapshot = self._registry.snapshot()
         return DetectorContext(
             conn=self._db.connect(),
             now=self._clock(),
             lookback_seconds=LOOKBACK_SECONDS,
-            instances=[i["base_topic"] for i in self._registry.snapshot()],
+            instances=[i["base_topic"] for i in snapshot],
+            instance_info={i["base_topic"]: i for i in snapshot},
             knees=headroom.latest_knees(self._db),
             is_group=self._registry.is_group,
             group_members=self._registry.group_members,
