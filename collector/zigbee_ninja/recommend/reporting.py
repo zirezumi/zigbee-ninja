@@ -81,15 +81,19 @@ def detect(ctx: DetectorContext) -> list[Finding]:
     if not spend:
         return []
 
-    # Registry join: hardware identity per device name, fleet-wide.
+    # Registry join: hardware identity per device name, fleet-wide. The
+    # registry stores vendor/model flattened onto the device dict (not the
+    # raw Z2M nested `definition`). Devices with unknown hardware never form
+    # a peer group: "same hardware" requires knowing the hardware.
     models: dict[tuple[str, str], tuple[str, str]] = {}
     peers_by_model: dict[tuple[str, str], list[tuple[str, str]]] = {}
     for instance in ctx.instances:
         for device in ctx.devices(instance):
             name = device.get("friendly_name")
-            definition = device.get("definition") or {}
-            key = (definition.get("vendor") or "?", definition.get("model") or "?")
-            if name:
+            vendor = device.get("vendor")
+            model = device.get("model")
+            if name and vendor and model:
+                key = (vendor, model)
                 models[(instance, name)] = key
                 peers_by_model.setdefault(key, []).append((instance, name))
 
@@ -133,7 +137,9 @@ def detect(ctx: DetectorContext) -> list[Finding]:
         saved_us_per_s = rate - (reference or 0.0)
         if saved_us_per_s < SAVING_FLOOR_US_PER_S:
             continue
-        presence = _presence_like(device, comparison.get("model", ""))
+        # Hardware identity feeds the presence check even when the finding
+        # itself fell through to the fleet comparison.
+        presence = _presence_like(device, " ".join(model_key or ()))
         per_day = entry["publishes"] / effective_seconds * 86400.0
         if comparison["compared_to"] == "peers":
             confidence = "medium" if presence else "high"

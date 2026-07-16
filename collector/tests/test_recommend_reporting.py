@@ -10,9 +10,13 @@ LOOKBACK = 86400.0
 
 
 def _device(name, vendor="Acme", model="Sensor-1"):
+    # Mirrors the registry's flattened device shape (registry._on_devices),
+    # which is what ctx.devices() actually serves: vendor/model live on the
+    # device dict, not under a nested Z2M-style `definition`.
     return {
         "friendly_name": name,
-        "definition": {"vendor": vendor, "model": model},
+        "vendor": vendor,
+        "model": model,
     }
 
 
@@ -81,6 +85,39 @@ def test_presence_device_downgrades_to_low_confidence(tmp_path):
 
     findings = reporting.detect(ctx)
     (finding,) = [f for f in findings if f.subject == "laundry_presence_dimmer"]
+    assert finding.confidence == "low"
+    assert "presence sensing" in finding.finding
+
+
+def test_unknown_hardware_never_forms_a_peer_group(tmp_path):
+    # Devices whose vendor/model the registry could not resolve must not be
+    # lumped into one giant "same hardware" cohort; the loud one falls back
+    # to the fleet comparison (medium confidence), never a peers claim.
+    devices = [_device(f"mystery_{i}", vendor=None, model=None) for i in range(8)]
+    ctx = _context(tmp_path, devices)
+    _spend(ctx, "mystery_0", 600.0, publishes=15000)
+    for i in range(1, 8):
+        _spend(ctx, f"mystery_{i}", 15.0, publishes=200)
+
+    findings = reporting.detect(ctx)
+    (finding,) = [f for f in findings if f.subject == "mystery_0"]
+    assert finding.evidence[0]["compared_to"] == "fleet"
+    assert finding.confidence == "medium"
+
+
+def test_fleet_branch_uses_model_for_presence_hint(tmp_path):
+    # A presence-hardware device that lands in the FLEET branch (too few
+    # same-model peers) still gets the presence downgrade from its model.
+    devices = [_device("closet_sensor", vendor="Aqara", model="RTCZCGQ11LM mmWave")]
+    devices += [_device(f"bulb_{i}", model="Bulb-2") for i in range(6)]
+    ctx = _context(tmp_path, devices)
+    _spend(ctx, "closet_sensor", 800.0, publishes=24000)
+    for i in range(6):
+        _spend(ctx, f"bulb_{i}", 20.0, publishes=300)
+
+    findings = reporting.detect(ctx)
+    (finding,) = [f for f in findings if f.subject == "closet_sensor"]
+    assert finding.evidence[0]["compared_to"] == "fleet"
     assert finding.confidence == "low"
     assert "presence sensing" in finding.finding
 
