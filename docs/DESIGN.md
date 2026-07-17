@@ -667,6 +667,12 @@ engineering term.
    commander bursting on several coordinators at once) with the combined
    rate a consolidation would concentrate on one mesh. Benchmark windows
    are excluded throughout (§11.5).
+   The **scenario engine** (V2_PROPOSAL.md §V2-11) ships ahead of its
+   Rebalance view: `POST /api/scenario/price` prices a what-if move set
+   from recorded traffic (chain relocation, census-shift repricing of
+   existing groupcasts, both group-split resolutions, T0 burst-overlay
+   verdicts against the calibrated limits, channel pooling, radio reach
+   as an explicit unknown), read-only and provenance-tagged throughout.
 3. **Attribution explorer**: pivotable bucket × device-class × commander matrix;
    top-N devices/automations; the redundant-command report.
 4. **Wiretap**: per-coordinator wire-tier telemetry: agent/flow health

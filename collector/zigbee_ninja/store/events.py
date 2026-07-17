@@ -209,6 +209,7 @@ class RawEventLog:
         source: str | None,
         kinds: tuple[str, ...] | None,
         direction: str | None,
+        targets: tuple[str, ...] | None = None,
     ) -> tuple[str, list]:
         clauses: list[str] = []
         params: list = []
@@ -221,6 +222,9 @@ class RawEventLog:
         if kinds:
             clauses.append(f"kind IN ({','.join('?' * len(kinds))})")
             params.extend(kinds)
+        if targets:
+            clauses.append(f"target IN ({','.join('?' * len(targets))})")
+            params.extend(targets)
         return (" AND " + " AND ".join(clauses)) if clauses else "", params
 
     def rate_bins(
@@ -233,11 +237,12 @@ class RawEventLog:
         source: str | None = None,
         kinds: tuple[str, ...] | None = None,
         direction: str | None = None,
+        targets: tuple[str, ...] | None = None,
     ) -> list[tuple[int, int]]:
         """Fixed-bin event counts for one instance, optionally filtered by
-        source, kind, and direction. Bins index from ``start`` in steps of
-        ``bucket_s``; only nonempty bins return."""
-        filter_sql, filter_params = self._filters(source, kinds, direction)
+        source, kind, direction, and exact target topics. Bins index from
+        ``start`` in steps of ``bucket_s``; only nonempty bins return."""
+        filter_sql, filter_params = self._filters(source, kinds, direction, targets)
         with self._db_lock:
             rows = self._conn.execute(
                 f"SELECT CAST(FLOOR((ts - ?) / ?) AS BIGINT) AS bin, COUNT(*) AS n "
@@ -257,10 +262,11 @@ class RawEventLog:
         source: str | None = None,
         kinds: tuple[str, ...] | None = None,
         direction: str | None = None,
+        targets: tuple[str, ...] | None = None,
         limit: int = 50_000,
     ) -> list[float]:
         """Sorted event timestamps in the window under the same filters."""
-        filter_sql, filter_params = self._filters(source, kinds, direction)
+        filter_sql, filter_params = self._filters(source, kinds, direction, targets)
         with self._db_lock:
             rows = self._conn.execute(
                 f"SELECT ts FROM {self._from_clause(start, end)} "

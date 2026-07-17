@@ -22,6 +22,7 @@ from ..capacity import airtime as airtime_model
 from ..capacity import envelope as envelope_model
 from ..capacity import headroom as headroom_model
 from ..capacity import ledger as ledger_module
+from ..capacity import scenario as scenario_model
 from ..ingest import topology as topology_module
 from ..ingest.engine import Engine
 from ..ingest.hacontrol import HaConfig, test_ha
@@ -80,6 +81,19 @@ class CalibrationBulkPreviewRequest(BaseModel):
 
 class CalibrationBulkRunRequest(BaseModel):
     authorization: str
+
+
+class ScenarioMove(BaseModel):
+    kind: str  # device | group
+    subject: str
+    from_instance: str
+    to_instance: str
+    group_resolution: str | None = None  # unicasts | new_group
+
+
+class ScenarioRequest(BaseModel):
+    moves: list[ScenarioMove]
+    window_seconds: int = scenario_model.DEFAULT_WINDOW_SECONDS
 
 
 class AlertRuleBody(BaseModel):
@@ -426,6 +440,27 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
         return envelope_model.summarize(
             engine.events, db, seconds, engine.registry.snapshot()
         )
+
+    @app.post("/api/scenario/price")
+    def scenario_price(request: Request, body: ScenarioRequest) -> dict:
+        """Price a what-if move set from recorded traffic (V2_PROPOSAL.md
+        §V2-11). Read-only analysis: nothing transmits on the mesh."""
+        require_user(request)
+        engine.flush_rollups()
+        try:
+            return scenario_model.price_scenario(
+                engine.events,
+                db,
+                engine.registry,
+                engine.tap.pricing_params,
+                lambda base: (
+                    engine.topology.latest(base, include_raw=True).get(base) or {}
+                ),
+                [move.model_dump() for move in body.moves],
+                window_seconds=body.window_seconds,
+            )
+        except scenario_model.ScenarioError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/api/topology")
     def topology_get(request: Request, instance: str | None = None, full: bool = False) -> dict:
