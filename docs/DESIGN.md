@@ -549,6 +549,19 @@ A guided wizard, per coordinator, per-run authorized (grants never persist):
    are flagged in history and excluded from utilization series (the reads and
    their echoes are attributed `self`). Version/firmware changes trigger a
    "recalibrate?" suggestion.
+6. **Meter integrity**: the driver measures its own pacing: how late every
+   pacing sleep woke up. A run whose pacing degraded past bounds (cumulative
+   lateness above a small fraction of a step, or any single stall of a
+   second or more) completes **without recording a knee** and says why: from
+   inside such a run, a saturated pipeline and a stalled collector are
+   indistinguishable, and an honest meter refuses to guess. Each record also
+   carries the ambient command/report rates observed during the run, and the
+   dry-run preview warns when the recent window is noisy. Two standing
+   defenses back this: storage flushes run off the collector's event loop
+   (their commits once stalled it for seconds, and the ramp driver, echo
+   RTT stamps, and every time-sensitive consumer share that loop), and a
+   continuous loop-lag monitor feeds a self-health alert (§14) so runtime
+   interference is visible before it can masquerade as mesh truth.
 
 ## §12 Storage & data model
 
@@ -713,10 +726,12 @@ reading to clear.
 
 Built-in rules seed exactly once: user edits and deletions are durable.
 Self-health rules (probe heartbeat stale, tap agent down, broker/HA link
-down, layout mismatch) ship **enabled**: they only fire when something the
-user deployed stops reporting. Capacity rules ship **disabled** with
-placeholder thresholds: utilization and latency norms are per-installation,
-so the user opts in from the Alerts view.
+down, layout mismatch, collector event-loop lag) ship **enabled**: they
+only fire when something the user deployed stops reporting, or when the
+collector's own runtime degrades enough to distort what it measures.
+Capacity rules ship **disabled** with placeholder thresholds: utilization
+and latency norms are per-installation, so the user opts in from the
+Alerts view.
 
 Delivery: the GUI notification center (active alerts ride the 1 s fleet
 stream), plus the **MQTT discovery publisher**: headline metrics and alert

@@ -337,6 +337,13 @@ export interface CalibrationRecord {
   knee_eps: number | null;
   steps: CalibrationStep[];
   knee: CalibrationKnee | null;
+  verdict: string | null;
+  ambient: {
+    commands: number;
+    state_reports: number;
+    commands_per_s: number;
+    state_per_s: number;
+  } | null;
   abort_reason: string | null;
   environment: Record<string, string | null>;
   rtt_source: string | null;

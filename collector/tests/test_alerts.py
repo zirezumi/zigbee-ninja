@@ -66,7 +66,14 @@ def test_seeding_is_idempotent_and_deletions_are_durable(harness):
     rules = harness.manager.rules()
     assert len(rules) == len(SEED_RULES)
     enabled = {rule["builtin"] for rule in rules if rule["enabled"]}
-    assert enabled == {"probe_stale", "tap_down", "broker_down", "ha_down", "layout_mismatch"}
+    assert enabled == {
+        "probe_stale",
+        "tap_down",
+        "broker_down",
+        "ha_down",
+        "layout_mismatch",
+        "collector_loop_lag",
+    }
 
     # A second manager on the same store must not duplicate the seeds.
     harness.restart()

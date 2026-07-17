@@ -162,7 +162,13 @@ def test_new_builtins_seed_on_an_already_seeded_install(db):
         assert not builtins[name]["enabled"]
     # Only the new arrivals were inserted; the pre-V2 names were respected.
     assert set(config.get("alert_rules_seeded")) >= set(pre_v2)
-    assert len(builtins) == 4
+    assert set(builtins) == {
+        "commander_cost_regression",
+        "device_cost_regression",
+        "commander_cost_budget",
+        "instance_cost_budget",
+        "collector_loop_lag",
+    }
 
 
 def test_summary_carries_trends_and_instance_rollup(db):

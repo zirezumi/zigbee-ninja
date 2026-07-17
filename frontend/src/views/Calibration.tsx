@@ -530,6 +530,13 @@ function HistoryPanel({
                       capacity limit {record.knee.censored ? "≥" : ""}
                       {record.knee.eps}/s
                     </strong>
+                  ) : record.verdict ? (
+                    <span
+                      className="chip bad"
+                      title={`${record.verdict}. The collector's own event loop stalled during the run, so a saturated pipeline and a stalled meter were indistinguishable.`}
+                    >
+                      measurement unreliable: collector stalled
+                    </span>
                   ) : (
                     <span className="chip warn">no limit determined</span>
                   )
@@ -555,6 +562,15 @@ function HistoryPanel({
                 )}
               </summary>
               {record.abort_reason && <p className="error">{record.abort_reason}</p>}
+              {record.ambient && (
+                <p
+                  className="hint"
+                  title="Instance traffic that was not the benchmark's own while the run was active; heavy ambient competes with the measurement"
+                >
+                  Ambient during the run: {record.ambient.commands_per_s}/s commands ·{" "}
+                  {record.ambient.state_per_s}/s state reports
+                </p>
+              )}
               <RttCurve steps={record.steps} />
               <StepsTable steps={record.steps} />
             </details>

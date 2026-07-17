@@ -10,6 +10,7 @@ traffic arrives with the T1/T2 tiers.
 from __future__ import annotations
 
 import hashlib
+import threading
 import time
 from collections import deque
 from collections.abc import Callable
@@ -68,6 +69,10 @@ class ChainTracker:
     ):
         self._clock = clock
         self._resolve_members = resolve_members or (lambda _instance, _target: [])
+        # Ingest runs on the event loop while drain_finalized is called from
+        # flush and API worker threads; the mutex keeps _expire's rebuilds
+        # atomic against per-message updates.
+        self._mutex = threading.Lock()
         self._open: dict[tuple[str, str], deque[Chain]] = {}
         self._claims: dict[tuple[str, str], deque[Chain]] = {}
         self._finalized: list[Chain] = []
@@ -89,52 +94,56 @@ class ChainTracker:
             payload_digest=digest,
             client=client,
         )
-        if verb == "set":
-            key = (instance, target)
-            previous = self._recent_payloads.get(key)
-            if previous is not None:
-                prev_ts, prev_digest, _prev_chain = previous
-                if prev_digest == digest and now - prev_ts <= REDUNDANT_WINDOW:
-                    chain.redundant = True
-            self._recent_payloads[key] = (now, digest, chain)
+        with self._mutex:
+            if verb == "set":
+                key = (instance, target)
+                previous = self._recent_payloads.get(key)
+                if previous is not None:
+                    prev_ts, prev_digest, _prev_chain = previous
+                    if prev_digest == digest and now - prev_ts <= REDUNDANT_WINDOW:
+                        chain.redundant = True
+                self._recent_payloads[key] = (now, digest, chain)
 
-        self._open.setdefault((instance, target), deque()).append(chain)
-        for member in self._resolve_members(instance, target):
-            self._claims.setdefault((instance, member), deque()).append(chain)
-        self._expire(now)
+            self._open.setdefault((instance, target), deque()).append(chain)
+            for member in self._resolve_members(instance, target):
+                self._claims.setdefault((instance, member), deque()).append(chain)
+            self._expire(now)
         return chain
 
     def on_state(self, instance: str, name: str) -> str:
         """Classify a state publish: 'provoked' if an open chain claims it."""
         now = self._clock()
-        self._expire(now)
-        for key in ((instance, name),):
-            for registry in (self._open, self._claims):
-                chains = registry.get(key)
-                if not chains:
-                    continue
-                for chain in reversed(chains):
-                    if not chain.finalized and now - chain.opened_at <= chain.window():
-                        chain.echoes += 1
-                        if chain.first_echo_ms is None:
-                            chain.first_echo_ms = (now - chain.opened_at) * 1000.0
-                        return "provoked"
+        with self._mutex:
+            self._expire(now)
+            for key in ((instance, name),):
+                for registry in (self._open, self._claims):
+                    chains = registry.get(key)
+                    if not chains:
+                        continue
+                    for chain in reversed(chains):
+                        if not chain.finalized and now - chain.opened_at <= chain.window():
+                            chain.echoes += 1
+                            if chain.first_echo_ms is None:
+                                chain.first_echo_ms = (now - chain.opened_at) * 1000.0
+                            return "provoked"
         return "autonomous"
 
     def attribute_client(self, instance: str, target: str, client: str) -> bool:
         """Backfill the client id onto the newest unattributed chain for a target."""
-        chains = self._open.get((instance, target))
-        if not chains:
-            return False
-        for chain in reversed(chains):
-            if chain.client is None:
-                chain.client = client
-                return True
+        with self._mutex:
+            chains = self._open.get((instance, target))
+            if not chains:
+                return False
+            for chain in reversed(chains):
+                if chain.client is None:
+                    chain.client = client
+                    return True
         return False
 
     # -- finalization ---------------------------------------------------------
 
     def _expire(self, now: float) -> None:
+        # Callers hold self._mutex.
         for registry in (self._open, self._claims):
             for key in list(registry):
                 chains = registry[key]
@@ -154,10 +163,12 @@ class ChainTracker:
             del self._recent_payloads[key]
 
     def drain_finalized(self) -> list[Chain]:
-        self._expire(self._clock())
-        drained = self._finalized
-        self._finalized = []
-        return drained
+        with self._mutex:
+            self._expire(self._clock())
+            drained = self._finalized
+            self._finalized = []
+            return drained
 
     def open_count(self) -> int:
-        return sum(len(chains) for chains in self._open.values())
+        with self._mutex:
+            return sum(len(chains) for chains in self._open.values())

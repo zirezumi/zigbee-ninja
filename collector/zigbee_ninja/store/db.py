@@ -223,6 +223,10 @@ class Database:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA foreign_keys=ON")
+            # Writers run on the flush worker, API threads, and the detector
+            # thread; WAL allows one at a time, so brief collisions wait
+            # instead of raising SQLITE_BUSY.
+            conn.execute("PRAGMA busy_timeout=5000")
             self._local.conn = conn
         return conn
 

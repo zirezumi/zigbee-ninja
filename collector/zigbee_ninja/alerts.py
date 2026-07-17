@@ -62,6 +62,16 @@ METRICS: dict[str, dict] = {
         "unit": "agents",
         "description": "Connected ninja-tap capture daemons",
     },
+    "collector_loop_lag_ms": {
+        "scope": "global",
+        "kind": "gauge",
+        "unit": "ms",
+        "description": (
+            "Worst scheduling stall inside the collector's own event loop over "
+            "the last minute; sustained stalls distort time-sensitive "
+            "measurements (benchmark pacing, echo latency)"
+        ),
+    },
     "probe_heartbeat_age_s": {
         "scope": "instance",
         "kind": "gauge",
@@ -179,6 +189,18 @@ SEED_RULES: list[dict] = [
         "clear_threshold": None,
         # A collector redeploy costs the tap 30–60 s of reconnect; the sustain
         # keeps routine restarts out of the alert history.
+        "sustain_seconds": 120,
+        "severity": "warning",
+        "enabled": 1,
+    },
+    {
+        "builtin": "collector_loop_lag",
+        "name": "Collector event loop stalling",
+        "metric": "collector_loop_lag_ms",
+        "instance": "*",
+        "op": ">",
+        "threshold": 500.0,
+        "clear_threshold": 250.0,
         "sustain_seconds": 120,
         "severity": "warning",
         "enabled": 1,

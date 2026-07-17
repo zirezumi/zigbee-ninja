@@ -331,6 +331,59 @@ def test_run_requires_fresh_matching_single_use_authorization(tmp_path):
     asyncio.run(scenario())
 
 
+# -- pacer integrity & ambient context ---------------------------------------------
+
+
+def test_pacer_degradation_refuses_the_knee(tmp_path):
+    # A stalled collector wakes the pacing sleep late; the run must refuse
+    # to record a capacity limit rather than mistake its own stalls for
+    # pipeline saturation.
+    harness = Harness(tmp_path)
+    calls = {"n": 0}
+
+    def stall(_now):
+        calls["n"] += 1
+        if calls["n"] == 5:
+            harness.now += 1.2
+
+    harness.on_advance = stall
+    record = asyncio.run(harness.run_to_completion())
+    assert record["status"] == "completed"
+    assert record["knee_eps"] is None
+    assert record["knee"] is None
+    assert "pacing degraded" in record["verdict"]
+    assert max(step["pacer_max_late_ms"] for step in record["steps"]) >= 1000.0
+    assert sum(step["pacer_stalls"] for step in record["steps"]) >= 1
+
+
+def test_ambient_recorded_and_clean_pacing_keeps_the_knee(tmp_path):
+    harness = Harness(tmp_path)
+    harness.on_advance = lambda _now: harness.manager.note_ambient(INSTANCE, "command")
+    record = asyncio.run(harness.run_to_completion())
+    # Fake time advances sleeps exactly, so pacing is pristine and the knee
+    # records as before; the ambient tally rides along in the record.
+    assert record["verdict"] is None
+    assert record["knee"] is not None
+    assert record["ambient"]["commands"] > 0
+    assert record["ambient"]["commands_per_s"] > 0
+    assert record["ambient"]["state_reports"] == 0
+
+
+def test_preview_warns_on_elevated_ambient(tmp_path):
+    harness = Harness(tmp_path)
+    conn = harness.db.connect()
+    now = int(harness.now)
+    for ts in range(now - benchmark.AMBIENT_LOOKBACK_SECONDS, now, 10):
+        conn.execute(
+            "INSERT INTO series_10s (ts, instance, kind, count) "
+            "VALUES (?, ?, 'command', 15)",
+            (ts, INSTANCE),
+        )
+    conn.commit()
+    plan = harness.manager.preview(INSTANCE, "plug-a")
+    assert any("Ambient traffic is elevated" in warning for warning in plan["warnings"])
+
+
 # -- the ramp ---------------------------------------------------------------------
 
 

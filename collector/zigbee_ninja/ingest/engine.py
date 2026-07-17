@@ -42,6 +42,50 @@ DEFAULT_CHAIN_RETENTION_HOURS = 48  # chain detail
 DEFAULT_TOPOLOGY_SNAPSHOTS = 20  # per instance
 JOURNAL_RETENTION_DAYS = 90  # change journal (V2_PROPOSAL.md §V2-3)
 
+LOOP_LAG_SAMPLE_SECONDS = 1.0
+LOOP_LAG_WINDOW_SECONDS = 60.0
+LOOP_LAG_STALL_MS = 250.0
+
+
+class LoopLagMonitor:
+    """Event-loop scheduling lag: how late a short sleep wakes up.
+
+    Synchronous work on the loop (storage flushes, GC, a busy handler)
+    shows up here before it can distort time-sensitive consumers: the
+    calibration pacer and echo RTT stamps both live on this loop. The
+    worst sample in the last minute feeds the alert evaluator."""
+
+    def __init__(self, clock=time.monotonic):
+        self._clock = clock
+        self._samples: list[tuple[float, float]] = []
+        self.last_ms = 0.0
+        self.ewma_ms: float | None = None
+        self.stalls = 0
+
+    def record(self, lag_seconds: float) -> None:
+        now = self._clock()
+        lag_ms = max(lag_seconds, 0.0) * 1000.0
+        self.last_ms = lag_ms
+        self.ewma_ms = (
+            lag_ms if self.ewma_ms is None else 0.2 * lag_ms + 0.8 * self.ewma_ms
+        )
+        if lag_ms >= LOOP_LAG_STALL_MS:
+            self.stalls += 1
+        cutoff = now - LOOP_LAG_WINDOW_SECONDS
+        self._samples = [(ts, lag) for ts, lag in self._samples if ts >= cutoff]
+        self._samples.append((now, lag_ms))
+
+    def max_window_ms(self) -> float:
+        return max((lag for _, lag in self._samples), default=0.0)
+
+    def stats(self) -> dict:
+        return {
+            "last_ms": round(self.last_ms, 1),
+            "ewma_ms": round(self.ewma_ms, 1) if self.ewma_ms is not None else None,
+            "max_60s_ms": round(self.max_window_ms(), 1),
+            "stalls_over_250ms": self.stalls,
+        }
+
 
 class Engine:
     def __init__(
@@ -119,11 +163,13 @@ class Engine:
         # recognized as a move between coordinators.
         self._journal_pending: list[tuple[float, str, str, str, str]] = []
         self._recent_removals: dict[str, tuple[float, str]] = {}
+        self.loop_lag = LoopLagMonitor()
         self._ha_link: HaLink | None = None
         self._ha_task: asyncio.Task | None = None
         self._ingest: MqttIngest | None = None
         self._ingest_task: asyncio.Task | None = None
         self._flush_task: asyncio.Task | None = None
+        self._loop_lag_task: asyncio.Task | None = None
         self._discovery_task: asyncio.Task | None = None
 
     def tap_token(self) -> str:
@@ -235,12 +281,19 @@ class Engine:
             self._config.set("ledger_since", time.time())
         self._flush_task = asyncio.create_task(self._flush_loop())
         self._discovery_task = asyncio.create_task(self._discovery_loop())
+        self._loop_lag_task = asyncio.create_task(self._loop_lag_loop())
         await self.restart_ingest()
         await self.restart_ha()
 
     async def stop(self) -> None:
         await self.calibration.shutdown()  # abort any active benchmark run
-        for task in (self._ingest_task, self._flush_task, self._ha_task, self._discovery_task):
+        for task in (
+            self._ingest_task,
+            self._flush_task,
+            self._ha_task,
+            self._discovery_task,
+            self._loop_lag_task,
+        ):
             if task is not None:
                 task.cancel()
                 try:
@@ -251,6 +304,7 @@ class Engine:
         self._flush_task = None
         self._ha_task = None
         self._discovery_task = None
+        self._loop_lag_task = None
 
     async def restart_ingest(self) -> None:
         if self._ingest_task is not None:
@@ -368,12 +422,16 @@ class Engine:
                 client = self.ha_attr.name_for(topic) or self.brokerlog.client_for(topic)
                 self.chains.on_command(base, target, verb, payload, client=client)
                 self.class_rates.record(base, "commanded")
+                if self.calibration.active:
+                    self.calibration.note_ambient(base, "command")
         elif kind == "state":
             if self.calibration.active and self.calibration.on_state(base, suffix):
                 self.class_rates.record(base, "self")  # reply to a benchmark read
                 return
             klass = self.chains.on_state(base, suffix)
             self.class_rates.record(base, klass)
+            if self.calibration.active:
+                self.calibration.note_ambient(base, "state")
             if klass == "autonomous" and not self.registry.is_group(base, suffix):
                 # Device-initiated report: the per-device side of the ledger
                 # (echoes inside a chain window are priced on the chain).
@@ -548,6 +606,10 @@ class Engine:
                 out["ha_connected"] = {GLOBAL_INSTANCE: 1.0 if state == "connected" else 0.0}
         if "tap_agents" in names:
             out["tap_agents"] = {GLOBAL_INSTANCE: float(len(self.tap.agents))}
+        if "collector_loop_lag_ms" in names:
+            out["collector_loop_lag_ms"] = {
+                GLOBAL_INSTANCE: self.loop_lag.max_window_ms()
+            }
         if "probe_heartbeat_age_s" in names:
             now = time.time()
             probe_stats = self.probes.stats()
@@ -840,7 +902,11 @@ class Engine:
         while True:
             await asyncio.sleep(ROLLUP_SECONDS)
             try:
-                self.flush_rollups()
+                # Storage writes run off the event loop: their commits and
+                # fsyncs blocked it for seconds and distorted every
+                # time-sensitive consumer sharing it (the calibration pacer
+                # above all; that is how the meter once measured itself).
+                await asyncio.to_thread(self.flush_rollups)
             except Exception:
                 # Never let a storage hiccup kill the loop; next tick retries.
                 pass
@@ -850,7 +916,8 @@ class Engine:
                 pass
             try:
                 settings = self.runtime_settings()
-                self.events.flush(
+                await asyncio.to_thread(
+                    self.events.flush,
                     quota_mb=settings["raw_event_quota_mb"],
                     horizon_hours=settings["raw_event_horizon_hours"],
                 )
@@ -863,3 +930,11 @@ class Engine:
                     await asyncio.to_thread(self.recommendations.run)
             except Exception:
                 pass
+
+    async def _loop_lag_loop(self) -> None:
+        while True:
+            before = time.monotonic()
+            await asyncio.sleep(LOOP_LAG_SAMPLE_SECONDS)
+            self.loop_lag.record(
+                time.monotonic() - before - LOOP_LAG_SAMPLE_SECONDS
+            )

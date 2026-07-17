@@ -160,6 +160,7 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
             "status": "ok",
             "version": __version__,
             "setup_complete": auth.user_count(db) > 0,
+            "loop_lag": engine.loop_lag.stats(),
         }
 
     @app.post("/api/setup", status_code=201)

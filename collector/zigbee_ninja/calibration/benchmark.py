@@ -69,6 +69,20 @@ TIMEOUT_BREACH_RATIO = 0.10
 SATURATION_RATIO = 0.80
 DELIVERY_FAILURES_PER_STEP = 10
 
+# -- pacer integrity (the meter refuses knees its own timekeeping distorted) ----
+# The driver measures how late each pacing sleep wakes up: lateness is event
+# loop interference (storage flushes, GC), not mesh behavior. A step whose
+# cumulative lateness or single worst stall crosses these bounds cannot tell
+# a saturated pipeline from a stalled collector, so the run records no knee.
+PACER_STALL_SECONDS = 0.25
+PACER_DEGRADED_FRACTION = 0.05
+PACER_DEGRADED_MAX_STALL_S = 1.0
+
+# -- ambient context (recorded always; the preview warns above these rates) ----
+AMBIENT_LOOKBACK_SECONDS = 600
+AMBIENT_WARN_COMMANDS_PER_S = 1.0
+AMBIENT_WARN_STATE_PER_S = 3.0
+
 # -- watchdog rules (abort: something beyond the run is being affected) --------
 WATCHDOG_BRIDGE_ERRORS = 5
 STALL_MIN_SENT = 10
@@ -103,6 +117,9 @@ class StepResult:
     delivery_failed_delta: int = 0
     rtt_source: str | None = None
     breach: str | None = None
+    pacer_late_s: float = 0.0
+    pacer_max_late_ms: float = 0.0
+    pacer_stalls: int = 0
 
 
 @dataclass
@@ -123,6 +140,10 @@ class _ActiveRun:
     sent_total: int = 0
     bridge_errors: int = 0
     abort_reason: str | None = None
+    # Instance traffic that is not the benchmark's own, tallied while the
+    # run is active: a noisy window is visible in the record instead of
+    # silently confounding it.
+    ambient: dict = field(default_factory=dict)
 
     def outstanding_total(self) -> int:
         return sum(len(fifo) for fifo in self.outstanding.values())
@@ -139,6 +160,13 @@ class _BulkState:
     state: str = "starting"  # waiting_cooldown | running
     skipped: list[dict] = field(default_factory=list)
     abort_requested: bool = False
+
+
+def _pacer_degraded(step: StepResult) -> bool:
+    return (
+        step.pacer_late_s > PACER_DEGRADED_FRACTION * step.duration_s
+        or step.pacer_max_late_ms >= PACER_DEGRADED_MAX_STALL_S * 1000.0
+    )
 
 
 def _percentiles(values: list[float]) -> tuple[float | None, float | None]:
@@ -236,6 +264,14 @@ class CalibrationManager:
         if run.current is not None:
             run.current.completed += 1
         return True
+
+    def note_ambient(self, base: str, kind: str) -> None:
+        """Tally instance traffic that is not the benchmark's own while a run
+        is active; the run record carries the rates so a noisy window is
+        visible rather than silently confounding the measurement."""
+        run = self._active
+        if run is not None and base == run.plan["instance"]:
+            run.ambient[kind] = run.ambient.get(kind, 0) + 1
 
     def on_availability(self, base: str, suffix: str, payload: bytes) -> None:
         """Watchdog: any device on the instance going offline aborts the run."""
@@ -465,6 +501,17 @@ class CalibrationManager:
                 f"Shares Zigbee channel {info.get('channel')} with {', '.join(shared)}: "
                 "their traffic contends with the benchmark."
             )
+        ambient = self._recent_ambient(instance)
+        if ambient is not None:
+            cmd_rate, state_rate = ambient
+            if cmd_rate > AMBIENT_WARN_COMMANDS_PER_S or state_rate > AMBIENT_WARN_STATE_PER_S:
+                warnings.append(
+                    f"Ambient traffic is elevated ({cmd_rate:.1f} commands/s, "
+                    f"{state_rate:.1f} state reports/s over the last "
+                    f"{AMBIENT_LOOKBACK_SECONDS // 60} minutes). The run records "
+                    "ambient rates either way; a quieter hour gives a cleaner "
+                    "measurement."
+                )
 
         rates = RAMP_RATES_EPS if mode == "single" else SPREAD_RATES_EPS
         cap = MAX_RATE_EPS if mode == "single" else SPREAD_PER_TARGET_MAX_EPS * len(devices)
@@ -781,7 +828,15 @@ class CalibrationManager:
                 run.sent_total += 1
             else:
                 step.deferred += 1
+            before = self._clock()
             await self._sleep(interval)
+            late = self._clock() - before - interval
+            if late > 0:
+                step.pacer_late_s += late
+                if late * 1000.0 > step.pacer_max_late_ms:
+                    step.pacer_max_late_ms = round(late * 1000.0, 1)
+                if late >= PACER_STALL_SECONDS:
+                    step.pacer_stalls += 1
 
     async def _settle(self, run: _ActiveRun, step: StepResult) -> None:
         """Drain in-flight reads so steps don't bleed into each other."""
@@ -871,6 +926,24 @@ class CalibrationManager:
 
     # -- record & read side ---------------------------------------------------------
 
+    def _recent_ambient(self, instance: str) -> tuple[float, float] | None:
+        """Command and state rates over the recent lookback, from the 10 s
+        rollups: the preview's noisy-window signal."""
+        since = int(self._clock()) - AMBIENT_LOOKBACK_SECONDS
+        rows = self._db.connect().execute(
+            "SELECT kind, SUM(count) AS n FROM series_10s "
+            "WHERE instance = ? AND ts >= ? AND kind IN ('command', 'state') "
+            "GROUP BY kind",
+            (instance, since),
+        ).fetchall()
+        if not rows:
+            return None
+        counts = {row["kind"]: row["n"] or 0 for row in rows}
+        return (
+            counts.get("command", 0) / AMBIENT_LOOKBACK_SECONDS,
+            counts.get("state", 0) / AMBIENT_LOOKBACK_SECONDS,
+        )
+
     def _record_skip(self, plan: dict, reason: str) -> None:
         """A batch item that never ran still leaves a durable history row."""
         now = self._clock()
@@ -893,9 +966,21 @@ class CalibrationManager:
     def _record(self, run: _ActiveRun, status: str) -> None:
         good = [step for step in run.steps if step.breach is None]
         breached = [step for step in run.steps if step.breach is not None]
+        degraded = [step for step in run.steps if _pacer_degraded(step)]
         knee_eps = None
         knee = None
-        if status == "completed" and good:
+        verdict = None
+        if degraded:
+            # The driver's own pacing lost time to event-loop interference:
+            # a saturated pipeline and a stalled collector are then
+            # indistinguishable, so no capacity limit is claimed.
+            worst_ms = max(step.pacer_max_late_ms for step in degraded)
+            verdict = (
+                "unreliable: the collector's own send pacing degraded during "
+                f"the run (worst stall {worst_ms:.0f} ms); no capacity limit "
+                "was recorded"
+            )
+        elif status == "completed" and good:
             knee_eps = good[-1].achieved_eps
             knee = {
                 "eps": knee_eps,
@@ -904,10 +989,18 @@ class CalibrationManager:
                 "breach_rate_eps": breached[0].rate_eps if breached else None,
                 "rtt_source": good[-1].rtt_source,
             }
+        duration = max(self._clock() - run.started_at, 1.0)
         detail = {
             "plan": run.plan,
             "steps": [asdict(step) for step in run.steps],
             "knee": knee,
+            "verdict": verdict,
+            "ambient": {
+                "commands": run.ambient.get("command", 0),
+                "state_reports": run.ambient.get("state", 0),
+                "commands_per_s": round(run.ambient.get("command", 0) / duration, 2),
+                "state_per_s": round(run.ambient.get("state", 0) / duration, 2),
+            },
             "abort_reason": run.abort_reason if status != "completed" else None,
             "bridge_errors": run.bridge_errors,
             "environment": run.plan.get("environment", {}),
@@ -991,6 +1084,8 @@ class CalibrationManager:
                     "knee_eps": row["knee_eps"],
                     "steps": detail.get("steps", []),
                     "knee": detail.get("knee"),
+                    "verdict": detail.get("verdict"),
+                    "ambient": detail.get("ambient"),
                     "abort_reason": detail.get("abort_reason"),
                     "environment": detail.get("environment", {}),
                     "rtt_source": (detail.get("plan") or {}).get("rtt_source"),
