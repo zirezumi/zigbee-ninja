@@ -382,14 +382,25 @@ z2m-2/lr_chandelier_1 knee 16.0/s, ceiling 23.15/s achieved at rate
 32, 0 timeouts/failures, wire p95 34-77 ms. That ceiling BEATS
 2.10.1's 16.55/s: the "-25% per-device 2.12.1 regression" (measured
 12.3/s under the pre-fix collector) was also meter artifact.
-AWAITING OWNER: (1) pacer cumulative-rule refinement (count only
-stall-sized lateness, keep the 1 s single-stall bound): refusal
-semantics are the owner's; spread re-measures stay refused until
-ratified; (2) quiet-window fleet re-measure go-ahead. Residual: rare
-~360 ms blips from uninstrumented paths (calibration record write at
-run end matches one; message-burst queuing suspected for the rest),
-well inside meter tolerance; the activity log names anything that
-grows.
+Both owner decisions RESOLVED 2026-07-17: (1) the pacer cumulative
+bound now counts stall time only (`pacer_stall_s`, wakeups at or over
+250 ms; the 1 s single-stall refusal unchanged; total lateness stays
+recorded telemetry); (2) the fleet re-measure ran the same day.
+**True 2.12.1 knees (stale chips cleared fleet-wide; the upgrade
+caused NO regression)**: singles knee/ceiling on the same five
+targets as the 2.10.1 baseline: z2m-1 16.0/24.1, z2m-2 16.0/23.0,
+z2m-3 15.85/23.05, z2m-4 15.8/23.85, z2m-5 15.95/23.65 (knees flat
+at the ~16/s per-device queue; ceilings improved, some by a third);
+spreads knee/achieved-ceiling: z2m-1 31.75/40.35, z2m-2 31.65/41.2,
+z2m-3 32.0/38.25, z2m-4 31.85/41.15, z2m-5 31.7/37.9 (sustained up
+2-7% over 2.10.1; wire p50 at ceiling ~111-125 ms as before). The
+refined rule proved itself in the campaign: scheduler jitter passed
+everywhere, and one z2m-1 spread with a genuine 1017 ms stall was
+refused and retried clean. Follow-up landed from the campaign's own
+telemetry: calibration record writes (and batch skip records) moved
+off the event loop (asyncio.to_thread; a cancelled run still writes
+in place at shutdown): the run-boundary stall cluster matched the
+record insert waiting behind the flush worker's transaction.
 **V2.M4 slice 2: scenario engine BUILT + DEPLOYED + LIVE-VALIDATED
 (2026-07-17)**: `capacity/scenario.py` + `POST /api/scenario/price`,
 the §V2-11 backend the advisor and Rebalance view will share.
