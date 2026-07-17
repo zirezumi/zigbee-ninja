@@ -390,6 +390,30 @@ ratified; (2) quiet-window fleet re-measure go-ahead. Residual: rare
 run end matches one; message-burst queuing suspected for the rest),
 well inside meter tolerance; the activity log names anything that
 grows.
+**V2.M4 slice 2: scenario engine BUILT + DEPLOYED + LIVE-VALIDATED
+(2026-07-17)**: `capacity/scenario.py` + `POST /api/scenario/price`,
+the §V2-11 backend the advisor and Rebalance view will share.
+Resolves device and whole-group moves; relocates recorded chain and
+report traffic repriced on the destination census and measured
+avg_tx/retry; reports the census-shift repricing of staying
+groupcasts as its own second-order term per mesh; prices both
+group-split resolutions and applies the requested one; judges
+recomposed T0 command-rate peaks against each mesh's sustained limit
+and hard ceiling with the measured wire before-peak alongside; pools
+shared channels; carries radio reach as an explicit unknown with best
+observed link LQI and destination channel as context. The event store
+gained an exact-target filter for the recomposition. Live validation
+exposed the judged-currency defect (command plus state peaks,
+including Z2M-synthetic group states, read above_ceiling fleet-wide
+against limits measured in commands per second); fixed same day:
+judged peaks are command-only, the limits' own currency. Live now:
+router move prices second-order minus 169/plus 97 µs/s, whole-group
+study move shifts census 26 to 21 and 16 to 21 with splits detected
+against two unmoved containing groups, verdicts coherent beside wire
+baselines. Limits carry stale_environment until the re-measure.
+Next M4 slices: rebalancing advisor detector (best after the
+re-measure so judgments carry fresh knees), Rebalance view, manifest
+export (freezes at first ship), applied-verification, retry hotspots.
 Roadmap: README.md.
 
 ## Hard rules
