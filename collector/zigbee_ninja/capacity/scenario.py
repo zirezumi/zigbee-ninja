@@ -433,6 +433,125 @@ def _best_link_lqi(topology_entry: dict, ieee: str | None) -> int | None:
     return best
 
 
+# -- lane context -------------------------------------------------------------------
+
+
+def context_summary(
+    events_log: RawEventLog,
+    db: Database,
+    registry,
+    pricing_params: Callable[[str], tuple[float | None, float | None]],
+    window_seconds: int = DEFAULT_WINDOW_SECONDS,
+    clock: Callable[[], float] = time.time,
+) -> dict:
+    """Everything the Rebalance view's lanes need before any move is staged:
+    per instance the steady spend, the recorded command peak in the judged
+    currency with its verdict, the measured limits, and every device and
+    group with its recorded spend as a cost badge. The arithmetic is the
+    same the pricing path uses, so a staged scenario's before-numbers always
+    match the lanes."""
+    now = clock()
+    window_seconds = max(600, min(int(window_seconds), MAX_WINDOW_SECONDS))
+    start = now - window_seconds
+    conn = db.connect()
+    snapshot = registry.snapshot()
+    bases = {info["base_topic"] for info in snapshot}
+    channels = {info["base_topic"]: info.get("channel") for info in snapshot}
+    windows = _benchmark_windows(conn, start)
+    days = ledger._days_covering(start, now)
+    recording_since = ledger._recording_since(conn)
+    ledger_seconds = max(1.0, now - max(start, recording_since or start))
+    report_us = ledger.autonomous_publish_cost_us()
+
+    instances: dict[str, dict] = {}
+    for base in sorted(bases):
+        n_routers = registry.router_count_for(base)
+        avg_tx, retry_rate = pricing_params(base)
+        rows = _chain_rows(conn, base, start)
+        autonomous = _autonomous_rates(conn, base, days, ledger_seconds)
+
+        target_us: dict[str, float] = {}
+        for row in rows:
+            cost = _chain_cost_us(
+                row,
+                group_target=registry.is_group(base, row["target"]),
+                n_routers=n_routers,
+                avg_tx=avg_tx,
+                retry_rate=retry_rate,
+            ) / window_seconds
+            target_us[row["target"]] = target_us.get(row["target"], 0.0) + cost
+        steady = sum(target_us.values()) + sum(autonomous.values()) * report_us
+
+        ieee_to_name = {
+            d.get("ieee_address"): d["friendly_name"]
+            for d in registry.devices(base)
+            if d.get("friendly_name")
+        }
+        memberships: dict[str, list[str]] = {}
+        groups: list[dict] = []
+        for group in registry.groups(base):
+            group_name = group.get("friendly_name")
+            if not group_name:
+                continue
+            members = [
+                ieee_to_name[ieee]
+                for ieee in group.get("member_ieee") or []
+                if ieee in ieee_to_name
+            ]
+            for member in members:
+                memberships.setdefault(member, []).append(group_name)
+            groups.append(
+                {
+                    "name": group_name,
+                    "id": group.get("id"),
+                    "members": members,
+                    "us_per_s": round(target_us.get(group_name, 0.0), 3),
+                }
+            )
+        devices = [
+            {
+                "name": device["friendly_name"],
+                "ieee": device.get("ieee_address"),
+                "router": device.get("type") == "Router",
+                "us_per_s": round(
+                    target_us.get(device["friendly_name"], 0.0)
+                    + autonomous.get(device["friendly_name"], 0.0) * report_us,
+                    3,
+                ),
+                "groups": memberships.get(device["friendly_name"], []),
+            }
+            for device in registry.devices(base)
+            if device.get("friendly_name")
+        ]
+
+        bins = _t0_bins(events_log, base, start, now, 1.0, windows.get(base, []))
+        peak = _refined_peak(events_log, start, windows, bins, base, (), [])
+        limits = _limits(db, registry, base)
+        instances[base] = {
+            "channel": channels.get(base),
+            "steady": {
+                "us_per_s": round(steady, 3),
+                "pct_of_budget": round(steady / CHANNEL_BUDGET_US_PER_S * 100.0, 4),
+                "provenance": STEADY_PROVENANCE,
+            },
+            "burst": {
+                "peak_1s": peak,
+                "verdict": _judge(peak["eps_1s"] if peak else None, limits),
+                "provenance": OVERLAY_PROVENANCE,
+            },
+            "limits": limits,
+            "census": {"routers": n_routers},
+            "devices": devices,
+            "groups": groups,
+        }
+
+    return {
+        "window_seconds": window_seconds,
+        "basis": {"note": BASIS_NOTE},
+        "instances": instances,
+    }
+
+
 # -- the engine ---------------------------------------------------------------------
 
 

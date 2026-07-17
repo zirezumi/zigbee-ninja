@@ -752,6 +752,152 @@ export interface RecommendationsView {
   run: RecommendationRunStatus;
 }
 
+export interface ScenarioMove {
+  kind: "device" | "group";
+  subject: string;
+  from_instance: string;
+  to_instance: string;
+  group_resolution?: "unicasts" | "new_group";
+}
+
+export interface ScenarioLimits {
+  sustained_eps?: number;
+  sustained_kind?: string;
+  mode?: string;
+  measured_at?: number;
+  stale_environment?: boolean;
+  ceiling_eps?: number;
+}
+
+export interface ScenarioPeak {
+  eps_1s: number;
+  at: number;
+}
+
+export interface ScenarioContextDevice {
+  name: string;
+  ieee: string | null;
+  router: boolean;
+  us_per_s: number;
+  groups: string[];
+}
+
+export interface ScenarioContextGroup {
+  name: string;
+  id: number | null;
+  members: string[];
+  us_per_s: number;
+}
+
+export interface ScenarioContextInstance {
+  channel: number | null;
+  steady: { us_per_s: number; pct_of_budget: number; provenance: string };
+  burst: { peak_1s: ScenarioPeak | null; verdict: string; provenance: string };
+  limits: ScenarioLimits | null;
+  census: { routers: number };
+  devices: ScenarioContextDevice[];
+  groups: ScenarioContextGroup[];
+}
+
+export interface ScenarioContext {
+  window_seconds: number;
+  basis: { note: string };
+  instances: Record<string, ScenarioContextInstance>;
+}
+
+export interface ScenarioMoveReport {
+  kind: string;
+  subject: string;
+  from_instance: string;
+  to_instance: string;
+  router?: boolean;
+  via_group?: string | null;
+  members?: string[];
+  commands: {
+    chains_per_s: number;
+    before_us_per_s: number;
+    after_us_per_s: number;
+    provenance: string;
+    grouped: boolean;
+  };
+  reports?: { publishes_per_s: number; us_per_s: number; note: string };
+  radio?: {
+    status: string;
+    best_observed_link_lqi: number | null;
+    destination_channel: number | null;
+    provenance: string;
+  };
+}
+
+export interface ScenarioSplit {
+  group: string;
+  instance: string;
+  to_instance: string;
+  movers: string[];
+  stayers: number;
+  applied_resolution: string;
+  added_us_per_s: Record<string, number>;
+  note: string;
+  provenance: string;
+}
+
+export interface ScenarioInstanceReport {
+  steady: {
+    before_us_per_s: number;
+    after_us_per_s: number;
+    before_pct_of_budget: number;
+    after_pct_of_budget: number;
+    second_order_us_per_s: number | null;
+    provenance: string;
+  };
+  census: { routers_before: number; routers_after: number };
+  burst: {
+    before_peak_1s: ScenarioPeak | null;
+    after_peak_1s: ScenarioPeak | null;
+    before_peak_10s_eps: number | null;
+    after_peak_10s_eps: number | null;
+    wire_before_peak_1s: ScenarioPeak | null;
+    verdict: string;
+    provenance: string;
+  };
+  limits: ScenarioLimits | null;
+  touched: boolean;
+}
+
+export interface ScenarioPriceReport {
+  window_seconds: number;
+  basis: { chains_window_seconds: number; ledger_days: string[]; note: string };
+  moves: ScenarioMoveReport[];
+  splits: ScenarioSplit[];
+  instances: Record<string, ScenarioInstanceReport>;
+  channel_pools: Array<{
+    channel: number;
+    instances: string[];
+    combined_after_us_per_s: number;
+    combined_after_pct_of_budget: number;
+  }>;
+}
+
+export interface AdvisorScore {
+  accepted: boolean;
+  pressured_before: string[];
+  instances: Record<
+    string,
+    { before_verdict: string; after_verdict: string; touched: boolean }
+  >;
+  notes: string[];
+}
+
+export interface ScenarioScoreReport extends ScenarioPriceReport {
+  advisor: AdvisorScore;
+}
+
+export interface SavedScenario {
+  name: string;
+  moves: ScenarioMove[];
+  saved_at: number;
+}
+
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
     credentials: "same-origin",

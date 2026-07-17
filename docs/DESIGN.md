@@ -671,8 +671,8 @@ engineering term.
    commander bursting on several coordinators at once) with the combined
    rate a consolidation would concentrate on one mesh. Benchmark windows
    are excluded throughout (§11.5).
-   The **scenario engine** (V2_PROPOSAL.md §V2-11) ships ahead of its
-   Rebalance view: `POST /api/scenario/price` prices a what-if move set
+   The **scenario engine** (V2_PROPOSAL.md §V2-11) backs the Rebalance
+   view (view 12): `POST /api/scenario/price` prices a what-if move set
    from recorded traffic (chain relocation, census-shift repricing of
    existing groupcasts, both group-split resolutions, channel pooling,
    radio reach as an explicit unknown), read-only and provenance-tagged
@@ -726,6 +726,23 @@ engineering term.
     textarea copy fallback since the async Clipboard API needs a secure
     context. Backed by `/api/recommendations`; the discovery tile adds
     a `recommendations_open` sensor per granted instance.
+12. **Rebalance** (V2_PROPOSAL.md §V2-11): the what-if simulator. One lane
+    per coordinator (steady spend, recorded command peak vs the measured
+    limits, verdict chip; before → after once moves are staged); devices
+    and groups as draggable chips with recorded-spend badges and a router
+    glyph, groups as containers whose members travel together; every chip
+    also carries a "Move to…" control (drag is the fast path, not the only
+    path); search, router/end-device filter, and spend/name sort for
+    large fleets. The staged-changes tray lists each move with its priced
+    delta, group-split repair choice (both resolutions priced), radio
+    caveat, and channel-pool notes, with undo/reset. Scenarios persist
+    server-side under names (settings-backed). "Score with the advisor"
+    applies the rebalancing advisor's acceptance rule to the staged
+    scenario (`POST /api/scenario/score`). Backed by
+    `GET /api/scenario/context` (lane data in the pricing arithmetic, so
+    lanes and priced scenarios never disagree) and
+    `/api/scenario/saved`. Read-only throughout: pricing recomposes
+    recorded traffic; nothing transmits.
 
 ## §14 Alerting
 

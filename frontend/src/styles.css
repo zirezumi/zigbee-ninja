@@ -772,6 +772,148 @@ nav button.nav-item.active {
   font-weight: 600;
 }
 
+/* ---- rebalance lanes ---- */
+.lanes {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(250px, 1fr);
+  gap: 12px;
+  overflow-x: auto;
+  align-items: start;
+  padding-bottom: 4px;
+}
+
+.lane {
+  min-width: 0;
+}
+
+.lane-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 10px;
+}
+
+.lane-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.lane-fact {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.lane-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 58vh;
+  overflow-y: auto;
+  min-height: 80px;
+}
+
+.arriving {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.group-box {
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.group-members {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 12px;
+}
+
+.subject-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 3px 8px;
+  font-size: 12.5px;
+  cursor: grab;
+  background: color-mix(in srgb, var(--line) 18%, transparent);
+}
+
+.subject-chip.staged {
+  opacity: 0.6;
+}
+
+.subject-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.router-glyph {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  border: 1px solid var(--accent);
+  color: var(--accent-ink);
+  border-radius: 4px;
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+
+.subject-cost {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.move-select {
+  font-size: 11px;
+  padding: 1px 4px;
+  max-width: 92px;
+}
+
+.tray-move {
+  border-top: 1px solid var(--line);
+  padding: 8px 0;
+}
+
+.tray-move:first-of-type {
+  border-top: none;
+}
+
+.split-note {
+  margin: 4px 0 0 8px;
+}
+
+.inline-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 10px;
+  font-size: 12px;
+}
+
 @media (max-width: 720px) {
   .shell {
     grid-template-columns: 1fr;

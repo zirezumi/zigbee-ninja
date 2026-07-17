@@ -27,6 +27,7 @@ from ..ingest import topology as topology_module
 from ..ingest.engine import Engine
 from ..ingest.hacontrol import HaConfig, test_ha
 from ..ingest.mqtt import BrokerConfig, test_connection
+from ..recommend import rebalance as rebalance_model
 from ..store.config import ConfigStore
 from ..store.db import Database
 from ..store.events import RawEventLog
@@ -94,6 +95,16 @@ class ScenarioMove(BaseModel):
 class ScenarioRequest(BaseModel):
     moves: list[ScenarioMove]
     window_seconds: int = scenario_model.DEFAULT_WINDOW_SECONDS
+
+
+class ScenarioSaveBody(BaseModel):
+    name: str
+    moves: list[ScenarioMove]
+
+
+SAVED_SCENARIOS_KEY = "rebalance_scenarios"
+MAX_SAVED_SCENARIOS = 50
+MAX_SCENARIO_NAME_LENGTH = 64
 
 
 class AlertRuleBody(BaseModel):
@@ -461,6 +472,90 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
             )
         except scenario_model.ScenarioError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/api/scenario/context")
+    def scenario_context(
+        request: Request, seconds: int = scenario_model.DEFAULT_WINDOW_SECONDS
+    ) -> dict:
+        """Per-instance lane data for the Rebalance view: steady spend,
+        recorded command peak with verdict, measured limits, and every
+        device and group with recorded spend, in the pricing arithmetic."""
+        require_user(request)
+        engine.flush_rollups()
+        return scenario_model.context_summary(
+            engine.events,
+            db,
+            engine.registry,
+            engine.tap.pricing_params,
+            window_seconds=seconds,
+        )
+
+    @app.post("/api/scenario/score")
+    def scenario_score(request: Request, body: ScenarioRequest) -> dict:
+        """Price a staged scenario and apply the rebalancing advisor's
+        acceptance rule to the result (§V2-11 "Score with the advisor")."""
+        require_user(request)
+        engine.flush_rollups()
+        try:
+            report = scenario_model.price_scenario(
+                engine.events,
+                db,
+                engine.registry,
+                engine.tap.pricing_params,
+                lambda base: (
+                    engine.topology.latest(base, include_raw=True).get(base) or {}
+                ),
+                [move.model_dump() for move in body.moves],
+                window_seconds=body.window_seconds,
+            )
+        except scenario_model.ScenarioError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {**report, "advisor": rebalance_model.score_report(report)}
+
+    @app.get("/api/scenario/saved")
+    def scenario_saved_list(request: Request) -> dict:
+        require_user(request)
+        saved = config.get(SAVED_SCENARIOS_KEY) or {}
+        return {
+            "scenarios": [
+                {"name": name, **entry}
+                for name, entry in sorted(saved.items())
+            ]
+        }
+
+    @app.post("/api/scenario/saved")
+    def scenario_saved_put(request: Request, body: ScenarioSaveBody) -> dict:
+        require_user(request)
+        name = body.name.strip()
+        if not name or len(name) > MAX_SCENARIO_NAME_LENGTH:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Scenario names are 1 to {MAX_SCENARIO_NAME_LENGTH} characters",
+            )
+        if not body.moves:
+            raise HTTPException(status_code=400, detail="A scenario needs moves")
+        saved = config.get(SAVED_SCENARIOS_KEY) or {}
+        if name not in saved and len(saved) >= MAX_SAVED_SCENARIOS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"At most {MAX_SAVED_SCENARIOS} saved scenarios; delete one first",
+            )
+        saved[name] = {
+            "moves": [move.model_dump(exclude_none=True) for move in body.moves],
+            "saved_at": time.time(),
+        }
+        config.set(SAVED_SCENARIOS_KEY, saved)
+        return {"name": name, **saved[name]}
+
+    @app.delete("/api/scenario/saved/{name}")
+    def scenario_saved_delete(request: Request, name: str) -> dict:
+        require_user(request)
+        saved = config.get(SAVED_SCENARIOS_KEY) or {}
+        if name not in saved:
+            raise HTTPException(status_code=404, detail="No such saved scenario")
+        del saved[name]
+        config.set(SAVED_SCENARIOS_KEY, saved)
+        return {"deleted": name}
 
     @app.get("/api/topology")
     def topology_get(request: Request, instance: str | None = None, full: bool = False) -> dict:

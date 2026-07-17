@@ -340,6 +340,67 @@ def _finding(
     )
 
 
+def score_report(report: dict) -> dict:
+    """The advisor's acceptance rule applied to an already-priced scenario
+    (the Rebalance view's "Score with the advisor" bridge): per instance
+    before and after verdicts, and whether the staged moves clear every
+    pressured coordinator without pushing any other past its limits. Pure
+    arithmetic over the price report, so the score and the lanes can never
+    disagree."""
+    instances: dict[str, dict] = {}
+    notes: list[str] = []
+    accepted = True
+    pressured_before = []
+    for base in sorted(report["instances"]):
+        entry = report["instances"][base]
+        limits = entry.get("limits")
+        before_peak = entry["burst"]["before_peak_1s"]
+        before_verdict = scenario._judge(
+            before_peak["eps_1s"] if before_peak else None, limits
+        )
+        after_verdict = entry["burst"]["verdict"]
+        instances[base] = {
+            "before_verdict": before_verdict,
+            "after_verdict": after_verdict,
+            "touched": bool(entry.get("touched")),
+        }
+        if before_verdict in PRESSURED_VERDICTS:
+            pressured_before.append(base)
+            if after_verdict in ACCEPTABLE_VERDICTS:
+                notes.append(
+                    f"{base} sits above its measured limits today and the staged "
+                    "moves bring its recomposed peak clear."
+                )
+            else:
+                accepted = False
+                notes.append(
+                    f"{base} sits above its measured limits today and stays "
+                    "there after the staged moves."
+                )
+        elif after_verdict in PRESSURED_VERDICTS:
+            accepted = False
+            notes.append(
+                f"The staged moves would push {base} above its measured "
+                "limits: they relocate load rather than relieving it."
+            )
+    if not pressured_before:
+        notes.append(
+            "No coordinator's recorded peak crosses its measured limits in "
+            "this window; the staged moves are judged for safety, not relief."
+        )
+    if accepted:
+        notes.append(
+            "Whether the moved devices can reach their destination "
+            "coordinators by radio is unknown from recorded data."
+        )
+    return {
+        "accepted": accepted,
+        "pressured_before": pressured_before,
+        "instances": instances,
+        "notes": notes,
+    }
+
+
 def detect(ctx: DetectorContext) -> list[Finding]:
     if ctx.events_log is None or ctx.db is None or ctx.registry is None:
         return []

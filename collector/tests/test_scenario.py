@@ -332,6 +332,51 @@ def test_channel_pool_reports_shared_channels(world):
     assert pool["instances"] == ["z2m-a", "z2m-b"]
 
 
+def test_context_summary_matches_pricing_arithmetic(world):
+    db, events, registry = world
+    add_chains(db, "z2m-a", "grp_a", "set", 100)
+    add_chains(db, "z2m-a", "sensor_1", "set", 60, echoes_per_chain=1)
+    add_autonomous(db, "z2m-a", "sensor_1", 720)
+    for i in range(10):
+        events.record(
+            START + 100 + i * 0.05, "mqtt", "z2m-a", "command", "in", "sensor_1/set", 10
+        )
+    events.flush()
+
+    context = scenario.context_summary(
+        events,
+        db,
+        registry,
+        lambda base: (None, None),
+        window_seconds=WINDOW,
+        clock=clock,
+    )
+    a = context["instances"]["z2m-a"]
+    assert a["channel"] == 20
+    assert a["census"]["routers"] == 3
+    assert a["burst"]["peak_1s"]["eps_1s"] == 10.0
+    assert a["burst"]["verdict"] == "no_limits"
+
+    # The lane's steady total is the pricing path's before-number.
+    report = price(db, events, registry, [move("sensor_1")])
+    assert a["steady"]["us_per_s"] == pytest.approx(
+        report["instances"]["z2m-a"]["steady"]["before_us_per_s"], abs=0.01
+    )
+
+    devices = {d["name"]: d for d in a["devices"]}
+    assert devices["sensor_1"]["us_per_s"] > 0
+    assert devices["sensor_1"]["router"] is False
+    assert devices["lamp_1"]["groups"] == ["grp_a"]
+    groups = {g["name"]: g for g in a["groups"]}
+    assert sorted(groups["grp_a"]["members"]) == ["lamp_1", "lamp_2", "lamp_3"]
+    assert groups["grp_a"]["us_per_s"] > 0
+    # Device badges plus group badges cover the lane's steady spend.
+    total_badges = sum(d["us_per_s"] for d in a["devices"]) + sum(
+        g["us_per_s"] for g in a["groups"]
+    )
+    assert total_badges == pytest.approx(a["steady"]["us_per_s"], abs=0.05)
+
+
 def test_radio_context_reads_topology_links(world):
     db, events, registry = world
     entry = {
