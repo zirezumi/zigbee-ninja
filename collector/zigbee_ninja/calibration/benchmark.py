@@ -714,6 +714,7 @@ class CalibrationManager:
 
     async def _run(self, run: _ActiveRun) -> None:
         status = "completed"
+        cancelled = False
         try:
             baselines: dict[str, float] = {}
             for index, spec in enumerate(run.plan["steps"]):
@@ -745,6 +746,7 @@ class CalibrationManager:
                 run.current = None
         except asyncio.CancelledError:
             status = "aborted"
+            cancelled = True
             run.abort_reason = run.abort_reason or "collector shutdown"
             if run.current is not None:
                 run.steps.append(run.current)
@@ -754,7 +756,15 @@ class CalibrationManager:
             run.abort_reason = f"internal error: {exc}"
         finally:
             try:
-                self._record(run, status)
+                # Off the loop: the insert can wait seconds on the flush
+                # worker's write transaction, and that wait must never
+                # reach the loop's time-sensitive consumers. A cancelled
+                # task (collector shutdown) writes in place instead of
+                # awaiting mid-teardown.
+                if cancelled:
+                    self._record(run, status)
+                else:
+                    await asyncio.to_thread(self._record, run, status)
             finally:
                 # Even a storage failure must release the run and arm the
                 # cooldown: a stuck "running" state would block all runs.
@@ -790,7 +800,9 @@ class CalibrationManager:
                             "reason": str(exc),
                         }
                     )
-                    self._record_skip({**plan, "batch_id": bulk.batch_id}, str(exc))
+                    await asyncio.to_thread(
+                        self._record_skip, {**plan, "batch_id": bulk.batch_id}, str(exc)
+                    )
                     continue
                 bulk.state = "running"
                 run = self._make_run({**plan, "batch_id": bulk.batch_id})
