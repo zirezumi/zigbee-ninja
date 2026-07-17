@@ -8,6 +8,7 @@ const DETECTOR_LABELS: Record<string, string> = {
   redundancy: "Duplicate commands",
   reporting: "Device reporting",
   rebalancing: "Coordinator rebalancing",
+  retry_hotspots: "Retry hotspots",
 };
 
 const DETECTOR_HINTS: Record<string, string> = {
@@ -19,6 +20,8 @@ const DETECTOR_HINTS: Record<string, string> = {
   reporting: "Devices whose reporting costs far more airtime than comparable devices",
   rebalancing:
     "Move sets that would relieve a coordinator whose recorded command bursts cross its measured capacity limit, priced by the what-if scenario engine",
+  retry_hotspots:
+    "Coordinators retrying an outsized share of their transmissions, with the weak links and busy relays most likely responsible; low confidence by nature",
 };
 
 const STATE_TABS: Array<[string, string]> = [

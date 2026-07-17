@@ -336,6 +336,20 @@ supports changing."*
 > 7) and drops to low on stale calibration environments or pressure
 > recorded in fewer than three distinct seconds.
 >
+> **Implementation (V2.M4, retry hotspots):** fires when a coordinator's
+> measured per-hop MAC retry rate (§10, EWMA over harvested counter
+> windows) sits at or above 5%. The stored topology snapshot names the
+> likeliest culprits: weak links (LQI under 80) on the coordinator's own
+> hops, exactly where the measured retries happen, and heavily-routed
+> relays riding weak links, offered as context the counter cannot see.
+> The saving is the recorded unicast spend times the measured rate: an
+> upper bound on what cleaner links could recover, provenance modeled.
+> Always low confidence; the finding says to treat it as a place to look,
+> not a verdict, and asks for a topology pull when no snapshot exists.
+> The action uses kind `investigate`: an addition to the §V2-5 kind
+> vocabulary (additive, not a rename; consumers must tolerate unknown
+> kinds).
+>
 > **Implementation (V2.M3, reporting advisor):** per-device autonomous
 > spend over the trailing day (rates divided by recorded time, exactly
 > like `/api/ledger`) compares two ways: against the median of at least
