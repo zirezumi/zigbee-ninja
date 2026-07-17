@@ -84,11 +84,15 @@ def _span_excluded(
 
 
 def _hard_ceiling(conn, instance: str) -> float | None:
-    """Highest rate the latest completed spread ramp actually achieved: the
-    short-burst ceiling above the sustained limit."""
+    """Highest rate the knee-bearing spread ramp actually achieved: the
+    short-burst ceiling above the sustained limit. Reads the same record
+    latest_knees serves the sustained limit from (the newest completed
+    spread run that produced a knee), so the two numbers never mix
+    measurement eras: a newer run that breached before any clean step
+    carries no knee and must not supply the ceiling either."""
     for row in conn.execute(
         "SELECT detail FROM calibrations WHERE instance = ? AND status = 'completed' "
-        "ORDER BY id DESC",
+        "AND knee_eps IS NOT NULL ORDER BY id DESC",
         (instance,),
     ):
         detail = json.loads(row["detail"])

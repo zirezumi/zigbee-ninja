@@ -78,6 +78,37 @@ def test_wire_peaks_sliding_refinement_and_benchmark_exclusion(tmp_path):
     assert view["fanouts"] == []
 
 
+def test_kneeless_newer_ramp_supplies_neither_limit(tmp_path):
+    # A ramp whose first step already breached completes without a knee; it
+    # must not supply the hard ceiling while an older run supplies the
+    # sustained limit: the two numbers must come from one measurement.
+    db = Database(tmp_path)
+    log = make_log(tmp_path)
+    seed_spread_calibration(db, "z2m-a", started=999_100.0, finished=999_200.0)
+    detail = {
+        "plan": {"target": "6 routers (spread)", "rtt_source": "wire", "mode": "spread"},
+        "steps": [{"achieved_eps": 6.3}],
+        "knee": {"eps": None, "censored": False, "breach": "rtt_p95",
+                 "rtt_source": "wire"},
+        "environment": {"z2m_version": "2.12.1", "coordinator_revision": "8.0.2"},
+    }
+    db.connect().execute(
+        "INSERT INTO calibrations (instance, target, started_at, finished_at, "
+        "status, knee_eps, detail) VALUES ('z2m-a', 'x', ?, ?, 'completed', NULL, ?)",
+        (999_300.0, 999_400.0, json.dumps(detail)),
+    )
+    db.connect().commit()
+    log.record(998_000.0, "wire", "z2m-a", "sendUnicast", "out", None, 30)
+    log.flush()
+
+    view = envelope.summarize(
+        log, db, WINDOW, [{"base_topic": "z2m-a"}], clock=lambda: NOW
+    )
+    limits = view["instances"]["z2m-a"]["limits"]
+    assert limits["sustained_eps"] == 31.0
+    assert limits["ceiling_eps"] == 41.2
+
+
 def test_command_fallback_bursts_and_composition(tmp_path):
     db = Database(tmp_path)
     log = make_log(tmp_path)
