@@ -70,7 +70,10 @@ code {
 }
 
 .brand-mark {
-  font-size: 22px;
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  display: block;
 }
 
 .brand-name {

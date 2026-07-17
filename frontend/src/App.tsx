@@ -143,7 +143,7 @@ function CredentialsForm({ title, subtitle, submitLabel, onSubmit }: Credentials
     <div className="gate">
       <form className="card" onSubmit={(event) => void handleSubmit(event)}>
         <div className="brand">
-          <span className="brand-mark">🥷</span>
+          <img className="brand-mark" src="/logo.png" alt="" width={24} height={24} />
           <span className="brand-name">zigbee-ninja</span>
         </div>
         <h1>{title}</h1>
@@ -295,7 +295,7 @@ export default function App() {
     <div className="shell">
       <aside>
         <div className="brand">
-          <span className="brand-mark">🥷</span>
+          <img className="brand-mark" src="/logo.png" alt="" width={24} height={24} />
           <span className="brand-name">zigbee-ninja</span>
         </div>
         <nav>
