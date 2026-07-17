@@ -143,8 +143,7 @@ function CredentialsForm({ title, subtitle, submitLabel, onSubmit }: Credentials
     <div className="gate">
       <form className="card" onSubmit={(event) => void handleSubmit(event)}>
         <div className="brand">
-          <img className="brand-mark" src="/logo.png" alt="" width={24} height={24} />
-          <span className="brand-name">zigbee-ninja</span>
+          <img className="brand-mark brand-mark-lg" src="/logo.png" alt="zigbee-ninja" width={88} height={88} />
         </div>
         <h1>{title}</h1>
         <p className="subtitle">{subtitle}</p>
@@ -295,7 +294,7 @@ export default function App() {
     <div className="shell">
       <aside>
         <div className="brand">
-          <img className="brand-mark brand-mark-lg" src="/logo.png" alt="zigbee-ninja" width={44} height={44} />
+          <img className="brand-mark brand-mark-lg" src="/logo.png" alt="zigbee-ninja" width={88} height={88} />
         </div>
         <nav>
           {NAV_ITEMS.map((item) =>
