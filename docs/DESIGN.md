@@ -670,9 +670,14 @@ engineering term.
    The **scenario engine** (V2_PROPOSAL.md §V2-11) ships ahead of its
    Rebalance view: `POST /api/scenario/price` prices a what-if move set
    from recorded traffic (chain relocation, census-shift repricing of
-   existing groupcasts, both group-split resolutions, T0 burst-overlay
-   verdicts against the calibrated limits, channel pooling, radio reach
-   as an explicit unknown), read-only and provenance-tagged throughout.
+   existing groupcasts, both group-split resolutions, channel pooling,
+   radio reach as an explicit unknown), read-only and provenance-tagged
+   throughout. Its burst verdict recomposes the identity-bearing T0
+   command stream per scenario mesh and judges sliding command-rate
+   peaks against the calibrated limits (commands per second is the
+   limits' own currency; device reports relocate in the steady term),
+   with the measured wire before-peak alongside as the fidelity
+   reference.
 3. **Attribution explorer**: pivotable bucket × device-class × commander matrix;
    top-N devices/automations; the redundant-command report.
 4. **Wiretap**: per-coordinator wire-tier telemetry: agent/flow health

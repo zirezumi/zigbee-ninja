@@ -233,26 +233,34 @@ def test_subset_move_models_both_resolutions(world):
     assert explicit["splits"][0]["applied_resolution"] == "new_group"
 
 
-def test_burst_overlay_recomposes_t0_peaks(world):
+def test_burst_overlay_recomposes_t0_command_peaks(world):
     db, events, registry = world
-    # A 10-events-in-one-second burst on sensor_1 plus background traffic.
+    # A 10-commands-in-one-second burst on sensor_1; its state echoes and
+    # background reports never count toward the judged command peak.
     for i in range(10):
-        kind = "command" if i % 2 else "state"
-        target = "sensor_1/set" if kind == "command" else "sensor_1"
-        events.record(START + 100 + i * 0.05, "mqtt", "z2m-a", kind, "in", target, 10)
+        events.record(
+            START + 100 + i * 0.05, "mqtt", "z2m-a", "command", "in", "sensor_1/set", 10
+        )
+        events.record(
+            START + 100.2 + i * 0.05, "mqtt", "z2m-a", "state", "in", "sensor_1", 10
+        )
     for i in range(20):
-        events.record(START + 200 + i * 10.0, "mqtt", "z2m-a", "state", "in", "lamp_1", 10)
+        events.record(
+            START + 200 + i * 10.0, "mqtt", "z2m-a", "command", "in", "lamp_1/set", 10
+        )
     events.flush()
 
     report = price(db, events, registry, [move("sensor_1")])
     a_burst = report["instances"]["z2m-a"]["burst"]
     b_burst = report["instances"]["z2m-b"]["burst"]
     assert a_burst["before_peak_1s"]["eps_1s"] == 10.0
-    # The moved device's burst leaves z2m-a and lands on z2m-b.
+    # The moved device's command burst leaves z2m-a and lands on z2m-b.
     assert a_burst["after_peak_1s"]["eps_1s"] <= 2.0
     assert b_burst["after_peak_1s"]["eps_1s"] == 10.0
     assert b_burst["verdict"] == "no_limits"
     assert b_burst["provenance"] == scenario.OVERLAY_PROVENANCE
+    # No tap coverage in the fixture: the measured baseline is honestly absent.
+    assert a_burst["wire_before_peak_1s"] is None
 
 
 def test_burst_verdict_judges_against_limits(world):
@@ -271,7 +279,9 @@ def test_burst_verdict_judges_against_limits(world):
     )
     conn.commit()
     for i in range(10):
-        events.record(START + 100 + i * 0.05, "mqtt", "z2m-a", "state", "in", "sensor_1", 10)
+        events.record(
+            START + 100 + i * 0.05, "mqtt", "z2m-a", "command", "in", "sensor_1/set", 10
+        )
     events.flush()
 
     report = price(db, events, registry, [move("sensor_1")])

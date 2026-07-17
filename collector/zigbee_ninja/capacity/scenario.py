@@ -13,11 +13,15 @@ already prices, on recorded traffic only; nothing here transmits:
    are priced (per-device unicasts to the movers, or a new destination
    group), and the aggregate uses the move's requested resolution.
 5. The verdict is the burst overlay, not steady rates: the identity-bearing
-   T0 streams (commands and state events carry device identity; wire frames
-   do not) recompose onto the per-scenario meshes, and sliding 1 s / 10 s
+   T0 command stream (only T0 carries device identity; wire frames do not)
+   recomposes onto the per-scenario meshes, and sliding 1 s / 10 s command
    peaks are judged against each mesh's measured sustained limit and hard
-   ceiling, with the measured wire before-peak shown alongside so the
-   fidelity difference stays visible.
+   ceiling. The judged currency is commands per second: that is what the
+   calibration limits measure and what the envelope machinery counts;
+   device reports relocate in the steady term instead (T0 state events
+   also include Z2M-synthetic group states that never touch the mesh).
+   The measured wire before-peak shows alongside so the fidelity
+   difference stays visible.
 6. Instances sharing a channel pool one airtime budget.
 7. Radio feasibility is an explicit unknown on every cross-mesh move: the
    engine surfaces the device's best observed link LQI and the destination
@@ -37,12 +41,18 @@ from ..store.db import Database
 from ..store.events import RawEventLog
 from . import headroom, ledger
 from .airtime import CHANNEL_BUDGET_US_PER_S
-from .envelope import _benchmark_windows, _hard_ceiling, _sliding_peak, _span_excluded
+from .envelope import (
+    _benchmark_windows,
+    _hard_ceiling,
+    _sliding_peak,
+    _span_excluded,
+    _wire_peaks,
+)
 
 DEFAULT_WINDOW_SECONDS = 24 * 3600
 MAX_WINDOW_SECONDS = 48 * 3600  # chains and the raw event store keep 48 h
 MAX_MOVES = 50
-T0_KINDS = ("command", "state")
+COMMAND_KINDS = ("command",)
 PEAK_REFINE_BINS = 8
 NEAR_SUSTAINED_FRACTION = 0.8
 
@@ -264,11 +274,10 @@ def _chain_cost_us(
 
 
 def _subject_topics(names: list[str]) -> tuple[str, ...]:
-    """T0 topics that carry a subject's identity: its state topic and its
-    command topics."""
+    """T0 command topics that carry a subject's identity."""
     out: list[str] = []
     for name in names:
-        out.extend((name, f"{name}/set", f"{name}/get"))
+        out.extend((f"{name}/set", f"{name}/get"))
     return tuple(out)
 
 
@@ -283,7 +292,13 @@ def _t0_bins(
 ) -> Counter:
     bins: Counter = Counter()
     for index, count in events_log.rate_bins(
-        instance, start, end, bucket_s, source="mqtt", kinds=T0_KINDS, targets=targets
+        instance,
+        start,
+        end,
+        bucket_s,
+        source="mqtt",
+        kinds=COMMAND_KINDS,
+        targets=targets,
     ):
         bin_start = start + index * bucket_s
         if not _span_excluded(bin_start, bin_start + bucket_s, windows):
@@ -320,7 +335,12 @@ def _refined_peak(
             return [
                 ts
                 for ts in events_log.event_times(
-                    instance, lo, hi, source="mqtt", kinds=T0_KINDS, targets=targets
+                    instance,
+                    lo,
+                    hi,
+                    source="mqtt",
+                    kinds=COMMAND_KINDS,
+                    targets=targets,
                 )
                 if not _span_excluded(ts, ts, windows_by_instance.get(instance, []))
             ]
@@ -700,6 +720,8 @@ def price_scenario(
             return round(max(by_ten.values()) / 10.0, 2)
 
         limits = _limits(db, registry, base)
+        wire = _wire_peaks(events_log, base, start, now, base_windows)
+        wire_before = (wire or {}).get("peak")
         instances[base] = {
             "steady": {
                 "before_us_per_s": round(steady_before[base], 3),
@@ -723,6 +745,10 @@ def price_scenario(
                 "after_peak_1s": after_peak,
                 "before_peak_10s_eps": ten_second_peak(before_bins),
                 "after_peak_10s_eps": ten_second_peak(after_bins),
+                # The measured wire TX peak over the same window: the
+                # fidelity reference the modeled T0 recomposition sits
+                # beside, absent without tap coverage.
+                "wire_before_peak_1s": wire_before,
                 "verdict": _judge(
                     after_peak["eps_1s"] if after_peak else None, limits
                 ),
