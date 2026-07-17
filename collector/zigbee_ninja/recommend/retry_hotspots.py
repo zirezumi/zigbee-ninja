@@ -77,6 +77,9 @@ def _suspects(ctx: DetectorContext, base: str) -> tuple[list[dict], list[dict], 
                     {"device": nodes[end]["name"], "lqi": lqi}
                 )
     coordinator_weak.sort(key=lambda item: item["lqi"])
+    # The coordinator itself is trivially route-heavy (it terminates every
+    # route) and is the measuring node; only other routers are relays worth
+    # naming.
     relays = sorted(
         (
             {
@@ -85,7 +88,9 @@ def _suspects(ctx: DetectorContext, base: str) -> tuple[list[dict], list[dict], 
                 "weakest_lqi": weak_by_node[node_id],
             }
             for node_id, node in nodes.items()
-            if node["routes_via"] >= HEAVY_ROUTES and node_id in weak_by_node
+            if node["routes_via"] >= HEAVY_ROUTES
+            and node_id in weak_by_node
+            and node_id != coordinator
         ),
         key=lambda item: (-item["routes_via"], item["weakest_lqi"]),
     )
@@ -138,9 +143,12 @@ def detect(ctx: DetectorContext) -> list[Finding]:
             "place to look, not a verdict."
         )
 
-        suspects = [item["device"] for item in coordinator_weak] + [
-            item["device"] for item in relays
-        ]
+        suspects = list(
+            dict.fromkeys(
+                [item["device"] for item in coordinator_weak]
+                + [item["device"] for item in relays]
+            )
+        )
         findings.append(
             Finding(
                 detector=NAME,

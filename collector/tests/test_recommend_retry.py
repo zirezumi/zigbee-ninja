@@ -108,6 +108,27 @@ def test_without_snapshot_the_finding_says_to_pull_one(tmp_path):
     assert weak["snapshot_present"] is False
 
 
+def test_coordinator_never_names_itself_a_relay_and_suspects_dedupe(tmp_path):
+    topo = raw_map()
+    # The coordinator terminates routes over its own weak link: it must not
+    # appear as a relay suspect (it is the measuring node), and a device on
+    # both suspect paths appears once.
+    topo["links"][0]["routes"] = [
+        {"status": "ACTIVE", "nextHopAddress": 0},
+        {"status": "ACTIVE", "nextHopAddress": 0},
+        {"status": "ACTIVE", "nextHopAddress": 0},
+    ]
+    topo["links"].append({"sourceIeeeAddr": "0x03", "targetIeeeAddr": "0x01", "lqi": 60})
+    ctx = context(tmp_path, {"z2m-a": 0.11}, topo=topo)
+    findings = retry_hotspots.detect(ctx)
+    assert len(findings) == 1
+    suspects = findings[0].action["suspects"]
+    assert "Coordinator" not in suspects
+    assert len(suspects) == len(set(suspects))
+    weak = next(e for e in findings[0].evidence if e["kind"] == "weak_links")
+    assert all(r["device"] != "Coordinator" for r in weak["heavy_relays"])
+
+
 def test_healthy_coordinator_links_shift_the_story(tmp_path):
     topo = raw_map()
     topo["links"][0]["lqi"] = 220  # coordinator hop healthy; relay still weak
