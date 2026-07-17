@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
 import secrets
+import threading
 import time
+from contextlib import contextmanager
 
 from .. import __version__
 from ..alerts import GLOBAL_INSTANCE, AlertManager
@@ -45,6 +48,9 @@ JOURNAL_RETENTION_DAYS = 90  # change journal (V2_PROPOSAL.md §V2-3)
 LOOP_LAG_SAMPLE_SECONDS = 1.0
 LOOP_LAG_WINDOW_SECONDS = 60.0
 LOOP_LAG_STALL_MS = 250.0
+LOOP_LAG_STALLS_KEPT = 32
+ACTIVITY_SLOW_MS = 100.0
+ACTIVITY_ENTRIES_KEPT = 64
 
 
 class LoopLagMonitor:
@@ -53,14 +59,18 @@ class LoopLagMonitor:
     Synchronous work on the loop (storage flushes, GC, a busy handler)
     shows up here before it can distort time-sensitive consumers: the
     calibration pacer and echo RTT stamps both live on this loop. The
-    worst sample in the last minute feeds the alert evaluator."""
+    worst sample in the last minute feeds the alert evaluator; the last
+    few stalls keep their wall-clock timestamps so they can be matched
+    against the activity log's record of what was running."""
 
-    def __init__(self, clock=time.monotonic):
+    def __init__(self, clock=time.monotonic, wall=time.time):
         self._clock = clock
+        self._wall = wall
         self._samples: list[tuple[float, float]] = []
         self.last_ms = 0.0
         self.ewma_ms: float | None = None
         self.stalls = 0
+        self.recent_stalls: list[dict] = []
 
     def record(self, lag_seconds: float) -> None:
         now = self._clock()
@@ -71,6 +81,12 @@ class LoopLagMonitor:
         )
         if lag_ms >= LOOP_LAG_STALL_MS:
             self.stalls += 1
+            # Stamped at sampler wake-up: the stall itself lies somewhere in
+            # the preceding sample interval plus the lag.
+            self.recent_stalls.append(
+                {"at": self._wall(), "lag_ms": round(lag_ms, 1)}
+            )
+            del self.recent_stalls[:-LOOP_LAG_STALLS_KEPT]
         cutoff = now - LOOP_LAG_WINDOW_SECONDS
         self._samples = [(ts, lag) for ts, lag in self._samples if ts >= cutoff]
         self._samples.append((now, lag_ms))
@@ -84,7 +100,82 @@ class LoopLagMonitor:
             "ewma_ms": round(self.ewma_ms, 1) if self.ewma_ms is not None else None,
             "max_60s_ms": round(self.max_window_ms(), 1),
             "stalls_over_250ms": self.stalls,
+            "recent_stalls": list(self.recent_stalls),
         }
+
+
+class LoopActivityLog:
+    """Names what was running when the event loop stalled.
+
+    The lag monitor says when the loop stalled; this log says what held it:
+    spans wrap the known synchronous on-loop work (MQTT message handling,
+    discovery metric assembly, tile heartbeat writes, fleet snapshot
+    assembly, tap decode) and gc callbacks time collection pauses, which
+    hold the GIL and so pause the loop from any thread. Per-label totals
+    plus a ring of slow entries (wall-clock stamped) feed /api/health,
+    where a stall timestamp can be matched to the span that covers it."""
+
+    def __init__(self, clock=time.monotonic, wall=time.time):
+        self._clock = clock
+        self._wall = wall
+        self._lock = threading.Lock()
+        self._totals: dict[str, dict] = {}
+        self._slow: list[dict] = []
+        self._gc_started: dict[int, float] = {}
+
+    @contextmanager
+    def span(self, label: str):
+        started = self._clock()
+        try:
+            yield
+        finally:
+            self.note(label, (self._clock() - started) * 1000.0)
+
+    def note(self, label: str, duration_ms: float) -> None:
+        with self._lock:
+            entry = self._totals.setdefault(label, {"count": 0, "max_ms": 0.0})
+            entry["count"] += 1
+            entry["max_ms"] = max(entry["max_ms"], duration_ms)
+            if duration_ms >= ACTIVITY_SLOW_MS:
+                entry["slow"] = entry.get("slow", 0) + 1
+                # Stamped at span end: the span covers [at - ms, at].
+                self._slow.append(
+                    {"label": label, "at": self._wall(), "ms": round(duration_ms, 1)}
+                )
+                del self._slow[:-ACTIVITY_ENTRIES_KEPT]
+
+    # GC callbacks run on whichever thread triggered the collection, but a
+    # collection pause holds the GIL, so the loop pauses with it either way.
+    def install_gc(self) -> None:
+        if self._on_gc not in gc.callbacks:
+            gc.callbacks.append(self._on_gc)
+
+    def remove_gc(self) -> None:
+        if self._on_gc in gc.callbacks:
+            gc.callbacks.remove(self._on_gc)
+
+    def _on_gc(self, phase: str, info: dict) -> None:
+        generation = info.get("generation", 0)
+        if phase == "start":
+            self._gc_started[generation] = self._clock()
+        elif phase == "stop":
+            started = self._gc_started.pop(generation, None)
+            if started is not None:
+                self.note(f"gc_gen{generation}", (self._clock() - started) * 1000.0)
+
+    def stats(self) -> dict:
+        with self._lock:
+            return {
+                "totals": {
+                    label: {
+                        "count": entry["count"],
+                        "slow": entry.get("slow", 0),
+                        "max_ms": round(entry["max_ms"], 1),
+                    }
+                    for label, entry in sorted(self._totals.items())
+                },
+                "recent_slow": list(self._slow),
+            }
 
 
 class Engine:
@@ -164,6 +255,7 @@ class Engine:
         self._journal_pending: list[tuple[float, str, str, str, str]] = []
         self._recent_removals: dict[str, tuple[float, str]] = {}
         self.loop_lag = LoopLagMonitor()
+        self.loop_activity = LoopActivityLog()
         self._ha_link: HaLink | None = None
         self._ha_task: asyncio.Task | None = None
         self._ingest: MqttIngest | None = None
@@ -213,7 +305,10 @@ class Engine:
         self._journal_pending.append((now, instance, kind, subject, json.dumps(detail)))
 
     def _on_probe_heartbeat(self, base: str, heartbeat: dict) -> None:
-        self.tiles.on_heartbeat(base, heartbeat)
+        # A sqlite write on the loop thread: it can wait on the flush
+        # worker's transaction, so the activity log times it.
+        with self.loop_activity.span("tile_heartbeat_write"):
+            self.tiles.on_heartbeat(base, heartbeat)
 
     def _on_probe_device_seq(
         self, base: str, name: str, zcl_seq: int, probe_ts: float
@@ -279,6 +374,7 @@ class Engine:
         # divide by recorded time, not by days the ledger never saw.
         if self._config.get("ledger_since") is None:
             self._config.set("ledger_since", time.time())
+        self.loop_activity.install_gc()
         self._flush_task = asyncio.create_task(self._flush_loop())
         self._discovery_task = asyncio.create_task(self._discovery_loop())
         self._loop_lag_task = asyncio.create_task(self._loop_lag_loop())
@@ -286,6 +382,7 @@ class Engine:
         await self.restart_ha()
 
     async def stop(self) -> None:
+        self.loop_activity.remove_gc()
         await self.calibration.shutdown()  # abort any active benchmark run
         for task in (
             self._ingest_task,
@@ -377,6 +474,12 @@ class Engine:
     # -- data path -----------------------------------------------------------
 
     def on_message(self, topic: str, payload: bytes) -> None:
+        # The MQTT handler is the loop's hottest synchronous stretch; the
+        # span lets a stall be attributed to (or ruled out of) it.
+        with self.loop_activity.span("mqtt_message"):
+            self._handle_message(topic, payload)
+
+    def _handle_message(self, topic: str, payload: bytes) -> None:
         if topic.startswith(LOG_TOPIC_PREFIX):
             parsed = self.brokerlog.on_log(payload)
             if parsed is not None:
@@ -401,10 +504,13 @@ class Engine:
             return
         if kind == "bridge" and suffix.startswith("bridge/response/extension/"):
             action = suffix.rsplit("/", 1)[-1]
-            self.tiles.on_bridge_response(base, action, payload)
+            with self.loop_activity.span("tile_bridge_response"):
+                self.tiles.on_bridge_response(base, action, payload)
             return
         if kind == "bridge" and suffix == "bridge/response/networkmap":
-            self.topology.on_response(base, payload)
+            # Stores the raw network map: a large sqlite write on the loop.
+            with self.loop_activity.span("topology_store_write"):
+                self.topology.on_response(base, payload)
             return
         if kind == "bridge" and suffix == "bridge/logging":
             if self.calibration.active:
@@ -517,7 +623,15 @@ class Engine:
         ]
 
     def _discovery_metrics(self, base: str) -> dict:
-        """Headline metrics + alert state for one instance's HA entities."""
+        """Headline metrics + alert state for one instance's HA entities.
+
+        Runs on the event loop each publish cycle and reads sqlite (knee
+        cache refresh, recommendation counts), so the activity log times it.
+        """
+        with self.loop_activity.span("discovery_metrics"):
+            return self._discovery_metrics_inner(base)
+
+    def _discovery_metrics_inner(self, base: str) -> dict:
         samples = self._alert_metrics(
             {"budget_pct", "knee_utilization_pct", "wire_p95_ms"}
         )

@@ -5,7 +5,13 @@ import threading
 
 from zigbee_ninja import alerts
 from zigbee_ninja.attribution.chains import ChainTracker
-from zigbee_ninja.ingest.engine import LOOP_LAG_WINDOW_SECONDS, LoopLagMonitor
+from zigbee_ninja.ingest.engine import (
+    ACTIVITY_ENTRIES_KEPT,
+    LOOP_LAG_STALLS_KEPT,
+    LOOP_LAG_WINDOW_SECONDS,
+    LoopActivityLog,
+    LoopLagMonitor,
+)
 
 
 def test_loop_lag_monitor_tracks_window_max_and_stalls():
@@ -29,6 +35,58 @@ def test_loop_lag_monitor_tracks_window_max_and_stalls():
     # Negative lag (clock adjustments) clamps to zero, never corrupts.
     monitor.record(-0.5)
     assert monitor.stats()["last_ms"] == 0.0
+
+
+def test_loop_lag_monitor_keeps_recent_stall_timestamps():
+    now = {"mono": 1000.0, "wall": 1_700_000_000.0}
+    monitor = LoopLagMonitor(clock=lambda: now["mono"], wall=lambda: now["wall"])
+    monitor.record(0.010)  # below the stall threshold: not kept
+    now["wall"] += 5
+    monitor.record(3.1)
+    stalls = monitor.stats()["recent_stalls"]
+    assert stalls == [{"at": 1_700_000_005.0, "lag_ms": 3100.0}]
+
+    for _ in range(LOOP_LAG_STALLS_KEPT + 10):
+        now["wall"] += 1
+        monitor.record(0.5)
+    stalls = monitor.stats()["recent_stalls"]
+    assert len(stalls) == LOOP_LAG_STALLS_KEPT
+    assert stalls[-1]["at"] == now["wall"]
+
+
+def test_activity_log_records_totals_and_slow_entries():
+    now = {"mono": 50.0, "wall": 1_700_000_000.0}
+    log = LoopActivityLog(clock=lambda: now["mono"], wall=lambda: now["wall"])
+
+    with log.span("mqtt_message"):
+        now["mono"] += 0.002  # fast: counted, not kept in the slow ring
+    with log.span("mqtt_message"):
+        now["mono"] += 0.350  # slow: kept with its wall-clock stamp
+
+    stats = log.stats()
+    assert stats["totals"]["mqtt_message"] == {"count": 2, "slow": 1, "max_ms": 350.0}
+    assert stats["recent_slow"] == [
+        {"label": "mqtt_message", "at": 1_700_000_000.0, "ms": 350.0}
+    ]
+
+    for _ in range(ACTIVITY_ENTRIES_KEPT + 10):
+        log.note("tile_heartbeat_write", 200.0)
+    assert len(log.stats()["recent_slow"]) == ACTIVITY_ENTRIES_KEPT
+
+
+def test_activity_log_times_gc_pauses():
+    now = {"mono": 10.0, "wall": 1_700_000_000.0}
+    log = LoopActivityLog(clock=lambda: now["mono"], wall=lambda: now["wall"])
+    log._on_gc("start", {"generation": 2})
+    now["mono"] += 1.5
+    log._on_gc("stop", {"generation": 2})
+    stats = log.stats()
+    assert stats["totals"]["gc_gen2"]["max_ms"] == 1500.0
+    assert stats["recent_slow"][0]["label"] == "gc_gen2"
+    # A stop with no matching start (callback installed mid-collection)
+    # records nothing rather than a garbage duration.
+    log._on_gc("stop", {"generation": 1})
+    assert "gc_gen1" not in log.stats()["totals"]
 
 
 def test_loop_lag_metric_and_seed_rule_registered():

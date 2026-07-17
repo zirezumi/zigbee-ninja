@@ -8,6 +8,8 @@ def test_health_reports_version_and_setup_state(client):
     assert body["status"] == "ok"
     assert body["version"] == __version__
     assert body["setup_complete"] is False
+    assert "recent_stalls" in body["loop_lag"]
+    assert set(body["loop_activity"]) == {"totals", "recent_slow"}
 
 
 def test_health_setup_complete_after_setup(client):

@@ -161,6 +161,7 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
             "version": __version__,
             "setup_complete": auth.user_count(db) > 0,
             "loop_lag": engine.loop_lag.stats(),
+            "loop_activity": engine.loop_activity.stats(),
         }
 
     @app.post("/api/setup", status_code=201)
@@ -711,7 +712,9 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
                     if not registered:
                         engine.tap.register_agent(agent_id, {})
                         registered = True
-                    engine.tap.feed(agent_id, data)
+                    # ASH/EZSP decode runs synchronously on the loop.
+                    with engine.loop_activity.span("tap_feed"):
+                        engine.tap.feed(agent_id, data)
         except WebSocketDisconnect:
             pass
         finally:
@@ -727,8 +730,8 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
         await websocket.accept()
         try:
             while True:
-                await websocket.send_json(
-                    {
+                with engine.loop_activity.span("ws_fleet_snapshot"):
+                    snapshot = {
                         "ts": time.time(),
                         "broker": engine.ingest_status(),
                         "instances": engine.registry.snapshot(),
@@ -739,7 +742,7 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
                         "fusion": engine.fusion_view(),
                         "alerts": engine.alerts.active_brief(),
                     }
-                )
+                await websocket.send_json(snapshot)
                 await asyncio.sleep(1)
         except WebSocketDisconnect:
             pass

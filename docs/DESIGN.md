@@ -565,7 +565,13 @@ A guided wizard, per coordinator, per-run authorized (grants never persist):
    (their commits once stalled it for seconds, and the ramp driver, echo
    RTT stamps, and every time-sensitive consumer share that loop), and a
    continuous loop-lag monitor feeds a self-health alert (§14) so runtime
-   interference is visible before it can masquerade as mesh truth.
+   interference is visible before it can masquerade as mesh truth. For
+   stall attribution, `/api/health` pairs the monitor's recent stall
+   timestamps with an on-loop activity log: named spans time the known
+   synchronous stretches (MQTT message handling, discovery metric
+   assembly, tile heartbeat writes, fleet snapshot assembly, tap decode)
+   and gc callbacks time collection pauses, so a stall can be matched to
+   the work that covered it.
 
 ## §12 Storage & data model
 
