@@ -60,7 +60,7 @@ METRICS: dict[str, dict] = {
         "scope": "global",
         "kind": "gauge",
         "unit": "agents",
-        "description": "Connected ninja-tap capture agents",
+        "description": "Connected ninja-tap capture daemons",
     },
     "probe_heartbeat_age_s": {
         "scope": "instance",

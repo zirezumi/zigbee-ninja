@@ -227,6 +227,13 @@ aside {
   display: flex;
   flex-direction: column;
   gap: 22px;
+  /* Pin the sidebar to the viewport: long pages scroll the content while
+     the whole nav stays visible; a short window scrolls inside the aside. */
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  box-sizing: border-box;
+  overflow-y: auto;
 }
 
 nav {

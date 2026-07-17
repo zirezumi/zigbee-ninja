@@ -723,8 +723,7 @@ export default function Calibration() {
         <span>
           A calibration run transmits on purpose: benign read requests to a router, ramped
           up until responses start slowing: that turning point is the coordinator's
-          measured capacity limit. Every run is individually authorized from its dry-run
-          preview: there is no standing grant; and an abort control stays live throughout.
+          measured capacity limit.
         </span>
       </div>
       {error && <p className="error">{error}</p>}

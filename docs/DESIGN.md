@@ -612,7 +612,10 @@ admin account (argon2) standalone; HA ingress trust in add-on mode
 **Terminology note:** the GUI presents the calibrated knee (§10, §11) as the
 **capacity limit**: "knee" remains the engineering term throughout this
 document and the API/metric identifiers (`knee_utilization_pct` etc.), which
-stay stable.
+stay stable. Likewise the ninja-tap capture process is presented as a
+**capture daemon** in all GUI text ("agent" reads as an AI agent to users);
+this document, the code, and API fields (`agents`, `agent_details`) keep the
+engineering term.
 
 **V1 views:**
 

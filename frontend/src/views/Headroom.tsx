@@ -211,10 +211,14 @@ function InstancePanel({
           <>
             <span
               className="chip ok"
-              title="The calibrated maximum sustainable command rate; ≥ marks a lower bound: the benchmark ended before anything degraded"
+              title={
+                "The calibrated maximum sustainable command rate; ≥ marks a lower bound: the benchmark ended before anything degraded. " +
+                (knee.mode === "spread"
+                  ? "Measured across the whole coordinator (spread benchmark)."
+                  : "Measured against a single device; the whole coordinator sustains more.")
+              }
             >
               capacity limit {kneeLabel(view)}
-              {knee.mode === "spread" ? " · whole coordinator" : " · single device"}
             </span>
             {knee.kind === "pipeline_ceiling" && (
               <span

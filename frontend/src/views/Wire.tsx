@@ -276,11 +276,11 @@ export default function Wire() {
       <div className={`banner ${agents > 0 ? "ok" : "warn"}`}>
         <span>
           Wiretap:{" "}
-          <strong title="A capture agent is the small ninja-tap process installed on a host that can see the coordinators' network traffic; it streams a filtered packet capture to the collector, which does all the decoding">
+          <strong title="A capture daemon is the small ninja-tap process installed on a host that can see the coordinators' network traffic; it streams a filtered packet capture to the collector, which does all the decoding">
             {agents > 0
-              ? `${agents} capture agent${agents > 1 ? "s" : ""} connected`
+              ? `${agents} capture daemon${agents > 1 ? "s" : ""} connected`
               : socketState === "open"
-                ? "no capture agents connected"
+                ? "no capture daemons connected"
                 : socketState}
           </strong>
           {agents > 0 && (
@@ -301,9 +301,9 @@ export default function Wire() {
         <div className="panel">
           <p className="panel-kicker">Waiting for wire frames</p>
           <p className="hint">
-            A ninja-tap capture agent streams a filtered packet capture of each coordinator's
+            A ninja-tap capture daemon streams a filtered packet capture of each coordinator's
             network link to the collector, which decodes it centrally. Flows appear as soon as
-            an agent connects and traffic crosses a discovered coordinator endpoint.
+            a daemon connects and traffic crosses a discovered coordinator endpoint.
           </p>
         </div>
       ) : (

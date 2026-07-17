@@ -58,13 +58,17 @@ function MeshGraph({ base, pulledAt }: { base: string; pulledAt: number }) {
   const [graphData, setGraphData] = useState<TopologyGraph | null>(null);
   const [viewBox, setViewBox] = useState({ x: 0, y: 0, w: GRAPH_WIDTH, h: GRAPH_HEIGHT });
   const [selected, setSelected] = useState<SimNode | null>(null);
-  const svgRef = useRef<SVGSVGElement | null>(null);
   const dragRef = useRef<{ x: number; y: number; moved: boolean } | null>(null);
+  const pendingNodeRef = useRef<SimNode | null>(null);
+  const wheelCleanupRef = useRef<(() => void) | null>(null);
 
-  // Wheel zoom needs a native non-passive listener: React's synthetic wheel
-  // handler can't call preventDefault, so the page would scroll too.
-  useEffect(() => {
-    const svg = svgRef.current;
+  // Wheel zoom needs a native non-passive listener (React's synthetic wheel
+  // handler can't call preventDefault, so the page would scroll too), and it
+  // must attach through a ref callback: the svg mounts only after the graph
+  // fetch resolves, so a mount-time effect finds no element.
+  const attachSvg = useCallback((svg: SVGSVGElement | null) => {
+    wheelCleanupRef.current?.();
+    wheelCleanupRef.current = null;
     if (!svg) return;
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
@@ -84,8 +88,10 @@ function MeshGraph({ base, pulledAt }: { base: string; pulledAt: number }) {
       });
     };
     svg.addEventListener("wheel", onWheel, { passive: false });
-    return () => svg.removeEventListener("wheel", onWheel);
+    wheelCleanupRef.current = () => svg.removeEventListener("wheel", onWheel);
   }, []);
+
+  useEffect(() => () => wheelCleanupRef.current?.(), []);
 
   function onPointerDown(event: React.PointerEvent<SVGSVGElement>) {
     dragRef.current = { x: event.clientX, y: event.clientY, moved: false };
@@ -109,12 +115,17 @@ function MeshGraph({ base, pulledAt }: { base: string; pulledAt: number }) {
     drag.y = event.clientY;
   }
 
+  // Node selection rides the pointer pair, not onClick: pointer capture on
+  // the svg retargets the pointerup (and the derived click) away from the
+  // circle, so a circle-level click handler never fires. The circle records
+  // itself on pointerdown (before capture takes effect); a release without
+  // meaningful movement selects it.
   function onPointerUp() {
+    if (!dragRef.current?.moved && pendingNodeRef.current) {
+      setSelected(pendingNodeRef.current);
+    }
+    pendingNodeRef.current = null;
     dragRef.current = null;
-  }
-
-  function selectNode(node: SimNode) {
-    if (!dragRef.current?.moved) setSelected(node);
   }
 
   useEffect(() => {
@@ -186,7 +197,7 @@ function MeshGraph({ base, pulledAt }: { base: string; pulledAt: number }) {
   return (
     <>
       <svg
-        ref={svgRef}
+        ref={attachSvg}
         className="mesh-graph"
         viewBox={`${viewBox.x} ${viewBox.y} ${viewBox.w} ${viewBox.h}`}
         role="img"
@@ -234,7 +245,9 @@ function MeshGraph({ base, pulledAt }: { base: string; pulledAt: number }) {
               }
               strokeWidth={selected?.id === node.id ? 3 : node.failed ? 2 : 1}
               style={{ cursor: "pointer" }}
-              onClick={() => selectNode(node)}
+              onPointerDown={() => {
+                pendingNodeRef.current = node;
+              }}
             >
               <title>
                 {node.name} · {node.type}

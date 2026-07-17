@@ -314,12 +314,12 @@ export default function App() {
           <span className="mono">{version}</span>
           <button
             className="ghost"
-            title="Auto follows your operating system's light/dark setting"
+            title="System follows your operating system's light/dark setting"
             onClick={() =>
               setTheme(THEME_ORDER[(THEME_ORDER.indexOf(theme) + 1) % THEME_ORDER.length])
             }
           >
-            Theme: {theme}
+            Theme: {theme === "auto" ? "system" : theme}
           </button>
           <button className="ghost" onClick={() => void handleLogout()}>
             Sign out {username}

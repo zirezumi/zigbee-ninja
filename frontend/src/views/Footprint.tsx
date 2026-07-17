@@ -167,22 +167,22 @@ function TapAgentsPanel({ tap }: { tap: TapStats | null }) {
   const flows = tap?.flows ?? [];
   return (
     <div className="panel">
-      <p className="panel-kicker">Wiretap agents</p>
+      <p className="panel-kicker">Wiretap capture daemons</p>
       <p className="hint">
-        A capture agent is a small process on a host that can see the coordinators' network
+        A capture daemon is a small process on a host that can see the coordinators' network
         traffic. It knows nothing about Zigbee: it streams a filtered packet capture
         outbound to this collector over a scoped token, and all decoding happens here.
         Uninstall on the capture host with <code>ninja-tap uninstall</code> (one-click
         removal from this page is planned).
       </p>
       {!tap || tap.agents === 0 ? (
-        <p className="hint">No agents connected.</p>
+        <p className="hint">No capture daemons connected.</p>
       ) : (
         <>
           <table className="table">
             <thead>
               <tr>
-                <th>Agent</th>
+                <th>Daemon</th>
                 <th className="num">Streamed</th>
                 <th className="num">Segments</th>
               </tr>

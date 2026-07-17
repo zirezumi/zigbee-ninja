@@ -418,7 +418,16 @@ be understandable to someone with a cursory grasp of network engineering:
 all granular data available, cogently presented, plain-language labels with
 tooltips carrying the depth.
 
-## §V2-11 The rebalancing simulator (V2.M4 design: DRAFT, awaiting owner review)
+## §V2-11 The rebalancing simulator (V2.M4 design: RATIFIED 2026-07-16)
+
+**Owner ratifications (2026-07-16):** (1) its own view, nav label
+**Rebalance**; (2) predictions ARE embedded in the migration manifest:
+the §V2-6 verification loop needs the promise as stated at export time,
+and a manifest that carries its own receipts can be audited by
+controller-side tooling without a zigbee-ninja query (owner deferred the
+call; rationale recorded here); (3) both group-split resolutions are
+modeled from day one; (4) scenarios persist server-side under names
+(settings-backed).
 
 An interactive what-if surface: drag devices and groups between
 coordinators and watch the predicted load change. It is a **component of
@@ -510,23 +519,18 @@ estimates, not meter readings.
   own their rows (sync deletes open rows a pass no longer emits), and a
   user's scenario is not detector output.
 
-### Open questions for the owner (ratify before building)
+### Manifest contract (ratified shape; freezes at first ship)
 
-1. Nav placement: its own view (suggested nav label: **Rebalance**), or a
-   mode inside Headroom?
-2. The migration manifest contract must freeze at first ship. Proposed
-   shape: a versioned envelope (`manifest_version`, `generated_at`,
-   `source: simulator|advisor`), one entry per move carrying the subject's
-   identity (friendly name + IEEE + source instance), `to_instance`, the
-   group resolution when a split is involved, and the predicted per-move
-   delta with provenance and basis (the receipts §V2-6 verification
-   compares against); plus the predicted per-instance after-state. Ratify
-   fields, especially: is embedding predictions in the manifest right
-   (receipts), or should predictions live only in zigbee-ninja?
-3. Group subset moves: model both resolutions from day one, or refuse
-   subset moves in the first ship and only move whole groups?
-4. Scenario persistence: named server-side scenarios acceptable, or
-   session-local only?
+A versioned envelope (`manifest_version`, `generated_at`,
+`source: simulator|advisor`), one entry per move carrying the subject's
+identity (friendly name + IEEE + source instance), `to_instance`, the
+group resolution when a split is involved, and the predicted per-move
+delta with provenance and basis; plus the predicted per-instance
+after-state. Predictions are embedded deliberately: they are the
+receipts §V2-6 verification compares the measured after-window against,
+and they make the manifest self-auditing for controller-side tooling.
+Once the export ships, field renames are breaking changes (§V2-10.3
+discipline applies).
 
 ## §V2-12 V2.M4 sequencing (slices)
 
