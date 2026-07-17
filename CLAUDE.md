@@ -422,9 +422,55 @@ router move prices second-order minus 169/plus 97 µs/s, whole-group
 study move shifts census 26 to 21 and 16 to 21 with splits detected
 against two unmoved containing groups, verdicts coherent beside wire
 baselines. Limits carry stale_environment until the re-measure.
-Next M4 slices: rebalancing advisor detector (best after the
-re-measure so judgments carry fresh knees), Rebalance view, manifest
-export (freezes at first ship), applied-verification, retry hotspots.
+**V2.M4 slices 3-7 BUILT (2026-07-17, same session): the M4 loop is
+complete.** (3) **Rebalancing advisor** (`recommend/rebalance.py`,
+detector `rebalancing`): pressure scan in the scenario engine's own
+judged currency (T0 command peak vs measured limits, benchmark windows
+excluded); candidates are the subjects receiving the most commands
+inside the busiest recorded seconds; proposals are the smallest move
+set whose `price_scenario` after-peaks clear the source without pushing
+a destination past its limits (a burst that merely relocates is not a
+finding); one finding per pressured source, medium confidence at best
+(radio reach unknowable), low on stale limits or rare pressure.
+DetectorContext gained db/registry/events_log/topology_latest (None in
+minimal harnesses; the detector degrades to no findings). (4)
+**Rebalance view** (nav after Recommendations): lanes per coordinator
+(steady + burst before→after, verdict chips at the §V2-11 warning
+thresholds), draggable device/group chips with recorded-spend badges,
+router glyphs, group containers, per-chip "Move to…" fallback, search/
+filter/sort, staged tray with per-move deltas + both split resolutions
+selectable + radio/channel-pool notes, undo/reset, named server-side
+scenarios (`rebalance_scenarios` settings key, GET/POST/DELETE
+/api/scenario/saved), "Score with the advisor" (POST /api/scenario/score
+= price + `rebalance.score_report`, pure arithmetic over the same
+report). GET /api/scenario/context serves lane data in the pricing
+arithmetic so lanes and scenarios never disagree. (5) **Manifest
+export**: `capacity/manifest.py` + POST /api/scenario/manifest;
+**the contract is FROZEN at manifest_version 1** (fields only ever
+added): envelope (version/generated_at/source/window/basis), per-move
+subject identity (name + IEEE + source instance; group moves carry
+member name+IEEE pairs), predicted per-move deltas with provenance and
+basis embedded, `predicted_instances` after-states = the §V2-6
+receipts; GUI export buttons on the Rebalance tray (simulator) and
+rebalancing recommendation cards (advisor). (6) **Applied
+verification** (`recommend/verify.py`, rides the hourly pass,
+crash-isolated): journal auto-detects applied rebalancing moves
+(`device_added` + `moved_from`, member-by-member for groups whose
+members are recorded in the action at proposal time; everything else
+stays manual per §V2-10.4); spend detectors verify as mean µs/day over
+completed UTC days (at least two each side, before capped at seven;
+ratio at or under 0.8 improved, at or over 1.25 regressed);
+rebalancing/pacing re-measure their recorded peaks; improved →
+verified, worse → regressed (reopenable), in-between stays applied
+with pending receipts, finalized after fourteen quiet days. Receipts
+in a `verification` column (migration 13), on the API and cards;
+Verified/Regressed tabs. (7) **Retry hotspots**
+(`recommend/retry_hotspots.py`): fires at a measured per-hop retry
+rate of 5% or more; topology names coordinator-hop weak links (the
+counter's own territory) and weakly-linked heavy relays (context);
+saving = unicast spend times the rate (upper bound, modeled); always
+low confidence; action kind `investigate` is an additive extension of
+the §V2-5 vocabulary.
 Roadmap: README.md.
 
 ## Hard rules

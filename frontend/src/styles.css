@@ -844,8 +844,9 @@ nav button.nav-item.active {
 
 .subject-chip {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 4px 6px;
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 3px 8px;
@@ -858,8 +859,10 @@ nav button.nav-item.active {
   opacity: 0.6;
 }
 
+/* The name owns its whole row; badges and the move control wrap under it,
+   so long Zigbee friendly names stay readable in a narrow lane. */
 .subject-name {
-  flex: 1;
+  flex: 1 1 100%;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
