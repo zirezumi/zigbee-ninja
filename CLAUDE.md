@@ -303,11 +303,31 @@ Zigbee2MQTT upgrade (2.10.1 → 2.12.1) journaled on all five instances
 and the stale-environment chips fired, so every stored capacity limit
 is a stale-environment measurement until the owner chooses to
 recalibrate. §V2-11 (rebalancing simulator design) and §V2-12 (M4 slice
-order) are DRAFT in docs/V2_PROPOSAL.md awaiting owner ratification;
-the simulator, migration manifest, and their GUI build only after that
-review. Remaining M4 slices: rebalancing advisor detector, scenario
-engine + simulator, manifest export, applied-recommendation
-verification, retry hotspots.
+order) are RATIFIED (2026-07-16): its own view with nav label
+Rebalance, predictions embedded in the migration manifest as the
+verification receipts, both group-split resolutions modeled from day
+one, named server-side scenarios. Remaining M4 slices: rebalancing
+advisor detector, scenario engine + simulator, manifest export,
+applied-recommendation verification, retry hotspots.
+**Owner UI round (2026-07-16, deployed)**: GUI says "capture daemon"
+(terminology note §13), theme toggle shows "system", the sidebar pins
+to the viewport, Headroom's capacity chip moved the benchmark mode
+into its tooltip, Calibration dropped its authorization hint sentence,
+and the Topology graph's wheel zoom and node clicks work (the zoom
+listener attached before the svg existed; pointer capture retargeted
+the click away from the circles). Envelope fix from live data: the
+hard ceiling now reads the same knee-bearing spread run latest_knees
+serves, so a knee-less early-breach run cannot pair a new ceiling
+with an old sustained limit.
+**Live finding (2026-07-16 evening)**: after the fleet-wide
+Zigbee2MQTT 2.10.1 → 2.12.1 upgrade, owner recalibrations measure the
+command pipeline saturating at roughly a third of the 2.10.1 rates
+(spread knees 6.65-13.25/s vs ~31/s; single 3.55-14/s vs ~16/s), with
+wire RTT flat and zero delivery failures throughout: a Z2M/herdsman
+throughput regression, not mesh degradation. Recorded burst peaks
+(24-30/s) now exceed the new sustained limits several-fold, so bursts
+queue inside Z2M rather than fail; expect the pacing advisor and any
+enabled knee-utilization alerts to react to the new denominators.
 Roadmap: README.md.
 
 ## Hard rules
