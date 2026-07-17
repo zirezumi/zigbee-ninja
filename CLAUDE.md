@@ -355,6 +355,41 @@ gated; candidates are GC and the discovery beat), so aggregate spread
 runs keep getting honestly refused; hunt it with the loop-lag stall
 timestamps, then a quiet-window fleet re-measure gives the true
 2.12.1 knees.
+**Residual stall ROOT-CAUSED and FIXED (2026-07-17)**: /api/health now
+pairs the lag monitor's recent stall timestamps with an on-loop
+activity log (named spans over MQTT handling, discovery metric
+assembly, tile heartbeat writes, fleet snapshot assembly, tap decode;
+gc.callbacks time collection pauses); the first daytime observation
+window caught 1-5 s mqtt_message and tap_feed spans on the flush
+cadence matching the stalls exactly. Cause: RawEventLog.record()
+shared one lock with the DuckDB flush inserts, so the off-loop flush
+still carried its insert time onto the loop through the lock; the
+insert itself was per-row executemany, seconds at daytime volume.
+Fix: capture buffer lock split from the DuckDB lock (record() appends
+in microseconds), inserts now chunked multi-row statements in one
+transaction (100-360 ms typical, down from 1-5 s), and worker_* spans
+keep flush durations visible off-loop. A/B over identical 10-minute
+daytime windows: 22 stalls (worst 5.2 s) before, ZERO after; a
+4.6 s hour-boundary Parquet export later ran with no loop stall at
+all. Verification ramps on z2m-2 (owner-approved scope): spread run
+completed with pristine loop (0 stalls, worst wakeup 97 ms, achieved
+exactly 8/16/32, honest saturation 41.65/s) yet was REFUSED by the
+cumulative pacer bound: 1-3 ms asyncio wakeup granularity times
+640-1280 slots crosses 5% of a step with zero actual interference
+(the rule predates the catch-up driver, whose achieved==requested
+proves small lateness harmless). Single-mode then RECORDED cleanly:
+z2m-2/lr_chandelier_1 knee 16.0/s, ceiling 23.15/s achieved at rate
+32, 0 timeouts/failures, wire p95 34-77 ms. That ceiling BEATS
+2.10.1's 16.55/s: the "-25% per-device 2.12.1 regression" (measured
+12.3/s under the pre-fix collector) was also meter artifact.
+AWAITING OWNER: (1) pacer cumulative-rule refinement (count only
+stall-sized lateness, keep the 1 s single-stall bound): refusal
+semantics are the owner's; spread re-measures stay refused until
+ratified; (2) quiet-window fleet re-measure go-ahead. Residual: rare
+~360 ms blips from uninstrumented paths (calibration record write at
+run end matches one; message-burst queuing suspected for the rest),
+well inside meter tolerance; the activity log names anything that
+grows.
 Roadmap: README.md.
 
 ## Hard rules
