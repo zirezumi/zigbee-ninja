@@ -1,6 +1,12 @@
 """Raw event store: flush, hourly export, retention, queries (DESIGN.md §12)."""
 
-from zigbee_ninja.store.events import BUFFER_MAX_EVENTS, RawEventLog
+import threading
+
+from zigbee_ninja.store.events import (
+    BUFFER_MAX_EVENTS,
+    INSERT_CHUNK_ROWS,
+    RawEventLog,
+)
 
 
 class Clock:
@@ -92,3 +98,44 @@ def test_buffer_cap_drops_and_counts(tmp_path):
     log.record(1.0, "mqtt", "z2m-a", "command", "in", "x", 1)
     assert log.dropped == 1
     assert log.stats()["dropped"] == 1
+
+
+def test_flush_lands_every_row_across_chunk_boundaries(tmp_path):
+    log, _clock = make_log(tmp_path)
+    total = INSERT_CHUNK_ROWS * 2 + 1  # full chunk, full chunk, remainder of 1
+    for index in range(total):
+        log.record(7201.0 + index * 0.001, "mqtt", "z2m-a", "command", "in", "x", index)
+    log.flush()
+    assert log.stats()["hot_rows"] == total
+    events = log.events("z2m-a", 7200.0, 7300.0, limit=total + 10)
+    assert len(events) == total
+    assert events[-1]["size"] == total - 1
+
+
+def test_record_never_blocks_behind_flush_or_queries(tmp_path):
+    """record() shares no lock with DuckDB work: a concurrent flush/query
+    storm must not corrupt the buffer or lose rows."""
+    log, _clock = make_log(tmp_path)
+    errors: list[Exception] = []
+    stop = threading.Event()
+
+    def storm():
+        try:
+            while not stop.is_set():
+                log.flush()
+                log.stats()
+        except Exception as exc:  # pragma: no cover - the failure signal
+            errors.append(exc)
+
+    thread = threading.Thread(target=storm)
+    thread.start()
+    try:
+        for index in range(5000):
+            log.record(7201.0 + index * 0.0001, "mqtt", "z2m-a", "state", "in", "x", 1)
+    finally:
+        stop.set()
+        thread.join(timeout=10)
+    log.flush()
+    assert not errors
+    assert log.stats()["hot_rows"] == 5000
+    assert log.dropped == 0

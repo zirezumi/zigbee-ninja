@@ -1025,8 +1025,11 @@ class Engine:
         stalled it for seconds and distorted every time-sensitive consumer
         sharing it: the calibration pacer above all; that is how the meter
         once measured itself)."""
+        # The worker_* spans time work that runs off the loop: a slow flush
+        # here beside a clean stall record is the decoupling working.
         try:
-            self.flush_rollups()
+            with self.loop_activity.span("worker_rollup_flush"):
+                self.flush_rollups()
         except Exception:
             # Never let a storage hiccup kill the pass; next tick retries.
             pass
@@ -1036,10 +1039,11 @@ class Engine:
             pass
         try:
             settings = self.runtime_settings()
-            self.events.flush(
-                quota_mb=settings["raw_event_quota_mb"],
-                horizon_hours=settings["raw_event_horizon_hours"],
-            )
+            with self.loop_activity.span("worker_events_flush"):
+                self.events.flush(
+                    quota_mb=settings["raw_event_quota_mb"],
+                    horizon_hours=settings["raw_event_horizon_hours"],
+                )
         except Exception:
             pass
 

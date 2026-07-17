@@ -32,6 +32,7 @@ SEGMENT_PREFIX = "segment-"
 DEFAULT_QUOTA_MB = 4096
 DEFAULT_HORIZON_HOURS = 48
 EVENT_COLUMNS = "ts, source, instance, kind, direction, target, size"
+INSERT_CHUNK_ROWS = 500
 
 
 class RawEventLog:
@@ -39,7 +40,14 @@ class RawEventLog:
         self._dir = Path(data_dir) / "events"
         self._dir.mkdir(parents=True, exist_ok=True)
         self._clock = clock
-        self._lock = threading.Lock()
+        # Two locks on purpose: record() runs on the event loop for every
+        # MQTT message and decoded wire frame, so it may only ever contend
+        # with other buffer appends (microseconds). All DuckDB work sits
+        # behind its own lock; a slow flush or query must never reach the
+        # loop through the buffer (the residual calibration-pacer stalls
+        # were exactly this lock coupling).
+        self._buffer_lock = threading.Lock()
+        self._db_lock = threading.Lock()
         self._buffer: list[tuple] = []
         self.dropped = 0
         self._conn = duckdb.connect(str(self._dir / "hot.duckdb"))
@@ -62,7 +70,7 @@ class RawEventLog:
         target: str | None,
         size: int,
     ) -> None:
-        with self._lock:
+        with self._buffer_lock:
             if len(self._buffer) >= BUFFER_MAX_EVENTS:
                 self.dropped += 1
                 return
@@ -70,18 +78,35 @@ class RawEventLog:
 
     # -- flush + retention ---------------------------------------------------------
 
+    def _insert_rows(self, rows: list[tuple]) -> None:
+        """One transaction of chunked multi-row inserts: per-row executemany
+        autocommits each row, which is seconds of WAL churn at busy-mesh
+        volumes."""
+        self._conn.execute("BEGIN TRANSACTION")
+        try:
+            for start in range(0, len(rows), INSERT_CHUNK_ROWS):
+                chunk = rows[start : start + INSERT_CHUNK_ROWS]
+                placeholders = ", ".join(["(?, ?, ?, ?, ?, ?, ?)"] * len(chunk))
+                params = [value for row in chunk for value in row]
+                self._conn.execute(
+                    f"INSERT INTO events ({EVENT_COLUMNS}) VALUES {placeholders}",
+                    params,
+                )
+            self._conn.execute("COMMIT")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
+
     def flush(
         self,
         quota_mb: int = DEFAULT_QUOTA_MB,
         horizon_hours: int = DEFAULT_HORIZON_HOURS,
     ) -> None:
-        with self._lock:
+        with self._buffer_lock:
             rows, self._buffer = self._buffer, []
+        with self._db_lock:
             if rows:
-                self._conn.executemany(
-                    f"INSERT INTO events ({EVENT_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    rows,
-                )
+                self._insert_rows(rows)
             hour = int(self._clock() // 3600)
             if hour > self._exported_hour:
                 self._export_closed_hours(hour)
@@ -149,7 +174,7 @@ class RawEventLog:
         self, instance: str, start: float, end: float, bucket_ms: int
     ) -> dict:
         bucket_s = max(1, int(bucket_ms)) / 1000.0
-        with self._lock:
+        with self._db_lock:
             rows = self._conn.execute(
                 f"SELECT CAST(FLOOR((ts - ?) / ?) AS BIGINT) AS bin, source, "
                 f"COUNT(*) AS events, SUM(size) AS bytes "
@@ -170,7 +195,7 @@ class RawEventLog:
         }
 
     def events(self, instance: str, start: float, end: float, limit: int) -> list[dict]:
-        with self._lock:
+        with self._db_lock:
             rows = self._conn.execute(
                 f"SELECT {EVENT_COLUMNS} FROM {self._from_clause(start, end)} "
                 "WHERE instance = ? AND ts >= ? AND ts < ? ORDER BY ts LIMIT ?",
@@ -213,7 +238,7 @@ class RawEventLog:
         source, kind, and direction. Bins index from ``start`` in steps of
         ``bucket_s``; only nonempty bins return."""
         filter_sql, filter_params = self._filters(source, kinds, direction)
-        with self._lock:
+        with self._db_lock:
             rows = self._conn.execute(
                 f"SELECT CAST(FLOOR((ts - ?) / ?) AS BIGINT) AS bin, COUNT(*) AS n "
                 f"FROM {self._from_clause(start, end)} "
@@ -236,7 +261,7 @@ class RawEventLog:
     ) -> list[float]:
         """Sorted event timestamps in the window under the same filters."""
         filter_sql, filter_params = self._filters(source, kinds, direction)
-        with self._lock:
+        with self._db_lock:
             rows = self._conn.execute(
                 f"SELECT ts FROM {self._from_clause(start, end)} "
                 f"WHERE instance = ? AND ts >= ? AND ts < ?{filter_sql} "
@@ -246,12 +271,15 @@ class RawEventLog:
         return [float(ts) for (ts,) in rows]
 
     def stats(self) -> dict:
-        with self._lock:
+        with self._buffer_lock:
+            buffered = len(self._buffer)
+            dropped = self.dropped
+        with self._db_lock:
             hot_rows = self._conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
             segments = self._segments()
             return {
-                "buffered": len(self._buffer),
-                "dropped": self.dropped,
+                "buffered": buffered,
+                "dropped": dropped,
                 "hot_rows": int(hot_rows),
                 "segments": len(segments),
                 "segment_bytes": sum(path.stat().st_size for path in segments),

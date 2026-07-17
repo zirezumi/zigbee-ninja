@@ -597,7 +597,13 @@ Everything embedded, no external services (P7):
   buffer in memory (bounded; overflow drops are counted, never block ingest),
   flush into a hot DuckDB table on the 10 s cadence, and closed hours export
   to ZSTD Parquet segments; queries union the hot table with the overlapping
-  segments. Retention deletes segments past the horizon (default 48 h), then
+  segments. The capture buffer has its own lock, separate from the DuckDB
+  lock: the ingest path appends and returns in microseconds while flushes
+  and queries contend only with each other (a shared lock once carried
+  multi-second flush inserts straight onto the event loop, §11 item 6).
+  Flush inserts are chunked multi-row statements inside one transaction;
+  per-row inserts autocommit and cost seconds at busy-mesh volumes.
+  Retention deletes segments past the horizon (default 48 h), then
   oldest-first until the directory fits the quota (default 4 GB): both
   settings-backed. V1 captures the T0 MQTT stream (including zigbee-ninja's
   own publishes, tagged `self`) and every decoded T2 EZSP frame on pcap
