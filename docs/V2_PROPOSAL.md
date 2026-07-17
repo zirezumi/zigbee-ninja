@@ -555,6 +555,28 @@ and they make the manifest self-auditing for controller-side tooling.
 Once the export ships, field renames are breaking changes (§V2-10.3
 discipline applies).
 
+> **Implementation (V2.M4, shipped: THE CONTRACT IS NOW FROZEN at
+> `manifest_version` 1):** `capacity/manifest.py` +
+> `POST /api/scenario/manifest` (body: moves, window_seconds, `source:
+> simulator|advisor`). The endpoint prices the moves through the scenario
+> engine first and embeds that report's numbers verbatim, so the export
+> can never disagree with what the simulator or advisor displayed.
+> Envelope: `manifest_version`, `generated_at` (epoch seconds UTC, like
+> every API timestamp), `source`, `window_seconds`, `basis`. Per move:
+> `kind`, `subject`, `from_instance`, `to_instance`, and `predicted`
+> (`commands_before_us_per_s`, `commands_after_us_per_s`, `chains_per_s`,
+> `reports_us_per_s`, `provenance`, `basis`); device moves add `ieee`,
+> `radio` (reach unknown, best observed LQI, destination channel), and
+> when a group split is involved `group_resolution` plus `group_split`
+> (group, stayers, both resolutions priced); group moves add `members`
+> as name+IEEE pairs. `predicted_instances` carries each coordinator's
+> after-state (`steady_after_us_per_s`, `steady_after_pct_of_budget`,
+> `burst_after_peak_1s_eps`, `verdict`, `routers_after`, `limits`,
+> `touched`): the §V2-6 receipts. From here on, fields are only ever
+> added. The GUI bridges: "Export migration manifest" on the Rebalance
+> tray (`source: simulator`) and per-card export on rebalancing
+> recommendations (`source: advisor`).
+
 ## §V2-12 V2.M4 sequencing (slices)
 
 1. **Burst envelope analysis** (shipped first; implementation note under

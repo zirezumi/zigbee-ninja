@@ -22,6 +22,7 @@ from ..capacity import airtime as airtime_model
 from ..capacity import envelope as envelope_model
 from ..capacity import headroom as headroom_model
 from ..capacity import ledger as ledger_module
+from ..capacity import manifest as manifest_model
 from ..capacity import scenario as scenario_model
 from ..ingest import topology as topology_module
 from ..ingest.engine import Engine
@@ -100,6 +101,12 @@ class ScenarioRequest(BaseModel):
 class ScenarioSaveBody(BaseModel):
     name: str
     moves: list[ScenarioMove]
+
+
+class ManifestRequest(BaseModel):
+    moves: list[ScenarioMove]
+    window_seconds: int = scenario_model.DEFAULT_WINDOW_SECONDS
+    source: str = "simulator"
 
 
 SAVED_SCENARIOS_KEY = "rebalance_scenarios"
@@ -511,6 +518,40 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
         except scenario_model.ScenarioError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {**report, "advisor": rebalance_model.score_report(report)}
+
+    @app.post("/api/scenario/manifest")
+    def scenario_manifest(request: Request, body: ManifestRequest) -> dict:
+        """Export the migration manifest for a move set (V2_PROPOSAL.md
+        §V2-11, ratified contract; the shape froze at first ship). The
+        moves are priced first so the embedded predictions are exactly
+        what the simulator or advisor displayed."""
+        require_user(request)
+        if body.source not in manifest_model.SOURCES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"source must be one of {', '.join(manifest_model.SOURCES)}",
+            )
+        engine.flush_rollups()
+        try:
+            report = scenario_model.price_scenario(
+                engine.events,
+                db,
+                engine.registry,
+                engine.tap.pricing_params,
+                lambda base: (
+                    engine.topology.latest(base, include_raw=True).get(base) or {}
+                ),
+                [move.model_dump() for move in body.moves],
+                window_seconds=body.window_seconds,
+            )
+        except scenario_model.ScenarioError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return manifest_model.build(
+            report,
+            engine.registry,
+            [move.model_dump() for move in body.moves],
+            body.source,
+        )
 
     @app.get("/api/scenario/saved")
     def scenario_saved_list(request: Request) -> dict:

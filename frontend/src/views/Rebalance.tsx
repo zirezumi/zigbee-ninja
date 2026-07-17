@@ -167,6 +167,7 @@ export default function Rebalance() {
   const [sortKey, setSortKey] = useState<SortKey>("spend");
   const [pricing, setPricing] = useState(false);
   const [scoring, setScoring] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const dragging = useRef<ScenarioMove | null>(null);
 
@@ -292,6 +293,30 @@ export default function Rebalance() {
       setError(err instanceof ApiError ? err.message : "Scoring failed");
     } finally {
       setScoring(false);
+    }
+  }
+
+  async function exportManifest() {
+    setExporting(true);
+    try {
+      const manifest = await api<Record<string, unknown>>("/api/scenario/manifest", {
+        method: "POST",
+        body: JSON.stringify({ moves, source: "simulator" }),
+      });
+      const blob = new Blob([JSON.stringify(manifest, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `migration-manifest-${new Date().toISOString().slice(0, 10)}.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Manifest export failed");
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -717,6 +742,14 @@ export default function Rebalance() {
                 onClick={() => void scoreNow()}
               >
                 {scoring ? "Scoring…" : "Score with the advisor"}
+              </button>
+              <button
+                className="ghost"
+                disabled={exporting || moves.length === 0}
+                title="Download the migration manifest: a versioned JSON plan for your own tooling, with each move's predicted numbers embedded as the receipts later verification measures against"
+                onClick={() => void exportManifest()}
+              >
+                {exporting ? "Exporting…" : "Export migration manifest"}
               </button>
             </div>
             {score && (

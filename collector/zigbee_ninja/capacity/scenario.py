@@ -667,6 +667,7 @@ def price_scenario(
             {
                 "kind": "device",
                 "subject": plan["name"],
+                "ieee": plan["ieee"],
                 "from_instance": source,
                 "to_instance": dest,
                 "router": plan["router"],

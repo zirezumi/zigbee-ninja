@@ -157,11 +157,40 @@ function Card({
   onState: (rec: Recommendation, state: string) => void;
 }) {
   const [copyLabel, setCopyLabel] = useState("Copy");
+  const [exporting, setExporting] = useState(false);
+  const rebalanceMoves =
+    rec.detector === "rebalancing" && Array.isArray(rec.action.moves)
+      ? (rec.action.moves as Array<Record<string, unknown>>)
+      : null;
 
   async function copyCard() {
     const copied = await copyText(copyPayload(rec));
     setCopyLabel(copied ? "Copied" : "Copy failed");
     window.setTimeout(() => setCopyLabel("Copy"), 1500);
+  }
+
+  async function exportManifest() {
+    if (!rebalanceMoves) return;
+    setExporting(true);
+    try {
+      const manifest = await api<Record<string, unknown>>("/api/scenario/manifest", {
+        method: "POST",
+        body: JSON.stringify({ moves: rebalanceMoves, source: "advisor" }),
+      });
+      const blob = new Blob([JSON.stringify(manifest, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `migration-manifest-${rec.instance}-${new Date()
+        .toISOString()
+        .slice(0, 10)}.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setExporting(false);
+    }
   }
 
   return (
@@ -219,6 +248,16 @@ function Card({
         >
           {copyLabel}
         </button>
+        {rebalanceMoves && (
+          <button
+            className="ghost"
+            disabled={exporting}
+            title="Download this proposal as a migration manifest: a versioned JSON plan for your own tooling, with the predicted numbers embedded as verification receipts"
+            onClick={() => void exportManifest()}
+          >
+            {exporting ? "Exporting…" : "Export manifest"}
+          </button>
+        )}
       </div>
     </div>
   );
