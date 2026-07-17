@@ -471,6 +471,22 @@ counter's own territory) and weakly-linked heavy relays (context);
 saving = unicast spend times the rate (upper bound, modeled); always
 low confidence; action kind `investigate` is an additive extension of
 the §V2-5 vocabulary.
+**Controlled replay BUILT (owner green-lit the slice 2026-07-17; DESIGN
+§11 item 7): the optional §V2-12 item 6.** Rides the calibration rails
+unchanged (preview → single-use token, watchdogs, caps, cooldown,
+pacer-integrity refusal verbatim). `_run_replay_step` drives an
+explicit send schedule; a blocked slot WAITS instead of deferring (the
+slip records in `sent_offsets` beside the request); no stop rules (the
+latency under the shape is the result; watchdogs/caps still abort); no
+knee is ever recorded (mode `replay` rows keep knee_eps NULL, so
+latest_knees/_hard_ceiling never see them and §11.5 exclusion keeps
+working). Sources: recorded window (Calibration view picker fed by the
+envelope's worst bursts), compressed variant (spacing stripped: the
+150 ms stagger A/B), scenario recomposition around the predicted peak
+(Rebalance tray "Verify live on <dest>…" bridge; prediction embeds in
+the record for comparison). POST /api/calibration/replay/{preview,run};
+replay and ramp tokens refuse each other's endpoints. Every replay run
+still needs the owner's per-run authorization in chat.
 Roadmap: README.md.
 
 ## Hard rules
