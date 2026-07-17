@@ -354,6 +354,27 @@ def test_pacer_degradation_refuses_the_knee(tmp_path):
     assert "pacing degraded" in record["verdict"]
     assert max(step["pacer_max_late_ms"] for step in record["steps"]) >= 1000.0
     assert sum(step["pacer_stalls"] for step in record["steps"]) >= 1
+    assert max(step["pacer_stall_s"] for step in record["steps"]) >= 1.2
+
+
+def test_scheduler_granularity_jitter_never_refuses_the_knee(tmp_path):
+    # A healthy loop still wakes every sleep a few ms late; over hundreds of
+    # send slots that sums past the old whole-lateness fraction while the
+    # catch-up schedule holds. Only stall-sized wakeups may refuse a knee.
+    harness = Harness(tmp_path)
+    harness.on_advance = lambda _now: setattr(
+        harness, "now", harness.now + 0.02
+    )
+    record = asyncio.run(harness.run_to_completion())
+    assert record["status"] == "completed"
+    assert record["verdict"] is None
+    assert record["knee"] is not None
+    # The jitter really did cross the fraction the old rule refused on.
+    worst = max(
+        step["pacer_late_s"] / step["duration_s"] for step in record["steps"]
+    )
+    assert worst > benchmark.PACER_DEGRADED_FRACTION
+    assert all(step["pacer_stall_s"] == 0.0 for step in record["steps"])
 
 
 def test_ambient_recorded_and_clean_pacing_keeps_the_knee(tmp_path):

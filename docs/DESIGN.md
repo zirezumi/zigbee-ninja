@@ -555,10 +555,14 @@ A guided wizard, per coordinator, per-run authorized (grants never persist):
    "recalibrate?" suggestion.
 6. **Meter integrity**: the driver measures its own pacing: how late every
    pacing sleep woke up. A run whose pacing degraded past bounds (cumulative
-   lateness above a small fraction of a step, or any single stall of a
-   second or more) completes **without recording a knee** and says why: from
-   inside such a run, a saturated pipeline and a stalled collector are
-   indistinguishable, and an honest meter refuses to guess. Each record also
+   STALL TIME, wakeups a quarter second late or more, above a small fraction
+   of a step, or any single stall of a second or more) completes **without
+   recording a knee** and says why: from inside such a run, a saturated
+   pipeline and a stalled collector are indistinguishable, and an honest
+   meter refuses to guess. Ordinary scheduler wakeup granularity (a few ms
+   per sleep) is recorded but never refuses: it scales with send count, not
+   interference, and the absolute schedule's catch-up absorbs it, which the
+   exact achieved rates prove. Each record also
    carries the ambient command/report rates observed during the run, and the
    dry-run preview warns when the recent window is noisy. Two standing
    defenses back this: storage flushes run off the collector's event loop

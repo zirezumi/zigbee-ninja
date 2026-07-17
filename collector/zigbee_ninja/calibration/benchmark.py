@@ -70,10 +70,15 @@ SATURATION_RATIO = 0.80
 DELIVERY_FAILURES_PER_STEP = 10
 
 # -- pacer integrity (the meter refuses knees its own timekeeping distorted) ----
-# The driver measures how late each pacing sleep wakes up: lateness is event
-# loop interference (storage flushes, GC), not mesh behavior. A step whose
-# cumulative lateness or single worst stall crosses these bounds cannot tell
-# a saturated pipeline from a stalled collector, so the run records no knee.
+# The driver measures how late each pacing sleep wakes up. Total lateness is
+# recorded telemetry; only STALL-SIZED wakeups (PACER_STALL_SECONDS or more)
+# count toward the cumulative refusal bound. The absolute schedule's catch-up
+# absorbs scheduler-granularity lateness by construction (a few ms per wakeup
+# scales with send count, not interference, and achieved==requested proves
+# the schedule held), while a stall queues sends into a burst and lags the
+# receive-side stamps. A step whose stall time crosses the fraction, or any
+# single stall of a second or more, cannot tell a saturated pipeline from a
+# stalled collector, so the run records no knee.
 PACER_STALL_SECONDS = 0.25
 PACER_DEGRADED_FRACTION = 0.05
 PACER_DEGRADED_MAX_STALL_S = 1.0
@@ -118,6 +123,7 @@ class StepResult:
     rtt_source: str | None = None
     breach: str | None = None
     pacer_late_s: float = 0.0
+    pacer_stall_s: float = 0.0
     pacer_max_late_ms: float = 0.0
     pacer_stalls: int = 0
 
@@ -164,7 +170,7 @@ class _BulkState:
 
 def _pacer_degraded(step: StepResult) -> bool:
     return (
-        step.pacer_late_s > PACER_DEGRADED_FRACTION * step.duration_s
+        step.pacer_stall_s > PACER_DEGRADED_FRACTION * step.duration_s
         or step.pacer_max_late_ms >= PACER_DEGRADED_MAX_STALL_S * 1000.0
     )
 
@@ -850,6 +856,7 @@ class CalibrationManager:
                     step.pacer_max_late_ms = round(late * 1000.0, 1)
                 if late >= PACER_STALL_SECONDS:
                     step.pacer_stalls += 1
+                    step.pacer_stall_s += late
 
     async def _settle(self, run: _ActiveRun, step: StepResult) -> None:
         """Drain in-flight reads so steps don't bleed into each other."""
