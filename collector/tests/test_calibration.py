@@ -188,6 +188,9 @@ class Harness:
         wire_covers=False,
         wire_steps=None,
         multi=False,
+        events_log=None,
+        registry=None,
+        pricing=None,
     ):
         self.now = 1000.0
         self.published: list[tuple[str, str]] = []
@@ -216,6 +219,9 @@ class Harness:
             wire_latency_mark=lambda _base: 0.0,
             wire_latency_since=self._wire_since,
             wire_delivery_totals=lambda _base: (0, 0),
+            events_log=events_log,
+            registry=registry,
+            pricing=pricing,
             clock=lambda: self.now,
             sleep=self._sleep,
         )

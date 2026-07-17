@@ -576,6 +576,26 @@ A guided wizard, per coordinator, per-run authorized (grants never persist):
    assembly, tile heartbeat writes, fleet snapshot assembly, tap decode)
    and gc callbacks time collection pauses, so a stall can be matched to
    the work that covered it.
+7. **Controlled replay** (V2_PROPOSAL.md §V2-5 detector 5c): the same rails
+   reproduce a recorded or recomposed burst's *timing shape* instead of a
+   geometric ramp. Sources: a recorded window from the raw event store, its
+   compressed variant (spacing stripped, every send due at once: the
+   worst-case shape controller-side staggers exist to prevent, so an
+   as-recorded/compressed pair answers empirically whether the staggers
+   earn their keep), or a staged rebalancing scenario's recomposed
+   after-stream around its predicted peak (the prediction is embedded in
+   the record for comparison). Replays send the same benign reads,
+   round-robined across eligible routers; per-run preview → single-use
+   token, watchdogs, caps, and cooldown all apply unchanged. Two
+   deliberate differences from the ramp: no stop rules (elevated latency
+   under the reproduced shape is the measurement, not a breach; watchdogs
+   and hard caps still abort), and sends are never dropped: a slot blocked
+   by the outstanding bound waits, and the slip is visible in the recorded
+   send offsets beside the requested schedule. A replay never records a
+   knee; its record (mode `replay` in the calibrations table, so §11.5
+   exclusion keeps working) carries the achieved shape, latency, delivery,
+   and a shape-reproduced verdict, and the meter-integrity refusal applies
+   to the shape-driven sleeps verbatim.
 
 ## §12 Storage & data model
 

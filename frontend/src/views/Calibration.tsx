@@ -164,12 +164,18 @@ function PreviewPanel({
   onCancel: () => void;
 }) {
   const spread = preview.mode === "spread";
+  const replay = preview.mode === "replay";
   return (
     <div className="panel">
       <div className="toolbar">
         <p className="panel-kicker">
-          Dry run: {spread ? "whole-coordinator ramp" : `calibrate ${preview.target}`} on{" "}
-          {preview.instance}
+          Dry run:{" "}
+          {replay
+            ? "controlled replay"
+            : spread
+              ? "whole-coordinator ramp"
+              : `calibrate ${preview.target}`}{" "}
+          on {preview.instance}
         </p>
         {spread && (
           <span
@@ -179,13 +185,28 @@ function PreviewPanel({
             spread mode
           </span>
         )}
+        {replay && (
+          <span
+            className="chip warn"
+            title="Reproduces a recorded or staged burst's timing shape with benign reads; the latency and delivery under that shape are the result. No capacity limit is recorded."
+          >
+            replay · {preview.replay?.variant === "compressed" ? "compressed" : "as recorded"}
+          </span>
+        )}
         <span className="chip">{preview.rtt_source === "wire" ? "wire RTT" : "echo RTT"}</span>
       </div>
       <p>{preview.traffic}</p>
-      {spread ? (
+      {replay && preview.replay?.predicted && (
+        <p className="hint">
+          Verifying a staged scenario: the engine predicts a{" "}
+          {Math.round(preview.replay.predicted.peak_1s_eps)}/s recomposed peak here
+          (verdict: {preview.replay.predicted.verdict.replace(/_/g, " ")}).
+        </p>
+      )}
+      {spread || replay ? (
         <p className="mono hint">
-          {preview.targets.map((entry) => entry.friendly_name).join(" · ")}: per-device
-          share ≤ {preview.per_target_max_eps}/s
+          {preview.targets.map((entry) => entry.friendly_name).join(" · ")}
+          {spread ? `: per-device share ≤ ${preview.per_target_max_eps}/s` : ": reads round-robin"}
         </p>
       ) : (
         <p className="mono hint">
@@ -221,12 +242,18 @@ function PreviewPanel({
         <div>
           <p className="panel-kicker">Stops &amp; rails</p>
           <ul className="hint">
-            <li>{String(preview.stop_rules.rtt_p95)}</li>
-            <li>
-              read timeout {preview.read_timeout_s}s; stop above{" "}
-              {Math.round(Number(preview.stop_rules.timeout_ratio) * 100)}% timeouts
-            </li>
-            <li>stop when the closed loop can't reach the requested rate</li>
+            {replay ? (
+              <li>{String(preview.stop_rules.note)}</li>
+            ) : (
+              <>
+                <li>{String(preview.stop_rules.rtt_p95)}</li>
+                <li>
+                  read timeout {preview.read_timeout_s}s; stop above{" "}
+                  {Math.round(Number(preview.stop_rules.timeout_ratio) * 100)}% timeouts
+                </li>
+                <li>stop when the closed loop can't reach the requested rate</li>
+              </>
+            )}
             <li>{preview.max_outstanding_rule}</li>
             <li>abort: {String(preview.watchdog.uninvolved_offline)}</li>
             <li>
@@ -234,7 +261,8 @@ function PreviewPanel({
               {String(preview.watchdog.stall)}
             </li>
             <li>
-              hard caps: {preview.caps.max_rate_eps}/s, {preview.caps.max_total_reads} reads,{" "}
+              hard caps: {preview.caps.max_rate_eps ? `${preview.caps.max_rate_eps}/s, ` : ""}
+              {preview.caps.max_total_reads} reads,{" "}
               {Math.round(preview.caps.max_run_seconds / 60)} min
             </li>
           </ul>
@@ -495,6 +523,106 @@ function CandidatesPanel({
   );
 }
 
+/** Recorded worst bursts as replay candidates: pick one, pick a variant,
+ * preview the reproduced schedule. */
+function ReplaySection({
+  instance,
+  onPreview,
+  busy,
+}: {
+  instance: string;
+  onPreview: (source: Record<string, unknown>) => void;
+  busy: boolean;
+}) {
+  const [bursts, setBursts] = useState<Array<{ at: number; eps_1s: number }> | null>(null);
+  const [variant, setVariant] = useState<"as_recorded" | "compressed">("as_recorded");
+  const [loading, setLoading] = useState(false);
+
+  async function loadBursts() {
+    setLoading(true);
+    try {
+      const envelope = await api<{
+        instances: Record<string, { top_bursts: Array<{ at: number; eps_1s: number }> }>;
+      }>("/api/envelope?seconds=86400");
+      setBursts(envelope.instances[instance]?.top_bursts ?? []);
+    } catch {
+      setBursts([]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="panel">
+      <div className="toolbar">
+        <p className="panel-kicker">Controlled replay</p>
+        <div className="segmented">
+          <button
+            className={variant === "as_recorded" ? "seg-btn active" : "seg-btn"}
+            title="Reproduce the burst with its recorded spacing, controller staggers and all"
+            onClick={() => setVariant("as_recorded")}
+          >
+            As recorded
+          </button>
+          <button
+            className={variant === "compressed" ? "seg-btn active" : "seg-btn"}
+            title="Strip the spacing and send everything at once: the worst-case shape controller staggers exist to prevent. Compare the two runs to see what the staggers earn."
+            onClick={() => setVariant("compressed")}
+          >
+            Compressed
+          </button>
+        </div>
+        <button className="small" onClick={() => void loadBursts()} disabled={loading}>
+          {loading ? "Loading…" : bursts === null ? "Load recorded bursts" : "Reload bursts"}
+        </button>
+      </div>
+      <p className="hint">
+        Replay a recorded burst's timing shape with the same benign reads the benchmark
+        uses, and watch what the latency and delivery actually do under it. Nothing is
+        written or actuated; no capacity limit is recorded.
+      </p>
+      {bursts !== null &&
+        (bursts.length === 0 ? (
+          <p className="hint">No recorded bursts in the last day for {instance}.</p>
+        ) : (
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Recorded</th>
+                <th className="num">Peak /s</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {bursts.map((burst) => (
+                <tr key={burst.at}>
+                  <td>{new Date(burst.at * 1000).toLocaleString()}</td>
+                  <td className="num">{burst.eps_1s}</td>
+                  <td>
+                    <button
+                      className="small"
+                      disabled={busy}
+                      onClick={() =>
+                        onPreview({
+                          kind: "window",
+                          start: burst.at - 1.0,
+                          end: burst.at + 5.0,
+                          variant,
+                        })
+                      }
+                    >
+                      Preview replay
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ))}
+    </div>
+  );
+}
+
 function HistoryPanel({
   history,
   instances,
@@ -525,7 +653,22 @@ function HistoryPanel({
               <summary>
                 {ago(record.started_at)} · {record.instance} · {record.target} ·{" "}
                 {record.status === "completed" ? (
-                  record.knee ? (
+                  record.mode === "replay" ? (
+                    record.verdict ? (
+                      <span className="chip bad" title={record.verdict}>
+                        replay unreliable: collector stalled
+                      </span>
+                    ) : (
+                      <span
+                        className={record.replay?.shape_reproduced ? "chip ok" : "chip warn"}
+                        title="Whether the driver reproduced the requested timing shape faithfully; the achieved shape is recorded either way"
+                      >
+                        {record.replay?.shape_reproduced
+                          ? "shape reproduced"
+                          : "shape distorted"}
+                      </span>
+                    )
+                  ) : record.knee ? (
                     <strong>
                       capacity limit {record.knee.censored ? "≥" : ""}
                       {record.knee.eps}/s
@@ -545,6 +688,14 @@ function HistoryPanel({
                     {record.status}
                   </span>
                 )}{" "}
+                {record.mode === "replay" && (
+                  <span
+                    className="chip"
+                    title="Controlled replay: a recorded or staged burst shape reproduced with benign reads"
+                  >
+                    replay · {record.replay?.variant === "compressed" ? "compressed" : "as recorded"}
+                  </span>
+                )}{" "}
                 {record.mode === "spread" && (
                   <span
                     className="chip warn"
@@ -562,6 +713,21 @@ function HistoryPanel({
                 )}
               </summary>
               {record.abort_reason && <p className="error">{record.abort_reason}</p>}
+              {record.replay?.achieved && (
+                <p className="hint">
+                  Replayed {record.replay.achieved.sent} reads: peak{" "}
+                  {record.replay.achieved.peak_1s_eps}/s achieved vs{" "}
+                  {record.replay.requested_peak_1s_eps}/s requested ·{" "}
+                  {record.replay.achieved.rtt_source === "wire"
+                    ? `wire p95 ${record.replay.achieved.wire_p95_ms ?? "—"} ms`
+                    : `echo p95 ${record.replay.achieved.echo_p95_ms ?? "—"} ms`}{" "}
+                  · {record.replay.achieved.timeouts} timeouts ·{" "}
+                  {record.replay.achieved.delivery_failed} delivery failures
+                  {record.replay.predicted
+                    ? ` · scenario predicted ${Math.round(record.replay.predicted.peak_1s_eps)}/s (${record.replay.predicted.verdict.replace(/_/g, " ")})`
+                    : ""}
+                </p>
+              )}
               {record.ambient && (
                 <p
                   className="hint"
@@ -664,19 +830,44 @@ export default function Calibration() {
     }
   }
 
+  async function loadReplayPreview(source: Record<string, unknown>) {
+    if (!instance) return;
+    setError(null);
+    try {
+      setPreview(
+        await api<CalibrationPreview>("/api/calibration/replay/preview", {
+          method: "POST",
+          body: JSON.stringify({ instance, source }),
+        }),
+      );
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Replay preview failed");
+    }
+  }
+
   async function authorize() {
     if (!preview) return;
     setStarting(true);
     setError(null);
     try {
-      await api("/api/calibration/run", {
-        method: "POST",
-        body: JSON.stringify({
-          instance: preview.instance,
-          target: preview.target,
-          authorization: preview.authorization,
-        }),
-      });
+      if (preview.mode === "replay") {
+        await api("/api/calibration/replay/run", {
+          method: "POST",
+          body: JSON.stringify({
+            instance: preview.instance,
+            authorization: preview.authorization,
+          }),
+        });
+      } else {
+        await api("/api/calibration/run", {
+          method: "POST",
+          body: JSON.stringify({
+            instance: preview.instance,
+            target: preview.target,
+            authorization: preview.authorization,
+          }),
+        });
+      }
       setPreview(null);
       await refresh();
     } catch (err) {
@@ -794,12 +985,21 @@ export default function Calibration() {
             />
           ) : (
             candidates && (
-              <CandidatesPanel
-                view={candidates}
-                busyTarget={busyTarget}
-                onSelect={(target) => void loadPreview(target)}
-                onSpread={() => void loadSpreadPreview()}
-              />
+              <>
+                <CandidatesPanel
+                  view={candidates}
+                  busyTarget={busyTarget}
+                  onSelect={(target) => void loadPreview(target)}
+                  onSpread={() => void loadSpreadPreview()}
+                />
+                {instance && (
+                  <ReplaySection
+                    instance={instance}
+                    busy={starting}
+                    onPreview={(source) => void loadReplayPreview(source)}
+                  />
+                )}
+              </>
             )
           )}
         </>

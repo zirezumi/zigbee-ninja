@@ -109,6 +109,24 @@ class ManifestRequest(BaseModel):
     source: str = "simulator"
 
 
+class ReplaySource(BaseModel):
+    kind: str  # window | scenario
+    variant: str = "as_recorded"  # as_recorded | compressed
+    start: float | None = None  # window source
+    end: float | None = None
+    moves: list[ScenarioMove] | None = None  # scenario source
+
+
+class ReplayPreviewRequest(BaseModel):
+    instance: str
+    source: ReplaySource
+
+
+class ReplayRunRequest(BaseModel):
+    instance: str
+    authorization: str
+
+
 SAVED_SCENARIOS_KEY = "rebalance_scenarios"
 MAX_SAVED_SCENARIOS = 50
 MAX_SCENARIO_NAME_LENGTH = 64
@@ -714,6 +732,35 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
         require_user(request)
         try:
             return await engine.calibration.start_bulk(settings.authorization)
+        except CalibrationRejected as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    @app.post("/api/calibration/replay/preview")
+    def calibration_replay_preview(
+        request: Request, settings: ReplayPreviewRequest
+    ) -> dict:
+        """Dry run for a controlled replay (V2_PROPOSAL.md §V2-5 detector 5c):
+        the exact reproduced schedule, targets, caps, and watchdogs, plus the
+        single-use authorization token: nothing transmits."""
+        require_user(request)
+        try:
+            return engine.calibration.preview_replay(
+                settings.instance, settings.source.model_dump(exclude_none=True)
+            )
+        except scenario_model.ScenarioError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post("/api/calibration/replay/run", status_code=202)
+    async def calibration_replay_run(
+        request: Request, settings: ReplayRunRequest
+    ) -> dict:
+        require_user(request)
+        try:
+            return await engine.calibration.start_replay(
+                settings.instance, settings.authorization
+            )
         except CalibrationRejected as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 

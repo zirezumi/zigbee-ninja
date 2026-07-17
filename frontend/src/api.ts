@@ -282,19 +282,55 @@ export interface CalibrationPlan {
   }>;
   per_target_max_eps: number | null;
   traffic: string;
-  steps: Array<{ rate_eps: number; duration_s: number; reads: number }>;
+  steps: Array<{ rate_eps: number; duration_s: number; reads: number; offsets?: number[] }>;
   total_reads: number;
   estimated_duration_s: number;
   read_timeout_s: number;
   max_outstanding_rule: string;
   rtt_source: string;
-  caps: { max_rate_eps: number; max_run_seconds: number; max_total_reads: number };
+  caps: {
+    max_rate_eps: number | null;
+    max_run_seconds: number;
+    max_total_reads: number;
+  };
   stop_rules: Record<string, string | number>;
   watchdog: Record<string, string | number>;
   cooldown_seconds: number;
   warnings: string[];
+  replay?: ReplayPlanInfo;
   environment: Record<string, string | null>;
   created_at: number;
+}
+
+export interface ReplayPredicted {
+  peak_1s_eps: number;
+  verdict: string;
+  limits: ScenarioLimits | null;
+}
+
+export interface ReplayPlanInfo {
+  source: Record<string, unknown> & { kind: string };
+  variant: string;
+  window_seconds: number;
+  requested_peak_1s_eps: number;
+  predicted: ReplayPredicted | null;
+}
+
+export interface ReplayResult extends ReplayPlanInfo {
+  achieved: {
+    sent: number;
+    timeouts: number;
+    delivery_failed: number;
+    peak_1s_eps: number;
+    first_to_last_s: number;
+    wire_p50_ms: number | null;
+    wire_p95_ms: number | null;
+    wire_samples: number;
+    echo_p50_ms: number | null;
+    echo_p95_ms: number | null;
+    rtt_source: string | null;
+  } | null;
+  shape_reproduced: boolean;
 }
 
 export interface CalibrationPreview extends CalibrationPlan {
@@ -349,6 +385,7 @@ export interface CalibrationRecord {
   rtt_source: string | null;
   batch_id: string | null;
   mode: string;
+  replay: ReplayResult | null;
 }
 
 export interface CalibrationBulkStatus {

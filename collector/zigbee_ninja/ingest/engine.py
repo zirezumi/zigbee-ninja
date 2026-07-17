@@ -226,6 +226,9 @@ class Engine:
             wire_latency_mark=self.tap.latency.latest_ts,
             wire_latency_since=self.tap.latency.samples_since,
             wire_delivery_totals=self.tap.wire_delivery_totals,
+            events_log=self.events,
+            registry=self.registry,
+            pricing=self.tap.pricing_params,
         )
         self.ha_attr = HaAttribution()
         self.alerts = AlertManager(db, config, provider=self._alert_metrics)

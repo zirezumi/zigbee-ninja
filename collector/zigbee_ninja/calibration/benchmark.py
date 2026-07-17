@@ -93,6 +93,25 @@ WATCHDOG_BRIDGE_ERRORS = 5
 STALL_MIN_SENT = 10
 STALL_SECONDS = 10.0
 
+# -- controlled replay (V2_PROPOSAL.md §V2-5 detector 5c) ----------------------
+# A replay reproduces a recorded or recomposed burst's TIMING SHAPE with the
+# same benign reads the ramp uses, round-robined across eligible routers. It
+# measures no knee: the latency and delivery observed under the reproduced
+# shape are the result. Unlike the ramp's consume-or-defer slots, a replay
+# never drops a send: a slot blocked by the outstanding bound waits, and the
+# slip is visible in the recorded send offsets.
+REPLAY_MIN_COMMANDS = 4
+REPLAY_MAX_COMMANDS = 400
+REPLAY_MAX_WINDOW_SECONDS = 30.0
+REPLAY_MAX_OUTSTANDING = 32
+REPLAY_MIN_TARGETS = 2
+REPLAY_DEFAULT_TARGETS = 6
+# Scenario-sourced replays reproduce the recomposed stream this far around
+# the predicted peak second.
+REPLAY_SCENARIO_PAD_SECONDS = 5.0
+REPLAY_BLOCKED_TICK_SECONDS = 0.02
+REPLAY_VARIANTS = ("as_recorded", "compressed")
+
 HISTORY_LIMIT = 20
 
 
@@ -126,6 +145,10 @@ class StepResult:
     pacer_stall_s: float = 0.0
     pacer_max_late_ms: float = 0.0
     pacer_stalls: int = 0
+    # Replay steps record when each send actually left, relative to the step
+    # start: the achieved shape beside the requested one. Ramp steps leave
+    # this empty.
+    sent_offsets: list[float] = field(default_factory=list)
 
 
 @dataclass
@@ -175,6 +198,18 @@ def _pacer_degraded(step: StepResult) -> bool:
     )
 
 
+def _offsets_peak_1s(offsets: list[float]) -> float:
+    """Highest send count inside any sliding 1 s span of a schedule."""
+    if not offsets:
+        return 0.0
+    best, left = 1, 0
+    for right in range(len(offsets)):
+        while offsets[right] - offsets[left] > 1.0:
+            left += 1
+        best = max(best, right - left + 1)
+    return float(best)
+
+
 def _percentiles(values: list[float]) -> tuple[float | None, float | None]:
     if not values:
         return None, None
@@ -214,6 +249,9 @@ class CalibrationManager:
         wire_latency_mark: Callable[[str], float] | None = None,
         wire_latency_since: Callable[[str, float], list[float]] | None = None,
         wire_delivery_totals: Callable[[str], tuple[int, int]] | None = None,
+        events_log=None,
+        registry=None,
+        pricing: Callable[[str], tuple[float | None, float | None]] | None = None,
         clock: Callable[[], float] = time.time,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ):
@@ -227,6 +265,13 @@ class CalibrationManager:
         self._wire_latency_mark = wire_latency_mark or (lambda _instance: 0.0)
         self._wire_latency_since = wire_latency_since or (lambda _instance, _mark: [])
         self._wire_delivery_totals = wire_delivery_totals or (lambda _instance: (0, 0))
+        # Controlled-replay dependencies: the raw event store supplies the
+        # recorded schedules, the registry and pricing feed scenario-sourced
+        # recompositions. Absent in minimal harnesses; replay previews then
+        # refuse with a clear message.
+        self._events_log = events_log
+        self._registry = registry
+        self._pricing = pricing
         self._clock = clock
         self._sleep = sleep
         self._authorizations: dict[str, dict] = {}
@@ -400,6 +445,246 @@ class CalibrationManager:
             targets = eligible[: min(max(count, SPREAD_MIN_TARGETS), SPREAD_MAX_TARGETS)]
         return self._authorize(self._build_plan(instance, targets, mode="spread"))
 
+    def preview_replay(self, instance: str, source: dict) -> dict:
+        """Controlled replay (V2_PROPOSAL.md §V2-5 detector 5c): reproduce a
+        recorded or recomposed burst's timing shape with benign reads, on the
+        same per-run authorization rails as the ramp."""
+        return self._authorize(self._build_replay_plan(instance, source))
+
+    def _replay_offsets_window(self, instance: str, source: dict) -> tuple[list[float], dict]:
+        start = float(source.get("start") or 0)
+        end = float(source.get("end") or 0)
+        if end <= start:
+            raise ValueError("window end must be after start")
+        if end - start > REPLAY_MAX_WINDOW_SECONDS:
+            raise ValueError(
+                f"replay windows are at most {REPLAY_MAX_WINDOW_SECONDS:.0f} s"
+            )
+        overlap = self._db.connect().execute(
+            "SELECT COUNT(*) AS n FROM calibrations "
+            "WHERE instance = ? AND started_at < ? AND finished_at > ?",
+            (instance, end, start),
+        ).fetchone()
+        if overlap["n"]:
+            raise ValueError(
+                "the window overlaps a benchmark run; that traffic was "
+                "zigbee-ninja's own and replaying it is meaningless"
+            )
+        times = self._events_log.event_times(
+            instance, start, end, source="mqtt", kinds=("command",)
+        )
+        offsets = [round(ts - times[0], 3) for ts in times] if times else []
+        description = {
+            "kind": "window",
+            "start": start,
+            "end": end,
+            "commands_recorded": len(times),
+        }
+        return offsets, description
+
+    def _replay_offsets_scenario(self, instance: str, source: dict) -> tuple[list[float], dict]:
+        if self._registry is None or self._pricing is None:
+            raise ValueError("scenario replays need the registry and pricing wired")
+        from ..capacity import scenario
+
+        moves = source.get("moves") or []
+        report = scenario.price_scenario(
+            self._events_log,
+            self._db,
+            self._registry,
+            self._pricing,
+            self._topology_latest,
+            moves,
+            clock=self._clock,
+        )
+        entry = report["instances"].get(instance)
+        if entry is None:
+            raise ValueError(f"unknown instance {instance!r}")
+        if not entry.get("touched"):
+            raise ValueError(
+                f"the staged moves do not touch {instance}; replay a "
+                "coordinator whose load the scenario changes"
+            )
+        peak = entry["burst"]["after_peak_1s"]
+        if peak is None:
+            raise ValueError(
+                "the recomposed stream has no recorded traffic to replay"
+            )
+        moved_devices, moved_groups = scenario.resolve_moves(self._registry, moves)
+        out_topics, inbound_by_dest = scenario.recomposition_topics(
+            moved_devices, moved_groups
+        )
+        now = self._clock()
+        windows = scenario._benchmark_windows(
+            self._db.connect(), now - scenario.DEFAULT_WINDOW_SECONDS
+        )
+        lo = peak["at"] - REPLAY_SCENARIO_PAD_SECONDS
+        hi = peak["at"] + 1.0 + REPLAY_SCENARIO_PAD_SECONDS
+        times = scenario.recomposed_times(
+            self._events_log,
+            windows,
+            instance,
+            out_topics.get(instance, ()),
+            inbound_by_dest.get(instance, []),
+            lo,
+            hi,
+        )
+        offsets = [round(ts - times[0], 3) for ts in times] if times else []
+        description = {
+            "kind": "scenario",
+            "moves": [
+                {
+                    "kind": move["kind"],
+                    "subject": move["subject"],
+                    "from_instance": move["from_instance"],
+                    "to_instance": move["to_instance"],
+                }
+                for move in moves
+            ],
+            "peak_window_at": peak["at"],
+            "commands_recomposed": len(times),
+        }
+        predicted = {
+            "peak_1s_eps": peak["eps_1s"],
+            "verdict": entry["burst"]["verdict"],
+            "limits": entry.get("limits"),
+        }
+        description["predicted"] = predicted
+        return offsets, description
+
+    def _build_replay_plan(self, instance: str, source: dict) -> dict:
+        if self._events_log is None:
+            raise ValueError("controlled replay needs the raw event store wired")
+        variant = source.get("variant") or "as_recorded"
+        if variant not in REPLAY_VARIANTS:
+            raise ValueError(f"variant must be one of {REPLAY_VARIANTS}")
+        kind = source.get("kind")
+        if kind == "window":
+            offsets, description = self._replay_offsets_window(instance, source)
+        elif kind == "scenario":
+            offsets, description = self._replay_offsets_scenario(instance, source)
+        else:
+            raise ValueError("source kind must be window or scenario")
+        if len(offsets) < REPLAY_MIN_COMMANDS:
+            raise ValueError(
+                f"the source holds {len(offsets)} commands; a replay needs at "
+                f"least {REPLAY_MIN_COMMANDS} to mean anything"
+            )
+        if len(offsets) > REPLAY_MAX_COMMANDS:
+            raise ValueError(
+                f"the source holds {len(offsets)} commands; replays are capped "
+                f"at {REPLAY_MAX_COMMANDS}"
+            )
+        window_seconds = max(offsets[-1], 1.0)
+        requested_peak = _offsets_peak_1s(offsets)
+        if variant == "compressed":
+            # The no-stagger variant: every send due at once; the outstanding
+            # bound is the only pacing, so the mesh sees the recorded moment
+            # with its spacing stripped.
+            offsets = [0.0] * len(offsets)
+            requested_peak = float(len(offsets))
+
+        ranked = self.candidates(instance)["candidates"]
+        eligible = [row["friendly_name"] for row in ranked if row["eligible"]]
+        targets_wanted = min(REPLAY_DEFAULT_TARGETS, len(eligible))
+        if targets_wanted < REPLAY_MIN_TARGETS:
+            raise ValueError(
+                f"a replay needs at least {REPLAY_MIN_TARGETS} eligible routers "
+                f"to spread reads across; {instance} has {len(eligible)}"
+            )
+        target_names = eligible[:targets_wanted]
+        devices = [self._find_device(instance, name) for name in target_names]
+        info = self._instance_info(instance)
+        wire = self._wire_covers(instance)
+        warnings = self._plan_warnings(instance, devices, info, wire)
+        if variant == "compressed":
+            warnings.append(
+                "Compressed variant: the recorded spacing is stripped and every "
+                "read is due at once; the outstanding bound is the only pacing. "
+                "This is the worst-case shape the staggers exist to prevent."
+            )
+
+        targets = [
+            {
+                "friendly_name": device["friendly_name"],
+                "get_attribute": device["get_attribute"],
+                "topic": f"{instance}/{device['friendly_name']}/get",
+                "payload": json.dumps({device["get_attribute"]: ""}),
+            }
+            for device in devices
+        ]
+        now = self._clock()
+        return {
+            "mode": "replay",
+            "instance": instance,
+            "target": f"{len(devices)} routers (replay)",
+            "target_ieee": None,
+            "get_attribute": None,
+            "topic": None,
+            "payload": None,
+            "targets": targets,
+            "traffic": (
+                f"Unicast ZCL attribute reads reproducing the source's timing "
+                f"shape ({len(offsets)} commands over "
+                f"{window_seconds:.1f} s, peak {requested_peak:.0f}/s), "
+                f"round-robined across {len(devices)} routers via Zigbee2MQTT's "
+                "own command path. Nothing is written or actuated; no capacity "
+                "limit is recorded: the latency and delivery under this shape "
+                "are the result."
+            ),
+            "per_target_max_eps": None,
+            "steps": [
+                {
+                    "rate_eps": round(requested_peak, 1),
+                    "duration_s": round(window_seconds, 2),
+                    "reads": len(offsets),
+                    "offsets": offsets,
+                }
+            ],
+            "total_reads": len(offsets),
+            "estimated_duration_s": int(window_seconds + READ_TIMEOUT_SECONDS + 1),
+            "read_timeout_s": READ_TIMEOUT_SECONDS,
+            "max_outstanding_rule": (
+                f"clamp(peak × {OUTSTANDING_RTT_ALLOWANCE}s, {MIN_OUTSTANDING}, "
+                f"{REPLAY_MAX_OUTSTANDING}): a stalling mesh delays the shape "
+                "instead of being buried; the slip is recorded"
+            ),
+            "rtt_source": "wire" if wire else "echo",
+            "caps": {
+                "max_rate_eps": None,
+                "max_run_seconds": MAX_RUN_SECONDS,
+                "max_total_reads": MAX_TOTAL_READS,
+            },
+            "stop_rules": {
+                "note": (
+                    "replays do not stop on latency or saturation: elevated "
+                    "latency under the reproduced shape is the measurement; "
+                    "watchdogs and hard caps still abort"
+                )
+            },
+            "watchdog": {
+                "bridge_error_lines": WATCHDOG_BRIDGE_ERRORS,
+                "uninvolved_offline": "any device on the instance going offline aborts",
+                "stall": f"no replies at all after {STALL_MIN_SENT} reads / {STALL_SECONDS:.0f}s",
+                "manual_abort": "always available",
+            },
+            "cooldown_seconds": COOLDOWN_SECONDS,
+            "warnings": warnings,
+            "replay": {
+                "source": description,
+                "variant": variant,
+                "window_seconds": round(window_seconds, 2),
+                "requested_peak_1s_eps": round(requested_peak, 1),
+                "predicted": description.get("predicted"),
+            },
+            "environment": {
+                "z2m_version": (info or {}).get("version"),
+                "coordinator_type": (info or {}).get("coordinator_type"),
+                "coordinator_revision": (info or {}).get("coordinator_revision"),
+            },
+            "created_at": now,
+        }
+
     def preview_bulk(
         self, instances: list[str] | None = None, targets: dict[str, str] | None = None
     ) -> dict:
@@ -458,19 +743,11 @@ class CalibrationManager:
             "authorization_expires_at": plan["created_at"] + AUTHORIZATION_TTL_SECONDS,
         }
 
-    def _build_plan(self, instance: str, target_names: list[str], mode: str) -> dict:
-        if len(set(target_names)) != len(target_names):
-            raise ValueError("Duplicate calibration targets")
-        if mode == "spread" and not (
-            SPREAD_MIN_TARGETS <= len(target_names) <= SPREAD_MAX_TARGETS
-        ):
-            raise ValueError(
-                f"A spread ramp needs {SPREAD_MIN_TARGETS}–{SPREAD_MAX_TARGETS} "
-                f"eligible routers; got {len(target_names)}"
-            )
-        devices = [self._find_device(instance, name) for name in target_names]
-        info = self._instance_info(instance)
-        wire = self._wire_covers(instance)
+    def _plan_warnings(
+        self, instance: str, devices: list[dict], info: dict | None, wire: bool
+    ) -> list[str]:
+        """Preview warnings shared by ramps and replays: chatty targets,
+        missing wire coverage, shared channels, and a noisy recent window."""
         warnings: list[str] = []
         chatty = [
             device["friendly_name"]
@@ -504,8 +781,8 @@ class CalibrationManager:
         ]
         if shared:
             warnings.append(
-                f"Shares Zigbee channel {info.get('channel')} with {', '.join(shared)}: "
-                "their traffic contends with the benchmark."
+                f"Shares Zigbee channel {(info or {}).get('channel')} with "
+                f"{', '.join(shared)}: their traffic contends with the benchmark."
             )
         ambient = self._recent_ambient(instance)
         if ambient is not None:
@@ -518,6 +795,22 @@ class CalibrationManager:
                     "ambient rates either way; a quieter hour gives a cleaner "
                     "measurement."
                 )
+        return warnings
+
+    def _build_plan(self, instance: str, target_names: list[str], mode: str) -> dict:
+        if len(set(target_names)) != len(target_names):
+            raise ValueError("Duplicate calibration targets")
+        if mode == "spread" and not (
+            SPREAD_MIN_TARGETS <= len(target_names) <= SPREAD_MAX_TARGETS
+        ):
+            raise ValueError(
+                f"A spread ramp needs {SPREAD_MIN_TARGETS}–{SPREAD_MAX_TARGETS} "
+                f"eligible routers; got {len(target_names)}"
+            )
+        devices = [self._find_device(instance, name) for name in target_names]
+        info = self._instance_info(instance)
+        wire = self._wire_covers(instance)
+        warnings = self._plan_warnings(instance, devices, info, wire)
 
         rates = RAMP_RATES_EPS if mode == "single" else SPREAD_RATES_EPS
         cap = MAX_RATE_EPS if mode == "single" else SPREAD_PER_TARGET_MAX_EPS * len(devices)
@@ -610,9 +903,29 @@ class CalibrationManager:
 
     async def start(self, instance: str, target: str, authorization: str) -> dict:
         plan = self._take_authorization(authorization, batch=False)
+        if plan.get("mode") == "replay":
+            raise CalibrationRejected(
+                "This authorization is for a replay: use /api/calibration/replay/run"
+            )
         single = plan.get("mode", "single") == "single"
         if plan["instance"] != instance or (single and plan["target"] != target):
             raise CalibrationRejected("Authorization does not match this instance/target")
+        self._require_idle()
+        self._verify_plan_targets(plan)
+        self._authorizations.pop(authorization, None)  # single-use
+        run = self._make_run(plan)
+        self._active = run
+        self._task = asyncio.get_running_loop().create_task(self._run(run))
+        return self.status()
+
+    async def start_replay(self, instance: str, authorization: str) -> dict:
+        plan = self._take_authorization(authorization, batch=False)
+        if plan.get("mode") != "replay":
+            raise CalibrationRejected(
+                "This authorization is for a ramp: use /api/calibration/run"
+            )
+        if plan["instance"] != instance:
+            raise CalibrationRejected("Authorization does not match this instance")
         self._require_idle()
         self._verify_plan_targets(plan)
         self._authorizations.pop(authorization, None)  # single-use
@@ -729,13 +1042,19 @@ class CalibrationManager:
                 wire_mark = self._wire_latency_mark(run.plan["instance"])
                 delivery_before = self._wire_delivery_totals(run.plan["instance"])
 
-                await self._run_step(run, step)
+                offsets = spec.get("offsets")
+                if offsets is not None:
+                    await self._run_replay_step(run, step, offsets)
+                else:
+                    await self._run_step(run, step)
                 await self._settle(run, step)
 
                 self._finalize_step(run, step, wire_mark, delivery_before)
                 run.steps.append(step)
                 run.current = None
-                if self._evaluate_stop(step, index, baselines):
+                # A replay has no stop rules: elevated latency under the
+                # reproduced shape is the measurement, not a breach.
+                if offsets is None and self._evaluate_stop(step, index, baselines):
                     break
         except _Abort as exc:
             status = "aborted"
@@ -870,6 +1189,63 @@ class CalibrationManager:
                     step.pacer_stalls += 1
                     step.pacer_stall_s += late
 
+    async def _run_replay_step(
+        self, run: _ActiveRun, step: StepResult, offsets: list[float]
+    ) -> None:
+        """Send on an explicit schedule instead of a constant interval.
+
+        Unlike the ramp's consume-or-defer slots, a replay never drops a
+        send: a slot blocked by the outstanding bound waits, and the slip
+        shows in ``sent_offsets`` beside the requested schedule. Pacer
+        integrity is measured on the shape-driven sleeps only; waiting out
+        backpressure is intentional and is not pacing lateness (the global
+        loop-lag monitor still covers stalls during those waits).
+        """
+        peak = float(run.plan["replay"]["requested_peak_1s_eps"])
+        bound = min(
+            max(MIN_OUTSTANDING, math.ceil(peak * OUTSTANDING_RTT_ALLOWANCE)),
+            REPLAY_MAX_OUTSTANDING,
+        )
+        targets = run.plan["targets"]
+        index = 0
+        while index < len(offsets):
+            self._check_abort(run)
+            self._expire_timeouts(run, step)
+            self._check_stall(run, step)
+            if run.sent_total >= MAX_TOTAL_READS:
+                raise _Abort("total read cap reached")
+            if self._clock() - run.started_at > MAX_RUN_SECONDS:
+                raise _Abort("run wall-clock cap reached")
+            due = step.started_at + offsets[index]
+            now = self._clock()
+            if now < due:
+                wait = due - now
+                before = now
+                await self._sleep(wait)
+                late = self._clock() - before - wait
+                if late > 0:
+                    step.pacer_late_s += late
+                    if late * 1000.0 > step.pacer_max_late_ms:
+                        step.pacer_max_late_ms = round(late * 1000.0, 1)
+                    if late >= PACER_STALL_SECONDS:
+                        step.pacer_stalls += 1
+                        step.pacer_stall_s += late
+                continue
+            if run.outstanding_total() >= bound:
+                await self._sleep(REPLAY_BLOCKED_TICK_SECONDS)
+                continue
+            entry = targets[run.rr_index % len(targets)]
+            run.rr_index += 1
+            try:
+                await self._publish(entry["topic"], entry["payload"])
+            except Exception as exc:
+                raise _Abort(f"publish failed: {exc}") from exc
+            run.outstanding[entry["friendly_name"]].append(self._clock())
+            step.sent += 1
+            run.sent_total += 1
+            step.sent_offsets.append(round(self._clock() - step.started_at, 3))
+            index += 1
+
     async def _settle(self, run: _ActiveRun, step: StepResult) -> None:
         """Drain in-flight reads so steps don't bleed into each other."""
         run.state = "settling"
@@ -996,6 +1372,7 @@ class CalibrationManager:
         conn.commit()
 
     def _record(self, run: _ActiveRun, status: str) -> None:
+        replay = run.plan.get("mode") == "replay"
         good = [step for step in run.steps if step.breach is None]
         breached = [step for step in run.steps if step.breach is not None]
         degraded = [step for step in run.steps if _pacer_degraded(step)]
@@ -1005,14 +1382,19 @@ class CalibrationManager:
         if degraded:
             # The driver's own pacing lost time to event-loop interference:
             # a saturated pipeline and a stalled collector are then
-            # indistinguishable, so no capacity limit is claimed.
+            # indistinguishable, so no capacity limit is claimed (and a
+            # replayed shape cannot be trusted as faithful).
             worst_ms = max(step.pacer_max_late_ms for step in degraded)
             verdict = (
                 "unreliable: the collector's own send pacing degraded during "
-                f"the run (worst stall {worst_ms:.0f} ms); no capacity limit "
-                "was recorded"
+                f"the run (worst stall {worst_ms:.0f} ms); "
+                + (
+                    "the reproduced shape is not trustworthy"
+                    if replay
+                    else "no capacity limit was recorded"
+                )
             )
-        elif status == "completed" and good:
+        elif status == "completed" and good and not replay:
             knee_eps = good[-1].achieved_eps
             knee = {
                 "eps": knee_eps,
@@ -1027,6 +1409,7 @@ class CalibrationManager:
             "steps": [asdict(step) for step in run.steps],
             "knee": knee,
             "verdict": verdict,
+            "replay": self._replay_result(run, verdict) if replay else None,
             "ambient": {
                 "commands": run.ambient.get("command", 0),
                 "state_reports": run.ambient.get("state", 0),
@@ -1052,6 +1435,46 @@ class CalibrationManager:
             ),
         )
         conn.commit()
+
+    def _replay_result(self, run: _ActiveRun, verdict: str | None) -> dict:
+        """The replay's outcome beside its request: the achieved shape, the
+        latency and delivery observed under it, and the scenario prediction
+        it was verifying when one exists."""
+        plan_replay = run.plan.get("replay") or {}
+        step = run.steps[0] if run.steps else None
+        if step is None:
+            return {**plan_replay, "achieved": None}
+        achieved_peak = _offsets_peak_1s(step.sent_offsets)
+        requested_peak = float(plan_replay.get("requested_peak_1s_eps") or 0)
+        return {
+            **plan_replay,
+            "achieved": {
+                "sent": step.sent,
+                "timeouts": step.timeouts,
+                "delivery_failed": step.delivery_failed_delta,
+                "peak_1s_eps": round(achieved_peak, 1),
+                "first_to_last_s": (
+                    round(step.sent_offsets[-1] - step.sent_offsets[0], 3)
+                    if len(step.sent_offsets) >= 2
+                    else 0.0
+                ),
+                "wire_p50_ms": step.wire_p50_ms,
+                "wire_p95_ms": step.wire_p95_ms,
+                "wire_samples": step.wire_samples,
+                "echo_p50_ms": step.echo_p50_ms,
+                "echo_p95_ms": step.echo_p95_ms,
+                "rtt_source": step.rtt_source,
+            },
+            # Compressed variants have no spacing to reproduce: fidelity is
+            # every command going out. As-recorded fidelity is the achieved
+            # peak staying near the requested one.
+            "shape_reproduced": verdict is None
+            and (
+                step.sent >= int(run.plan.get("total_reads") or 0)
+                if plan_replay.get("variant") == "compressed"
+                else requested_peak > 0 and achieved_peak >= 0.9 * requested_peak
+            ),
+        }
 
     def status(self) -> dict:
         active = None
@@ -1123,6 +1546,7 @@ class CalibrationManager:
                     "rtt_source": (detail.get("plan") or {}).get("rtt_source"),
                     "batch_id": (detail.get("plan") or {}).get("batch_id"),
                     "mode": (detail.get("plan") or {}).get("mode", "single"),
+                    "replay": detail.get("replay"),
                 }
             )
         return result

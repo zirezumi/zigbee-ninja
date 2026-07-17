@@ -306,6 +306,78 @@ def _t0_bins(
     return bins
 
 
+def recomposition_topics(
+    moved_devices: dict[str, dict], moved_groups: list[dict]
+) -> tuple[dict[str, tuple[str, ...]], dict[str, list[tuple[str, tuple[str, ...]]]]]:
+    """Per-instance topic sets the burst recomposition works in: the topics
+    leaving each source, and per destination the (source, topics) whose
+    events re-home there."""
+    moved_names_by_source: dict[str, list[str]] = {}
+    for plan in moved_devices.values():
+        moved_names_by_source.setdefault(plan["from_instance"], []).append(plan["name"])
+    inbound_by_dest: dict[str, list[tuple[str, tuple[str, ...]]]] = {}
+    out_topics: dict[str, tuple[str, ...]] = {}
+    for source, names in moved_names_by_source.items():
+        group_names = [g["name"] for g in moved_groups if g["from_instance"] == source]
+        out_topics[source] = _subject_topics(sorted(set(names)) + group_names)
+        by_dest: dict[str, list[str]] = {}
+        for name in names:
+            by_dest.setdefault(
+                moved_devices[f"{source}/{name}"]["to_instance"], []
+            ).append(name)
+        for group in moved_groups:
+            if group["from_instance"] == source:
+                by_dest.setdefault(group["to_instance"], []).append(group["name"])
+        for dest, subjects in by_dest.items():
+            inbound_by_dest.setdefault(dest, []).append(
+                (source, _subject_topics(sorted(set(subjects))))
+            )
+    return out_topics, inbound_by_dest
+
+
+def resolve_moves(registry, moves: list[dict]) -> tuple[dict[str, dict], list[dict]]:
+    """Public resolution entry for callers outside the pricing path (the
+    controlled-replay scheduler): validates instances exist implicitly via
+    subject lookups; raises ScenarioError on unknown subjects."""
+    return _resolve(registry, moves)
+
+
+def recomposed_times(
+    events_log: RawEventLog,
+    windows_by_instance: dict[str, list[tuple[float, float]]],
+    home: str,
+    out_targets: tuple[str, ...],
+    inbound: list[tuple[str, tuple[str, ...]]],
+    lo: float,
+    hi: float,
+) -> list[float]:
+    """Sorted timestamps of the recomposed T0 command stream on ``home``
+    in [lo, hi): the instance's own commands minus the moved subjects'
+    plus arrivals re-homed from each source, benchmark windows excluded.
+    The controlled-replay scheduler reproduces exactly this stream."""
+
+    def times(instance: str, targets: tuple[str, ...] | None) -> list[float]:
+        return [
+            ts
+            for ts in events_log.event_times(
+                instance,
+                lo,
+                hi,
+                source="mqtt",
+                kinds=COMMAND_KINDS,
+                targets=targets,
+            )
+            if not _span_excluded(ts, ts, windows_by_instance.get(instance, []))
+        ]
+
+    stream = Counter(times(home, None))
+    if out_targets:
+        stream.subtract(Counter(times(home, out_targets)))
+    for source, topics in inbound:
+        stream.update(times(source, topics))
+    return sorted(ts for ts, n in stream.items() for _ in range(max(n, 0)))
+
+
 def _refined_peak(
     events_log: RawEventLog,
     start: float,
@@ -325,32 +397,15 @@ def _refined_peak(
         :PEAK_REFINE_BINS
     ]:
         window_start = start + index
-
-        def times(
-            instance: str,
-            targets: tuple[str, ...] | None,
-            lo: float = window_start - 1.0,
-            hi: float = window_start + 2.0,
-        ) -> list[float]:
-            return [
-                ts
-                for ts in events_log.event_times(
-                    instance,
-                    lo,
-                    hi,
-                    source="mqtt",
-                    kinds=COMMAND_KINDS,
-                    targets=targets,
-                )
-                if not _span_excluded(ts, ts, windows_by_instance.get(instance, []))
-            ]
-
-        stream = Counter(times(home, None))
-        if out_targets:
-            stream.subtract(Counter(times(home, out_targets)))
-        for source, topics in inbound:
-            stream.update(times(source, topics))
-        merged = sorted(ts for ts, n in stream.items() for _ in range(max(n, 0)))
+        merged = recomposed_times(
+            events_log,
+            windows_by_instance,
+            home,
+            out_targets,
+            inbound,
+            window_start - 1.0,
+            window_start + 2.0,
+        )
         peak, at = _sliding_peak(merged)
         peak = max(peak, float(count))
         if peak > best_eps:
@@ -777,24 +832,7 @@ def price_scenario(
         deltas[base] += term
 
     # Burst overlay (§V2-11 item 5): recomposed T0 peaks judged per mesh.
-    inbound_by_dest: dict[str, list[tuple[str, tuple[str, ...]]]] = {}
-    out_topics: dict[str, tuple[str, ...]] = {}
-    for source, names in moved_names_by_source.items():
-        group_names = [g["name"] for g in moved_groups if g["from_instance"] == source]
-        topics = _subject_topics(sorted(set(names)) + group_names)
-        out_topics[source] = topics
-        by_dest: dict[str, list[str]] = {}
-        for name in names:
-            by_dest.setdefault(
-                moved_devices[f"{source}/{name}"]["to_instance"], []
-            ).append(name)
-        for group in moved_groups:
-            if group["from_instance"] == source:
-                by_dest.setdefault(group["to_instance"], []).append(group["name"])
-        for dest, subjects in by_dest.items():
-            inbound_by_dest.setdefault(dest, []).append(
-                (source, _subject_topics(sorted(set(subjects))))
-            )
+    out_topics, inbound_by_dest = recomposition_topics(moved_devices, moved_groups)
 
     instances: dict[str, dict] = {}
     for base in sorted(bases):

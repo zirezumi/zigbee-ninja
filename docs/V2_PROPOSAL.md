@@ -336,6 +336,22 @@ supports changing."*
 > 7) and drops to low on stale calibration environments or pressure
 > recorded in fewer than three distinct seconds.
 >
+> **Implementation (V2.M4, controlled replay; DESIGN.md §11 item 7):**
+> `POST /api/calibration/replay/preview` + `/run` on the calibration
+> rails: per-run preview → single-use token, watchdogs, caps, cooldown
+> unchanged. The driver reproduces an explicit send schedule with benign
+> reads round-robined across eligible routers; a blocked slot waits
+> rather than dropping (the slip is recorded beside the requested
+> schedule), no stop rules end the run (latency under the shape is the
+> measurement), and no knee is ever recorded. Sources: a recorded window
+> (the Headroom envelope's worst bursts feed the Calibration view's
+> picker), the compressed variant (spacing stripped: the stagger A/B),
+> and a staged scenario's recomposed after-stream around its predicted
+> peak (the Rebalance tray's "Verify live" bridge; the prediction embeds
+> in the record). Pacer-integrity refusal applies verbatim: a stalled
+> collector marks the reproduced shape untrustworthy instead of claiming
+> a result.
+>
 > **Implementation (V2.M4, retry hotspots):** fires when a coordinator's
 > measured per-hop MAC retry rate (§10, EWMA over harvested counter
 > windows) sits at or above 5%. The stored topology snapshot names the

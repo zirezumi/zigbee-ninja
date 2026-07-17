@@ -168,6 +168,10 @@ export default function Rebalance() {
   const [pricing, setPricing] = useState(false);
   const [scoring, setScoring] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [replayPreview, setReplayPreview] = useState<Record<string, unknown> | null>(null);
+  const [replayInstance, setReplayInstance] = useState<string | null>(null);
+  const [replayBusy, setReplayBusy] = useState(false);
+  const [replayStarted, setReplayStarted] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const dragging = useRef<ScenarioMove | null>(null);
 
@@ -317,6 +321,51 @@ export default function Rebalance() {
       setError(err instanceof ApiError ? err.message : "Manifest export failed");
     } finally {
       setExporting(false);
+    }
+  }
+
+  async function previewReplay(dest: string) {
+    setReplayBusy(true);
+    setReplayStarted(false);
+    try {
+      const plan = await api<Record<string, unknown>>(
+        "/api/calibration/replay/preview",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            instance: dest,
+            source: { kind: "scenario", moves, variant: "as_recorded" },
+          }),
+        },
+      );
+      setReplayPreview(plan);
+      setReplayInstance(dest);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Replay preview failed");
+    } finally {
+      setReplayBusy(false);
+    }
+  }
+
+  async function authorizeReplay() {
+    if (!replayPreview || !replayInstance) return;
+    setReplayBusy(true);
+    try {
+      await api("/api/calibration/replay/run", {
+        method: "POST",
+        body: JSON.stringify({
+          instance: replayInstance,
+          authorization: replayPreview.authorization,
+        }),
+      });
+      setReplayPreview(null);
+      setReplayStarted(true);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Replay refused");
+    } finally {
+      setReplayBusy(false);
     }
   }
 
@@ -751,7 +800,52 @@ export default function Rebalance() {
               >
                 {exporting ? "Exporting…" : "Export migration manifest"}
               </button>
+              {Array.from(new Set(moves.map((move) => move.to_instance))).map((dest) => (
+                <button
+                  key={dest}
+                  className="ghost"
+                  disabled={replayBusy}
+                  title="Reproduce the staged scenario's recomposed burst on this coordinator with benign reads (nothing actuates) and watch the real latency under it. Each run needs its own authorization; the record lands on the Calibration view."
+                  onClick={() => void previewReplay(dest)}
+                >
+                  Verify live on {dest}…
+                </button>
+              ))}
             </div>
+            {replayStarted && (
+              <p className="hint">
+                Replay started: live progress and the record are on the Calibration view.
+              </p>
+            )}
+            {replayPreview && (
+              <div className="banner">
+                <strong>
+                  Controlled replay on {replayInstance}: authorize to transmit.
+                </strong>
+                <p className="hint">{String(replayPreview.traffic)}</p>
+                {((replayPreview.warnings as string[] | undefined) ?? []).map(
+                  (warning) => (
+                    <p key={warning} className="hint">
+                      <span className="chip warn">note</span> {warning}
+                    </p>
+                  ),
+                )}
+                <div className="toolbar">
+                  <button disabled={replayBusy} onClick={() => void authorizeReplay()}>
+                    {replayBusy ? "Starting…" : "Authorize this replay"}
+                  </button>
+                  <button
+                    className="ghost small"
+                    onClick={() => setReplayPreview(null)}
+                  >
+                    Cancel
+                  </button>
+                  <span className="hint">
+                    Single-use authorization; nothing persists across runs.
+                  </span>
+                </div>
+              </div>
+            )}
             {score && (
               <div className={score.accepted ? "banner ok" : "banner"}>
                 <strong>
