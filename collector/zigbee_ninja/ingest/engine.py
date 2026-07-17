@@ -706,6 +706,7 @@ class Engine:
             )
             conn.execute("DELETE FROM series_10s WHERE ts < ?", (rollup_cutoff,))
             written += len(rows)
+            conn.commit()
 
         class_rows = self.class_rates.drain_completed_windows()
         if class_rows:
@@ -716,6 +717,7 @@ class Engine:
             )
             conn.execute("DELETE FROM attribution_10s WHERE ts < ?", (rollup_cutoff,))
             written += len(class_rows)
+            conn.commit()
 
         airtime_rows = self.tap.airtime.drain_completed_windows()
         if airtime_rows:
@@ -726,6 +728,7 @@ class Engine:
             )
             conn.execute("DELETE FROM airtime_10s WHERE ts < ?", (rollup_cutoff,))
             written += len(airtime_rows)
+            conn.commit()
 
         latency_rows = self.tap.latency.drain_completed_windows()
         if latency_rows:
@@ -736,6 +739,7 @@ class Engine:
             )
             conn.execute("DELETE FROM latency_10s WHERE ts < ?", (rollup_cutoff,))
             written += len(latency_rows)
+            conn.commit()
 
         finalized = self.chains.drain_finalized()
         if finalized:
@@ -761,8 +765,10 @@ class Engine:
             )
             conn.execute("DELETE FROM chains WHERE opened_at < ?", (chain_cutoff,))
             written += len(finalized)
+            conn.commit()
 
         written += self._flush_ledger(conn, finalized)
+        conn.commit()
 
         journal_pending, self._journal_pending = self._journal_pending, []
         if journal_pending:
@@ -898,35 +904,44 @@ class Engine:
             conn.execute("DELETE FROM ledger_device_daily WHERE day < ?", (cutoff_day,))
         return written
 
+    def _flush_and_tick(self) -> None:
+        """The 10 s storage pass, run on one worker thread: the flush and the
+        alert tick share that thread so they can never collide on the write
+        lock, and neither ever blocks the event loop (their commits once
+        stalled it for seconds and distorted every time-sensitive consumer
+        sharing it: the calibration pacer above all; that is how the meter
+        once measured itself)."""
+        try:
+            self.flush_rollups()
+        except Exception:
+            # Never let a storage hiccup kill the pass; next tick retries.
+            pass
+        try:
+            self.alerts.tick()
+        except Exception:
+            pass
+        try:
+            settings = self.runtime_settings()
+            self.events.flush(
+                quota_mb=settings["raw_event_quota_mb"],
+                horizon_hours=settings["raw_event_horizon_hours"],
+            )
+        except Exception:
+            pass
+
     async def _flush_loop(self) -> None:
         while True:
             await asyncio.sleep(ROLLUP_SECONDS)
             try:
-                # Storage writes run off the event loop: their commits and
-                # fsyncs blocked it for seconds and distorted every
-                # time-sensitive consumer sharing it (the calibration pacer
-                # above all; that is how the meter once measured itself).
-                await asyncio.to_thread(self.flush_rollups)
-            except Exception:
-                # Never let a storage hiccup kill the loop; next tick retries.
-                pass
-            try:
-                self.alerts.tick()
-            except Exception:
-                pass
-            try:
-                settings = self.runtime_settings()
-                await asyncio.to_thread(
-                    self.events.flush,
-                    quota_mb=settings["raw_event_quota_mb"],
-                    horizon_hours=settings["raw_event_horizon_hours"],
-                )
+                await asyncio.to_thread(self._flush_and_tick)
             except Exception:
                 pass
             try:
                 # Detector pass on its own slow cadence, off the event loop:
-                # store reads can take a second or two on a full window.
-                if self.recommendations.due():
+                # store reads can take a second or two on a full window, and
+                # its GIL-bound stretches still jitter the loop, so it defers
+                # while a calibration run needs the pacer undisturbed.
+                if self.recommendations.due() and not self.calibration.active:
                     await asyncio.to_thread(self.recommendations.run)
             except Exception:
                 pass
