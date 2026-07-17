@@ -76,6 +76,11 @@ code {
   display: block;
 }
 
+.brand-mark-lg {
+  width: 44px;
+  height: 44px;
+}
+
 .brand-name {
   font-family: var(--mono);
   font-size: 15px;

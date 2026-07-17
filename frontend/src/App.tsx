@@ -295,8 +295,7 @@ export default function App() {
     <div className="shell">
       <aside>
         <div className="brand">
-          <img className="brand-mark" src="/logo.png" alt="" width={24} height={24} />
-          <span className="brand-name">zigbee-ninja</span>
+          <img className="brand-mark brand-mark-lg" src="/logo.png" alt="zigbee-ninja" width={44} height={44} />
         </div>
         <nav>
           {NAV_ITEMS.map((item) =>
