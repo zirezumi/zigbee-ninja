@@ -319,15 +319,42 @@ the click away from the circles). Envelope fix from live data: the
 hard ceiling now reads the same knee-bearing spread run latest_knees
 serves, so a knee-less early-breach run cannot pair a new ceiling
 with an old sustained limit.
-**Live finding (2026-07-16 evening)**: after the fleet-wide
-Zigbee2MQTT 2.10.1 → 2.12.1 upgrade, owner recalibrations measure the
-command pipeline saturating at roughly a third of the 2.10.1 rates
-(spread knees 6.65-13.25/s vs ~31/s; single 3.55-14/s vs ~16/s), with
-wire RTT flat and zero delivery failures throughout: a Z2M/herdsman
-throughput regression, not mesh degradation. Recorded burst peaks
-(24-30/s) now exceed the new sustained limits several-fold, so bursts
-queue inside Z2M rather than fail; expect the pacing advisor and any
-enabled knee-utilization alerts to react to the new denominators.
+**The "2.12.1 regression" was the meter (2026-07-16 late evening,
+owner-directed investigation)**: the post-upgrade knee collapse was the
+collector's own storage flush stalling the event loop the calibration
+pacer shares (driver records show sends lagging schedule with zero
+deferrals even at 1 read/s; the benchmark's own publish gaps recur on
+the flush cadence; real set fan-outs were unchanged across the upgrade
+at ~30 TX/s). Fix shipped as the meter-integrity slice: rollup/ledger
+and raw-event flushes run on a worker thread (chain tracker gained the
+mutex its API-thread callers already needed; SQLite gained a busy
+timeout), the benchmark records per-step pacer lateness and refuses to
+record a knee when its own pacing degraded (verdict in the record and
+history chip), runs record ambient command/report rates with a noisy-
+window preview warning, and a continuous loop-lag monitor feeds
+/api/health plus a seeded self-health alert. The seventeen false
+records were invalidated in place (knees NULLed, verdict written, rows
+kept so their benchmark windows still exclude the ramp traffic);
+latest valid knees reverted to the 2.10.1-era measurements pending a
+clean re-measure.
+**Follow-ups landed the same night**: the alert tick joined the flush
+on one worker thread (they collided on the write lock and the wait
+surfaced on the loop), the flush commits per section, detector passes
+defer while a calibration runs, and the ramp driver moved to an
+absolute send schedule with catch-up after a clean-paced run proved
+the old sleep-per-send pacer adds per-iteration work onto the period
+and caps the achieved rate (12.35/s of a requested 16/s with 0.07 s
+sleep lateness). Two intermediate runs that recorded overhead-capped
+knees were also invalidated. **First clean 2.12.1 datum**: a
+cleanly-paced rate-32 single step on z2m-2 achieved 12.3/s (echo p95
+416 ms, wire p95 34 ms): the real per-device regression is roughly a
+quarter off 2.10.1's 16.55/s, not the 4x the broken meter reported.
+OPEN: one residual ~3 s loop stall still appears about once per ramp
+(source unknown: flush, tick, and detector passes are all off-loop or
+gated; candidates are GC and the discovery beat), so aggregate spread
+runs keep getting honestly refused; hunt it with the loop-lag stall
+timestamps, then a quiet-window fleet re-measure gives the true
+2.12.1 knees.
 Roadmap: README.md.
 
 ## Hard rules
