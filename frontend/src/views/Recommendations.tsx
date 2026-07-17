@@ -7,6 +7,7 @@ const DETECTOR_LABELS: Record<string, string> = {
   groupcast_economics: "Group economics",
   redundancy: "Duplicate commands",
   reporting: "Device reporting",
+  rebalancing: "Coordinator rebalancing",
 };
 
 const DETECTOR_HINTS: Record<string, string> = {
@@ -16,6 +17,8 @@ const DETECTOR_HINTS: Record<string, string> = {
     "Places where switching between group commands and per-device commands would cost less airtime on this mesh",
   redundancy: "Identical commands resent within seconds; dropping them changes nothing",
   reporting: "Devices whose reporting costs far more airtime than comparable devices",
+  rebalancing:
+    "Move sets that would relieve a coordinator whose recorded command bursts cross its measured capacity limit, priced by the what-if scenario engine",
 };
 
 const STATE_TABS: Array<[string, string]> = [

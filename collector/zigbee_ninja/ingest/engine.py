@@ -230,7 +230,13 @@ class Engine:
         self.ha_attr = HaAttribution()
         self.alerts = AlertManager(db, config, provider=self._alert_metrics)
         self.recommendations = RecommendationEngine(
-            db, registry=self.registry, pricing=self.tap.pricing_params
+            db,
+            registry=self.registry,
+            pricing=self.tap.pricing_params,
+            events_log=self.events,
+            topology_latest=lambda base: (
+                self.topology.latest(base, include_raw=True).get(base) or {}
+            ),
         )
         self.discovery = DiscoveryPublisher(
             config,

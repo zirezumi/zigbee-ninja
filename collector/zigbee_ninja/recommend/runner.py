@@ -16,7 +16,7 @@ import time
 from collections.abc import Callable
 
 from ..store.db import Database
-from . import groupcast, pacing, redundancy, reporting
+from . import groupcast, pacing, rebalance, redundancy, reporting
 from .context import DetectorContext
 from .store import Finding, RecommendationStore
 
@@ -34,14 +34,18 @@ class RecommendationEngine:
         registry,
         pricing: Callable[[str], tuple[float | None, float | None]],
         clock: Callable[[], float] = time.time,
+        events_log=None,
+        topology_latest: Callable[[str], dict] | None = None,
     ):
         self._db = db
         self._registry = registry
         self._pricing = pricing
+        self._events_log = events_log
+        self._topology_latest = topology_latest
         self._clock = clock
         self.store = RecommendationStore(db, clock=clock)
         # Ordered detector roster: modules exposing NAME and detect(ctx).
-        self._detectors: list = [pacing, groupcast, redundancy, reporting]
+        self._detectors: list = [pacing, groupcast, redundancy, reporting, rebalance]
         self._started_at = clock()
         self._last_run_at: float | None = None
         self._last_result: dict | None = None
@@ -74,6 +78,10 @@ class RecommendationEngine:
             devices=self._registry.devices,
             router_count_for=self._registry.router_count_for,
             pricing=self._pricing,
+            db=self._db,
+            registry=self._registry,
+            events_log=self._events_log,
+            topology_latest=self._topology_latest,
         )
 
     def run(self) -> dict:

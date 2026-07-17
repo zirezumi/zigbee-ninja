@@ -24,6 +24,13 @@ class DetectorContext:
     devices: Callable[[str], list[dict]]
     router_count_for: Callable[[str], int]
     pricing: Callable[[str], tuple[float | None, float | None]]
+    # Scenario-engine dependencies (the rebalancing advisor prices its
+    # proposals through capacity/scenario.py); absent in minimal harnesses,
+    # and a detector that needs them must degrade to no findings.
+    db: object | None = None
+    registry: object | None = None
+    events_log: object | None = None
+    topology_latest: Callable[[str], dict] | None = None
 
     def window_start(self) -> float:
         return self.now - self.lookback_seconds

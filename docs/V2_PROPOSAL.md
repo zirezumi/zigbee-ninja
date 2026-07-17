@@ -313,6 +313,29 @@ supports changing."*
 > The rebalancing advisor and the what-if scenario pricing build on this
 > module.
 >
+> **Implementation (V2.M4, rebalancing advisor):** the detector prices
+> every proposal through `capacity/scenario.price_scenario`, so an advisor
+> finding and a hand-built simulator scenario can never disagree. The
+> pressure scan uses the scenario engine's own arithmetic: per instance,
+> the recomposed-currency T0 command peak (benchmark windows excluded)
+> judged against the measured sustained limit and hard ceiling. An
+> instance whose peak sits above the sustained limit is a rebalance
+> candidate; its move candidates are the devices and groups receiving the
+> most commands inside the busiest recorded seconds (the load the peak is
+> made of), and destinations rank by burst headroom among instances with
+> measured limits. The detector emits the smallest move set (greedy, a few
+> moves at most) whose recomposed after-peaks clear the source without
+> pushing any destination past its own limits: a burst that merely
+> relocates whole is not a finding. One finding per pressured source
+> instance (stable subject), action kind `rebalance` carrying the move
+> list the Rebalance view and manifest export consume. The saving headline
+> is any steady airtime the moves free fleet-wide (census and
+> amplification shifts can make it zero or negative; the finding then says
+> the gain is burst relief, not airtime). Confidence is medium at best by
+> construction (radio reach is unknowable from recorded data, §V2-11 item
+> 7) and drops to low on stale calibration environments or pressure
+> recorded in fewer than three distinct seconds.
+>
 > **Implementation (V2.M3, reporting advisor):** per-device autonomous
 > spend over the trailing day (rates divided by recorded time, exactly
 > like `/api/ledger`) compares two ways: against the median of at least
