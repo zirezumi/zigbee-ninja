@@ -518,7 +518,11 @@ A guided wizard, per coordinator, per-run authorized (grants never persist):
    the same path controllers use; reads actuate nothing, each reply
    republishes device state). Stepped geometric rates (~20 s per step), an
    outstanding-replies bound so a stalling mesh throttles the driver, and a
-   drain pause between steps. Per step: sent/completed/timeouts, achieved
+   drain pause between steps. Send slots ride an **absolute schedule with
+   catch-up**: every due slot is consumed exactly once (sent, or explicitly
+   deferred when the outstanding bound blocks it), so the driver's own
+   per-iteration work can never silently stretch the period, and a
+   saturated step always means real backpressure. Per step: sent/completed/timeouts, achieved
    rate, RTT percentiles, and instance delivery-failure deltas. RTT prefers
    the wire-tier `sendUnicast→messageSentHandler` SLI when a tap covers the
    coordinator and falls back to the command→state-echo path, tagged either

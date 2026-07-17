@@ -808,6 +808,14 @@ class CalibrationManager:
         bound = max(MIN_OUTSTANDING, math.ceil(step.rate_eps * OUTSTANDING_RTT_ALLOWANCE))
         targets = run.plan["targets"]
         step_end = step.started_at + step.duration_s
+        # Send slots ride an absolute schedule with catch-up: per-iteration
+        # work (publish awaits, interleaved ingest) and loop jitter then
+        # cannot silently stretch the period and cap the achieved rate, the
+        # way a relative sleep-per-send pacer does. Every due slot is
+        # consumed exactly once: sent, or deferred when the outstanding
+        # bound blocks it, so a saturated step always means real
+        # backpressure rather than driver overhead.
+        next_due = self._clock()
         while self._clock() < step_end:
             self._check_abort(run)
             self._expire_timeouts(run, step)
@@ -816,21 +824,26 @@ class CalibrationManager:
                 raise _Abort("total read cap reached")
             if self._clock() - run.started_at > MAX_RUN_SECONDS:
                 raise _Abort("run wall-clock cap reached")
-            if run.outstanding_total() < bound:
-                entry = targets[run.rr_index % len(targets)]
-                run.rr_index += 1
-                try:
-                    await self._publish(entry["topic"], entry["payload"])
-                except Exception as exc:
-                    raise _Abort(f"publish failed: {exc}") from exc
-                run.outstanding[entry["friendly_name"]].append(self._clock())
-                step.sent += 1
-                run.sent_total += 1
-            else:
-                step.deferred += 1
+            while next_due <= self._clock() < step_end:
+                if run.outstanding_total() < bound:
+                    entry = targets[run.rr_index % len(targets)]
+                    run.rr_index += 1
+                    try:
+                        await self._publish(entry["topic"], entry["payload"])
+                    except Exception as exc:
+                        raise _Abort(f"publish failed: {exc}") from exc
+                    run.outstanding[entry["friendly_name"]].append(self._clock())
+                    step.sent += 1
+                    run.sent_total += 1
+                    if run.sent_total >= MAX_TOTAL_READS:
+                        break
+                else:
+                    step.deferred += 1
+                next_due += interval
+            wait = max(next_due - self._clock(), 0.001)
             before = self._clock()
-            await self._sleep(interval)
-            late = self._clock() - before - interval
+            await self._sleep(wait)
+            late = self._clock() - before - wait
             if late > 0:
                 step.pacer_late_s += late
                 if late * 1000.0 > step.pacer_max_late_ms:
