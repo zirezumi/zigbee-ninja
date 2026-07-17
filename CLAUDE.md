@@ -282,11 +282,32 @@ and every card a one-click Copy (full record incl. detector label,
 coordinator, finding, saving, evidence; plain-http installations have
 no secure context so copy rides the hidden-textarea fallback, verified
 live against the OS clipboard).
-Next: V2.M4 (rebalancing advisor with burst envelope analysis as the
-core, retry hotspots, migration manifest, applied-recommendation
-verification driving verified/regressed) plus a drag-and-drop
-coordinator-rebalancing simulator GUI feeding it (owner direction
-2026-07-16).
+**V2.M4 STARTED: burst envelope analysis DEPLOYED + LIVE-VALIDATED
+2026-07-16**: `capacity/envelope.py` + `GET /api/envelope`, surfaced on
+the Headroom view; sliding 1 s / 10 s peak TX rates from the raw event
+store's wire stream (T0 chain fallback when no tap covers an instance,
+tagged), per-commander worst bursts from recorded chains, worst composed
+bursts over commander sets observed firing together, and a
+cross-coordinator fan-out table carrying the combined rate a
+consolidation would concentrate on one mesh; peaks judged against the
+sustained capacity limit and the spread ramp's achieved hard ceiling;
+benchmark windows excluded (§11.5). Live validation measured the
+premise: real 1 s peaks already touch or cross the sustained limits
+while steady p95 sits at a few percent (bursts, not averages, bind), and
+the fan-out table names the tap-dial style fan-outs. The largest
+recorded fan-out traced to the all-off pipeline's per-bulb publishes
+arriving without HA attribution: a controller-side publish path the
+context correlator does not see (owner lead, not a collector defect).
+The change journal's positive path is now live-proven: the fleet's
+Zigbee2MQTT upgrade (2.10.1 → 2.12.1) journaled on all five instances
+and the stale-environment chips fired, so every stored capacity limit
+is a stale-environment measurement until the owner chooses to
+recalibrate. §V2-11 (rebalancing simulator design) and §V2-12 (M4 slice
+order) are DRAFT in docs/V2_PROPOSAL.md awaiting owner ratification;
+the simulator, migration manifest, and their GUI build only after that
+review. Remaining M4 slices: rebalancing advisor detector, scenario
+engine + simulator, manifest export, applied-recommendation
+verification, retry hotspots.
 Roadmap: README.md.
 
 ## Hard rules

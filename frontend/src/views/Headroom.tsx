@@ -128,7 +128,7 @@ function EnvelopeBlock({ env }: { env: EnvelopeInstance }) {
             </span>
           )}
         </span>
-        <span title="The peak burst as a share of the sustained capacity limit; the hard ceiling is the rate the benchmark actually reached before the software pipeline bound">
+        <span title="The peak 1 s burst as a share of the sustained capacity limit. A brief burst above the sustained limit queues for a moment and clears; only bursts above the hard ceiling (the highest rate the benchmark ever pushed through) stall the pipeline.">
           Burst vs capacity
         </span>
         <span>
@@ -145,7 +145,7 @@ function EnvelopeBlock({ env }: { env: EnvelopeInstance }) {
         </span>
         {env.composed_worst && (
           <>
-            <span title="Automations seen bursting at the same moment, each priced at its own worst recorded burst: the load if their worst days land together">
+            <span title="Automations seen bursting at the same moment, each priced at its own worst recorded burst: the load if their worst days land together. A composed burst above the hard ceiling would stall the pipeline if it ever landed in one second.">
               Worst composed burst
             </span>
             <span>
