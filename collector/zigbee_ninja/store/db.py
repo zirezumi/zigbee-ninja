@@ -205,6 +205,9 @@ _MIGRATIONS = [
     CREATE INDEX idx_recommendations_state ON recommendations (state);
     ALTER TABLE chains ADD COLUMN payload_digest TEXT;
     """,
+    """
+    ALTER TABLE recommendations ADD COLUMN verification TEXT;
+    """,
 ]
 
 

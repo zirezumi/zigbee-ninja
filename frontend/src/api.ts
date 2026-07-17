@@ -705,6 +705,26 @@ export interface RecommendationSaving {
   provenance?: string;
 }
 
+export interface RecommendationVerification {
+  verdict: string;
+  metric?: string;
+  unit?: string;
+  before_us_per_day?: number;
+  after_us_per_day?: number;
+  before_peak_eps?: number;
+  after_peak_eps?: number;
+  sustained_limit_eps?: number;
+  paced_target_eps?: number;
+  before_days?: number;
+  after_days?: number;
+  needs_days?: number;
+  ratio?: number;
+  basis?: string;
+  note?: string;
+  finalized?: boolean;
+  checked_at: number;
+}
+
 export interface Recommendation {
   id: string;
   detector: string;
@@ -717,6 +737,7 @@ export interface Recommendation {
   evidence: Array<Record<string, unknown>>;
   state: string;
   state_note: string | null;
+  verification: RecommendationVerification | null;
   created_at: number;
   updated_at: number;
   state_changed_at: number | null;

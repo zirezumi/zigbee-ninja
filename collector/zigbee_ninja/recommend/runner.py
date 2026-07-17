@@ -16,7 +16,7 @@ import time
 from collections.abc import Callable
 
 from ..store.db import Database
-from . import groupcast, pacing, rebalance, redundancy, reporting
+from . import groupcast, pacing, rebalance, redundancy, reporting, verify
 from .context import DetectorContext
 from .store import Finding, RecommendationStore
 
@@ -100,6 +100,13 @@ class RecommendationEngine:
                     continue
                 counts = self.store.sync(name, findings)
                 detectors[name] = {"findings": len(findings), **counts}
+            # §V2-6 verification rides the same pass: applied auto-detection
+            # from the journal, then verdicts for applied rows. Crash-isolated
+            # like a detector; it never touches open rows.
+            try:
+                detectors[verify.NAME] = verify.run(self.store, ctx)
+            except Exception as exc:
+                detectors[verify.NAME] = {"error": f"{type(exc).__name__}: {exc}"}
             self._last_run_at = started
             self._last_result = {
                 "ran_at": started,

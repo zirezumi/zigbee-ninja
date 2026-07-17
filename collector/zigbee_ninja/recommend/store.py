@@ -31,13 +31,19 @@ from dataclasses import dataclass, field
 from ..store.db import Database
 
 STATES = ("open", "dismissed", "applied", "verified", "regressed")
-# States a user may set through the API; verdict states are §V2-6 (V2.M4).
+# States a user may set through the API; verified and regressed are §V2-6
+# verification verdicts, written only by the verification pass.
 SETTABLE_STATES = ("open", "dismissed", "applied")
 ALLOWED_TRANSITIONS = {
     ("open", "dismissed"),
     ("open", "applied"),
     ("dismissed", "open"),
     ("applied", "open"),
+    # A verdict-bearing row may be taken up again or put to rest by the
+    # user; its verification receipts stay attached either way.
+    ("regressed", "open"),
+    ("regressed", "dismissed"),
+    ("verified", "open"),
 }
 
 # A dismissed finding reopens only when an input moves by at least this
@@ -239,6 +245,60 @@ class RecommendationStore:
         conn.commit()
         return self.get(rec_id)
 
+    # -- verification (V2_PROPOSAL.md §V2-6) -----------------------------------------
+
+    def applied_rows(self) -> list[dict]:
+        """Applied rows awaiting a verification verdict."""
+        conn = self._db.connect()
+        return [
+            self._serialize(row)
+            for row in conn.execute(
+                "SELECT * FROM recommendations WHERE state = 'applied'"
+            )
+        ]
+
+    def open_rows(self, detector: str) -> list[dict]:
+        conn = self._db.connect()
+        return [
+            self._serialize(row)
+            for row in conn.execute(
+                "SELECT * FROM recommendations WHERE state = 'open' AND detector = ?",
+                (detector,),
+            )
+        ]
+
+    def mark_applied_auto(self, rec_id: str, boundary: float, note: str) -> None:
+        """Journal-detected application: the boundary is when the registry
+        actually saw the change, not when the pass noticed it."""
+        conn = self._db.connect()
+        conn.execute(
+            "UPDATE recommendations SET state = 'applied', state_changed_at = ?, "
+            "state_note = ? WHERE id = ? AND state = 'open'",
+            (boundary, note, rec_id),
+        )
+        conn.commit()
+
+    def record_verification(self, rec_id: str, receipts: dict) -> None:
+        """Attach in-progress verification receipts without a state change."""
+        conn = self._db.connect()
+        conn.execute(
+            "UPDATE recommendations SET verification = ? WHERE id = ?",
+            (json.dumps(receipts), rec_id),
+        )
+        conn.commit()
+
+    def set_verdict(self, rec_id: str, verdict_state: str, note: str, receipts: dict) -> None:
+        """Verification's own transition: applied to verified or regressed."""
+        if verdict_state not in ("verified", "regressed"):
+            raise ValueError(f"Not a verification verdict: {verdict_state}")
+        conn = self._db.connect()
+        conn.execute(
+            "UPDATE recommendations SET state = ?, state_changed_at = ?, "
+            "state_note = ?, verification = ? WHERE id = ? AND state = 'applied'",
+            (verdict_state, self._clock(), note, json.dumps(receipts), rec_id),
+        )
+        conn.commit()
+
     # -- read side --------------------------------------------------------------------
 
     def _serialize(self, row) -> dict:
@@ -254,6 +314,7 @@ class RecommendationStore:
             "evidence": json.loads(row["evidence"] or "[]"),
             "state": row["state"],
             "state_note": row["state_note"],
+            "verification": json.loads(row["verification"]) if row["verification"] else None,
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
             "state_changed_at": row["state_changed_at"],

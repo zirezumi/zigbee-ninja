@@ -25,6 +25,8 @@ const STATE_TABS: Array<[string, string]> = [
   ["open", "Open"],
   ["dismissed", "Dismissed"],
   ["applied", "Applied"],
+  ["verified", "Verified"],
+  ["regressed", "Regressed"],
   ["all", "All"],
 ];
 
@@ -149,6 +151,45 @@ function ConfidenceChip({ level }: { level: string }) {
   );
 }
 
+/** §V2-6 receipts: what the measured before/after windows actually said. */
+function VerificationBlock({
+  verification,
+}: {
+  verification: NonNullable<Recommendation["verification"]>;
+}) {
+  const verdictLabels: Record<string, [string, string]> = {
+    improved: ["improved", "chip ok"],
+    regressed: ["regressed", "chip bad"],
+    no_material_change: ["no material change yet", "chip"],
+    pending: ["verifying…", "chip"],
+  };
+  const [label, className] = verdictLabels[verification.verdict] ?? [
+    verification.verdict,
+    "chip",
+  ];
+  const numbers =
+    verification.before_us_per_day !== undefined
+      ? `${Math.round(verification.before_us_per_day)} → ${Math.round(
+          verification.after_us_per_day ?? 0,
+        )} µs/day over ${verification.before_days}+${verification.after_days} completed days`
+      : verification.before_peak_eps !== undefined
+        ? `peak ${verification.before_peak_eps}/s → ${verification.after_peak_eps}/s` +
+          (verification.sustained_limit_eps
+            ? ` (limit ${verification.sustained_limit_eps}/s)`
+            : "")
+        : null;
+  return (
+    <p className="hint" title={verification.basis ?? undefined}>
+      <span className={className}>{label}</span>{" "}
+      {verification.metric ? `${verification.metric}: ` : ""}
+      {numbers ?? verification.note ?? ""}
+      {verification.finalized
+        ? " · watched for two weeks with no material change; the check has stopped"
+        : ""}
+    </p>
+  );
+}
+
 function Card({
   rec,
   onState,
@@ -207,6 +248,7 @@ function Card({
       </div>
       <p>{rec.finding}</p>
       {rec.state_note && <p className="hint">Note: {rec.state_note}</p>}
+      {rec.verification && <VerificationBlock verification={rec.verification} />}
       <details>
         <summary className="hint">
           Evidence ({rec.evidence.length}) · first seen {when(rec.created_at)} · last
@@ -236,9 +278,17 @@ function Card({
             </button>
           </>
         )}
-        {(rec.state === "dismissed" || rec.state === "applied") && (
+        {(rec.state === "dismissed" ||
+          rec.state === "applied" ||
+          rec.state === "verified" ||
+          rec.state === "regressed") && (
           <button className="ghost" onClick={() => onState(rec, "open")}>
             Reopen
+          </button>
+        )}
+        {rec.state === "regressed" && (
+          <button className="ghost" onClick={() => onState(rec, "dismissed")}>
+            Dismiss
           </button>
         )}
         <button

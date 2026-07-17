@@ -153,14 +153,17 @@ def _proposal(
     for dest in _destinations(scan, source):
         moves: list[dict] = []
         for candidate in candidates[:MAX_MOVES_PER_PROPOSAL]:
-            moves.append(
-                {
-                    "kind": candidate["kind"],
-                    "subject": candidate["subject"],
-                    "from_instance": source,
-                    "to_instance": dest,
-                }
-            )
+            move = {
+                "kind": candidate["kind"],
+                "subject": candidate["subject"],
+                "from_instance": source,
+                "to_instance": dest,
+            }
+            if candidate["kind"] == "group":
+                # Member names recorded at proposal time: the journal proves
+                # a group move member by member (§V2-6 applied detection).
+                move["members"] = ctx.group_members(source, candidate["subject"])
+            moves.append(move)
             try:
                 report = _price(ctx, moves)
             except scenario.ScenarioError:

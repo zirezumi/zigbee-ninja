@@ -368,6 +368,30 @@ zigbee-ninja opens a verification window:
   real-world result attached; a `verified` one archives with its receipts.
   The Recommendations view becomes a changelog of measured wins.
 
+> **Implementation (V2.M4, shipped):** `recommend/verify.py` rides the
+> hourly recommendation pass, crash-isolated like a detector. Applied
+> auto-detection covers what the journal can actually prove: an open
+> rebalancing finding whose staged moves have all journaled as
+> `device_added` entries annotated `moved_from` (group moves record their
+> member names in the action at proposal time and match member by member)
+> is marked applied with the journal's own timestamp as the boundary.
+> Every other shipped action changes controller behavior the registries
+> cannot see, so those stay manual, per the §V2-10.4 hybrid. Verdicts:
+> spend detectors (reporting, redundancy, groupcast) compare mean µs/day
+> over completed UTC days around the boundary (at least two on each side,
+> before window capped at seven; whole days compare like hours with like);
+> after/before at or under 0.8 reads improved, at or over 1.25 regressed.
+> Burst detectors verify against the finding's own recorded numbers: a
+> rebalancing row re-measures the instance's recomposed T0 command peak
+> over the trailing day against the sustained limit in its evidence, a
+> pacing row re-measures the commander's worst burst against the proposed
+> paced rate. Improved moves the row to `verified`, regressed to
+> `regressed` (reopenable or dismissable, receipts attached); anything
+> in between stays `applied` with pending receipts and the check stops
+> after fourteen days of no material change. Receipts persist in a
+> `verification` column, serve through the API, and render on the cards;
+> the view gains Verified and Regressed tabs.
+
 ## §V2-7 Surfaces & packaging
 
 - **Views:** Attribution gains cost columns + Top spenders; new
