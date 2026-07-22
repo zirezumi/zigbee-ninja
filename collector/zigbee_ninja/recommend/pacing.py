@@ -14,7 +14,11 @@ point is reported against the highest measured point and tagged modeled.
 
 Pacing does not recover airtime (a spread burst transmits the same frames),
 so the saving is a latency number: ``saving.p95_ms`` carries the predicted
-p95 improvement and ``us_per_s`` stays 0.
+p95 improvement and ``us_per_s`` stays 0. Significance follows the same
+logic and is assessed on the denominator the finding is actually about, the
+command pipeline inside the peak second, never on airtime: `for_airtime`
+would report a truthful and useless "frees 0.00% of the channel budget" for
+every pacing finding ever emitted.
 """
 
 from __future__ import annotations
@@ -23,7 +27,14 @@ import json
 import math
 import statistics
 
+from . import significance
 from .context import DetectorContext
+from .cost import (
+    BURST_COMPLETION,
+    DEVICE_SERVICE_RATE,
+    KIND_COMPLETION_DELAY,
+    PEAK_COMMAND_RATE,
+)
 from .store import Finding
 
 NAME = "pacing"
@@ -41,6 +52,11 @@ MAJORITY_FRACTION = 0.6
 EVIDENCE_BURSTS = 5
 MULTIPLE_COMMANDERS = "(multiple commanders)"
 UNATTRIBUTED = "(unattributed)"
+
+# The two denominators this detector relieves (both measured on this
+# installation) and the one it spends are imported from `cost`: those strings
+# are user-facing and each needs a matching plain-language gloss in the
+# Recommendations view, so minting wording here would ship an empty tooltip.
 
 
 def _peak_1s(times: list[float]) -> tuple[float, int]:
@@ -339,6 +355,47 @@ def _finding(
         }
     )
 
+    # Band against whichever limit the burst is actually crossing. Aggregate
+    # pressure is measured on the coordinator's command rate; a device
+    # overload with no aggregate pressure is measured on that device's own
+    # service ceiling, where 20 commands a second against a 16/s queue is a
+    # far more contended denominator than the same 20 read against a 30/s
+    # coordinator.
+    if pressured:
+        pressure_eps = max(burst["peak_eps"] for burst in pressured)
+        limit_eps = knee["eps"]
+        denominator = PEAK_COMMAND_RATE
+    else:
+        pressure_eps = max(max(burst["overloads"].values()) for burst in overloaded)
+        limit_eps = device_knee["eps"]
+        denominator = DEVICE_SERVICE_RATE
+    finding_significance = significance.assess(
+        saving_pct=max(pressure_eps - paced_eps, 0.0) / limit_eps * 100.0,
+        utilization_pct=pressure_eps / limit_eps * 100.0,
+        denominator=denominator,
+    )
+
+    # Pacing is the one action here that moves nothing between currencies: the
+    # same publishes ride the same window, just further apart. Reporting a
+    # load delta would be inventing one. What it does spend is time.
+    added_completion_ms = max(0, stagger_ms - int(worst["duration_s"] * 1000))
+    cost = {
+        "kind": KIND_COMPLETION_DELAY,
+        "denominator": BURST_COMPLETION,
+        "raises_load": False,
+        # Named for what it is rather than borrowed from publish_delta:
+        # carrying before/after publish counts here would put three zeros on
+        # the one kind that by construction moves no commands at all.
+        "commands_in_burst": worst["commands"],
+        "added_completion_ms": added_completion_ms,
+        "note": (
+            "spreading a burst moves commands in time without adding or removing "
+            "any, so neither the airtime nor the command-rate denominator moves; "
+            f"the cost is that the burst finishes about {added_completion_ms} ms "
+            "later than it does today"
+        ),
+    }
+
     return Finding(
         detector=NAME,
         instance=instance,
@@ -356,6 +413,8 @@ def _finding(
         saving=saving,
         confidence=confidence,
         evidence=evidence,
+        significance=finding_significance,
+        cost=cost,
         fingerprint={
             "peak_eps": round(worst["peak_eps"], 1),
             "commands": worst["commands"],

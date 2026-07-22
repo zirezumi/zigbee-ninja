@@ -14,7 +14,12 @@ from __future__ import annotations
 
 from ..attribution.chains import REDUNDANT_WINDOW
 from ..capacity import airtime, ledger
+from . import cost, significance
 from .context import DetectorContext
+
+# Command-rate accounting is one doctrine, not one per detector: a dedupe and
+# a fan-out collapse have to report their load delta in the same shape or a
+# reader cannot compare the two cards.
 from .store import Finding
 
 NAME = "redundancy"
@@ -66,6 +71,15 @@ def detect(ctx: DetectorContext) -> list[Finding]:
             entry["targets"].items(), key=lambda item: item[1], reverse=True
         )[:TOP_TARGETS]
         pct_of_budget = us_per_s / airtime.CHANNEL_BUDGET_US_PER_S * 100.0
+        saving = {
+            "us_per_s": round(us_per_s, 1),
+            "pct_of_budget": round(pct_of_budget, 4),
+            "basis": (
+                f"replayed {entry['duplicates']} recorded duplicate commands "
+                f"from the last 24 h at their ledger prices"
+            ),
+            "provenance": "modeled",
+        }
         findings.append(
             Finding(
                 detector=NAME,
@@ -84,16 +98,16 @@ def detect(ctx: DetectorContext) -> list[Finding]:
                     "instance": instance,
                     "targets": [target for target, _count in top_targets],
                 },
-                saving={
-                    "us_per_s": round(us_per_s, 1),
-                    "pct_of_budget": round(pct_of_budget, 4),
-                    "basis": (
-                        f"replayed {entry['duplicates']} recorded duplicate commands "
-                        f"from the last 24 h at their ledger prices"
-                    ),
-                    "provenance": "modeled",
-                },
+                saving=saving,
                 confidence="high",
+                significance=significance.for_airtime(
+                    saving, (ctx.utilization or {}).get(instance)
+                ),
+                # Pure removal: a duplicate the source never sends costs nothing
+                # anywhere, so the change lowers both currencies at once.
+                cost=cost.publish_delta_for(
+                    ctx, instance, before=entry["duplicates"], after=0
+                ),
                 evidence=[
                     {
                         "kind": "duplicates",

@@ -56,13 +56,16 @@ def finding(detector, subject, instance="z2m-a", action=None, evidence=None):
     )
 
 
-def add_device_spend(db, device, day_offsets_us):
+def add_device_spend(db, device, day_offsets_us, versions=None):
+    """versions: {day_offset: pricing_version} for days priced under a model
+    other than the current one; unset days default to version 1."""
     conn = db.connect()
+    versions = versions or {}
     for offset, us in day_offsets_us.items():
         conn.execute(
             "INSERT INTO ledger_device_daily (instance, day, device, publishes, "
-            "autonomous_us, provenance) VALUES ('z2m-a', ?, ?, 1, ?, '')",
-            (utc_day(NOW + offset * DAY), device, us),
+            "autonomous_us, provenance, pricing_version) VALUES ('z2m-a', ?, ?, 1, ?, '', ?)",
+            (utc_day(NOW + offset * DAY), device, us, versions.get(offset, 1)),
         )
     conn.commit()
 
@@ -114,6 +117,66 @@ def test_spend_verdict_regressed_and_reopen(tmp_path):
     reopened = store.set_state(rec_id, "open")
     assert reopened["state"] == "open"
     assert reopened["verification"]["verdict"] == "regressed"
+
+
+def test_pricing_model_change_holds_the_verdict_instead_of_grading_it(tmp_path):
+    # Identical traffic priced two different ways looks like a 2x regression.
+    # Without the guard this writes a durable "regressed" verdict off a
+    # re-pricing artefact, which is exactly what a cost-model change would do
+    # to every applied recommendation the day it lands.
+    db, store = make_store(tmp_path)
+    boundary = NOW - 3 * DAY
+    rec_id = applied_reporting_rec(store, boundary)
+    add_device_spend(
+        db,
+        "sensor_1",
+        {-6: 1000, -5: 1000, -4: 1000, -2: 2000, -1: 2000},
+        versions={-2: 2, -1: 2},
+    )
+    result = verify.run(store, context(db))
+    assert result.get("regressed") is None
+    rec = store.get(rec_id)
+    assert rec["state"] == "applied"
+    receipts = rec["verification"]
+    assert receipts["verdict"] == "pending"
+    assert receipts["pricing_versions"] == [1, 2]
+    assert "not the same currency" in receipts["note"]
+
+
+def test_day_priced_across_a_model_change_is_not_comparable(tmp_path):
+    # A single day that accumulated under two models is marked MIXED by the
+    # ledger writer; it cannot anchor either side of a comparison.
+    db, store = make_store(tmp_path)
+    boundary = NOW - 3 * DAY
+    rec_id = applied_reporting_rec(store, boundary)
+    add_device_spend(
+        db,
+        "sensor_1",
+        {-6: 1000, -5: 1000, -4: 1000, -2: 100, -1: 100},
+        versions={-4: 0},
+    )
+    result = verify.run(store, context(db))
+    assert result.get("verified") is None
+    receipts = store.get(rec_id)["verification"]
+    assert receipts["verdict"] == "pending"
+    assert 0 in receipts["pricing_versions"]
+
+
+def test_uniform_pricing_still_grades_normally(tmp_path):
+    # The guard must not freeze verification on installations that never see
+    # a model change: one version on both sides grades as before.
+    db, store = make_store(tmp_path)
+    boundary = NOW - 3 * DAY
+    rec_id = applied_reporting_rec(store, boundary)
+    add_device_spend(
+        db,
+        "sensor_1",
+        {-6: 1000, -5: 1000, -4: 1000, -2: 100, -1: 100},
+        versions={-6: 2, -5: 2, -4: 2, -2: 2, -1: 2},
+    )
+    result = verify.run(store, context(db))
+    assert result.get("verified") == 1
+    assert store.get(rec_id)["verification"]["verdict"] == "improved"
 
 
 def test_spend_pending_without_enough_days(tmp_path):

@@ -79,6 +79,7 @@ class RecommendationEngine:
             instances=[i["base_topic"] for i in snapshot],
             instance_info={i["base_topic"]: i for i in snapshot},
             knees=headroom.latest_knees(self._db),
+            utilization=headroom.utilization(self._db, snapshot, clock=self._clock),
             is_group=self._registry.is_group,
             group_members=self._registry.group_members,
             groups=self._registry.groups,

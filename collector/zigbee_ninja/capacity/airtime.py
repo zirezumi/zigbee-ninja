@@ -38,6 +38,12 @@ DEFAULT_AVG_TX = 1.3  # broadcast passive-ack retransmissions per router, §10
 CHANNEL_ETA = 0.7  # channel-budget CSMA efficiency, §10 denominator 1
 CHANNEL_BUDGET_US_PER_S = 1_000_000.0 * CHANNEL_ETA
 
+# §10: "unknown routes default to a conservative 1-2 hops, tagged accordingly".
+# Conservative here means the end that does NOT flatter a recommendation:
+# unicast is the alternative a retarget proposes, so under-pricing it would
+# overstate the saving. An unknown route is therefore priced at 2 hops.
+DEFAULT_UNKNOWN_HOPS = 2
+
 PROVENANCE = "reconstructed"
 
 
@@ -50,13 +56,23 @@ def frame_airtime_us(psdu_len: int, *, acked: bool = False) -> float:
     return airtime
 
 
-def unicast_airtime_us(aps_payload_len: int, retry_rate: float = 0.0) -> float:
-    """One unicast data frame + its MAC ACK (single hop), scaled by the
-    coordinator's measured MAC retry rate: each retry re-burns the frame,
-    its IFS, and the ACK wait (§10 unicast cost, (1 + retry_rate) term).
-    Defaults to 0 until counter windows produce a measured rate."""
+def unicast_airtime_us(
+    aps_payload_len: int, retry_rate: float = 0.0, hops: int = 1
+) -> float:
+    """§10 unicast cost: `hops × (frame + ACK + IFS) × (1 + retry_rate)`.
+
+    Every hop of a routed unicast re-burns the frame, its IFS and its ACK on
+    the air, so a device three hops out costs roughly three times what the
+    coordinator's own radio spends. `hops` defaults to 1, which prices the
+    coordinator's own hop only: callers that know the route (see
+    `capacity.hops`) pass the real depth.
+
+    The retry term reflects the coordinator's own hop, measured passively from
+    counter windows and 0 until samples arrive; retries on farther hops stay
+    invisible until T3, consistent with the TX lower-bound posture in §10.
+    """
     per_attempt = frame_airtime_us(UNICAST_OVERHEAD_BYTES + aps_payload_len, acked=True)
-    return per_attempt * (1.0 + max(retry_rate, 0.0))
+    return per_attempt * max(hops, 1) * (1.0 + max(retry_rate, 0.0))
 
 
 def groupcast_airtime_us(

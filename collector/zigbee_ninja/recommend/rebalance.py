@@ -26,6 +26,7 @@ from collections import Counter
 
 from ..capacity import scenario
 from ..capacity.airtime import CHANNEL_BUDGET_US_PER_S
+from . import cost, significance
 from .context import DetectorContext
 from .store import Finding
 
@@ -179,6 +180,59 @@ def _proposal(
     return None
 
 
+def _destination_cost(dest: str, dest_after: dict, fleet_delta: float) -> dict:
+    """What the proposal costs on the mesh that receives it.
+
+    A rebalance removes no load anywhere: the source's relief is bought
+    entirely on the destination, which makes this the one detector whose cost
+    lands on a different instance than its saving. Quoting it against the
+    destination's OWN measured limit is the only way a reader can tell relief
+    from relocation. The proposal guard already refuses a move set that pushes
+    a destination past that limit, so this reports how close it lands rather
+    than whether it fits.
+
+    Fleet-wide steady airtime is a second denominator and moves independently:
+    a router leaving one census and joining another reprices every groupcast
+    on both meshes, and that sum can come out positive.
+    """
+    limits = dest_after.get("limits") or {}
+    before = dest_after["burst"]["before_peak_1s"]
+    after = dest_after["burst"]["after_peak_1s"]
+    before_eps = before["eps_1s"] if before else 0.0
+    after_eps = after["eps_1s"] if after else 0.0
+    sustained = limits.get("sustained_eps")
+    steady = dest_after["steady"]
+    note = (
+        f"the relief is bought on {dest}: this load does not disappear, it lands "
+        f"there, and its recomposed peak is judged against {dest}'s own measured "
+        f"limit rather than the source's"
+    )
+    if fleet_delta > 0.5:
+        note += (
+            ". The census and amplification shifts also add about "
+            f"{fleet_delta:.0f} µs/s of steady airtime across the fleet"
+        )
+    return {
+        "kind": cost.KIND_DESTINATION_LOAD,
+        "denominator": significance.COMMAND_RATE,
+        "destination_instance": dest,
+        "raises_load": after_eps > before_eps,
+        "peak_eps_before": before_eps,
+        "peak_eps_after": after_eps,
+        "capacity_limit_eps": sustained,
+        "ceiling_eps": limits.get("ceiling_eps"),
+        "peak_pct_of_limit_after": (
+            round(after_eps / sustained * 100.0, 1) if sustained else None
+        ),
+        "verdict_after": dest_after["burst"]["verdict"],
+        "steady_us_per_s_delta": round(
+            steady["after_us_per_s"] - steady["before_us_per_s"], 3
+        ),
+        "fleet_steady_delta_us_per_s": round(fleet_delta, 3),
+        "note": note,
+    }
+
+
 def _describe_move(move: dict, report: dict) -> str:
     if move["kind"] == "group":
         entry = next(
@@ -314,6 +368,19 @@ def _finding(
                 }
             )
 
+    # The headline saving is steady airtime and it is routinely zero: this
+    # detector exists for burst relief. Banding it on airtime would rate a
+    # coordinator sitting above its measured limit as nothing worth doing, so
+    # significance reads the denominator the finding is about, the source's
+    # command rate inside its worst second.
+    after_eps = after_peak["eps_1s"] if after_peak else 0.0
+    sustained = limits["sustained_eps"]
+    finding_significance = significance.assess(
+        saving_pct=max(peak["eps_1s"] - after_eps, 0.0) / sustained * 100.0,
+        utilization_pct=peak["eps_1s"] / sustained * 100.0,
+        denominator=significance.COMMAND_RATE,
+    )
+
     return Finding(
         detector=NAME,
         instance=source,
@@ -332,6 +399,8 @@ def _finding(
         },
         confidence=confidence,
         evidence=evidence,
+        significance=finding_significance,
+        cost=_destination_cost(dest, dest_after, fleet_delta),
         fingerprint={
             "peak_eps": round(peak["eps_1s"], 1),
             "sustained_eps": limits["sustained_eps"],

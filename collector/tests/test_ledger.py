@@ -101,7 +101,12 @@ def test_flush_prices_finalized_chains_into_daily_ledger(client):
     rows = _ledger_rows(client)
     named = rows["ha-core"]
     assert named["chains"] == 1
-    assert named["tx_us"] == airtime.unicast_airtime_us(ledger.ZCL_SET_BYTES)
+    # No topology snapshot in this fixture, so the unicast target's route is
+    # unknown and takes the conservative §10 default rather than the
+    # coordinator hop alone.
+    assert named["tx_us"] == airtime.unicast_airtime_us(
+        ledger.ZCL_SET_BYTES, hops=airtime.DEFAULT_UNKNOWN_HOPS
+    )
     assert named["rx_us"] == ledger.autonomous_publish_cost_us()
 
     unattributed = rows[ledger.UNATTRIBUTED]
@@ -116,6 +121,11 @@ def test_flush_prices_finalized_chains_into_daily_ledger(client):
     assert params["avg_tx_measured"] is False
     assert params["retry_rate_measured"] is False
     assert named["provenance"].startswith("inferred")
+
+    # Without a snapshot the row says so, so a later re-pricing under real
+    # topology is distinguishable from a traffic change.
+    assert params["hops_from_topology"] is False
+    assert params["pricing_version"] == ledger.PRICING_MODEL_VERSION
 
     device_rows = {
         row["device"]: dict(row)
@@ -143,12 +153,43 @@ def test_measured_flow_params_feed_chain_prices(client):
     assert row["chains"] == 2
     assert row["tx_us"] == airtime.groupcast_airtime_us(
         ledger.ZCL_SET_BYTES, 2, avg_tx=2.0
-    ) + airtime.unicast_airtime_us(ledger.ZCL_SET_BYTES, retry_rate=0.05)
+    ) + airtime.unicast_airtime_us(
+        ledger.ZCL_SET_BYTES, retry_rate=0.05, hops=airtime.DEFAULT_UNKNOWN_HOPS
+    )
     params = json.loads(row["params"])
     assert params["avg_tx"] == 2.0
     assert params["avg_tx_measured"] is True
     assert params["retry_rate"] == 0.05
     assert params["retry_rate_measured"] is True
+
+
+def test_ledger_prices_a_known_route_by_its_hop_count(client):
+    # With a topology snapshot the ledger charges the real depth instead of
+    # the unknown-route default: the whole point of the §10 hop term.
+    engine, clock = _prepare_engine(client)
+    engine.topology.latest = lambda base, include_raw=False: {
+        base: {
+            "raw": {
+                "nodes": [
+                    {"ieeeAddr": "0xC", "friendlyName": "Coordinator", "type": "Coordinator"},
+                    {"ieeeAddr": "0xR", "friendlyName": "relay", "type": "Router"},
+                    {"ieeeAddr": "0xL", "friendlyName": "lamp", "type": "Router"},
+                ],
+                "links": [
+                    {"sourceIeeeAddr": "0xC", "targetIeeeAddr": "0xR", "lqi": 200},
+                    {"sourceIeeeAddr": "0xR", "targetIeeeAddr": "0xL", "lqi": 180},
+                ],
+            }
+        }
+    }
+
+    engine.on_message("z2m-test/lamp/set", b'{"state":"ON"}')
+    clock.now += 20
+    engine.flush_rollups()
+
+    row = _ledger_rows(client)[ledger.UNATTRIBUTED]
+    assert row["tx_us"] == airtime.unicast_airtime_us(ledger.ZCL_SET_BYTES, hops=2)
+    assert json.loads(row["params"])["hops_from_topology"] is True
 
 
 def test_self_mesh_commands_priced_under_self_commander(client):

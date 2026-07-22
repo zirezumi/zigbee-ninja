@@ -29,6 +29,28 @@ ZCL_REPORT_BYTES = 12
 PROVENANCE = "inferred (T0 payload estimate)"
 AUTONOMOUS_PROVENANCE = "modeled (report size estimate)"
 
+# Which cost model produced a stored row. Bump this whenever a change makes
+# ledger µs non-comparable with previously stored µs; §V2-6 verification then
+# refuses to grade an applied recommendation across the boundary instead of
+# reading the re-pricing as a traffic change (a REGRESSED_RATIO of 1.25 would
+# otherwise mark half the queue regressed the day a model lands).
+#
+#   1: unicast priced at the coordinator's own hop only.
+#   2: unicast priced per §10 as hops x (frame + ACK + IFS) x (1 + retry_rate),
+#      with hop depth from topology snapshots. Groupcast pricing is unchanged,
+#      so only unicast-bearing rows move, and they move upward.
+#
+# A daily row that accumulated under more than one model records
+# MIXED_PRICING_VERSION rather than the last writer's value.
+PRICING_MODEL_VERSION = 2
+MIXED_PRICING_VERSION = 0
+
+# The device ledger prices autonomous reports arriving at the coordinator, a
+# last-hop quantity the unicast hop model does not touch. It carries its own
+# version so a command-pricing change never pauses reporting verdicts: each
+# ledger tracks the model that actually prices it.
+AUTONOMOUS_PRICING_MODEL_VERSION = 1
+
 # Commander labels for ledger rows without an attributed client.
 UNATTRIBUTED = "(unattributed)"
 SELF_COMMANDER = "zigbee-ninja"
@@ -44,18 +66,29 @@ def utc_day(ts: float) -> str:
 
 
 def instance_params(
-    n_routers: int, avg_tx: float | None, retry_rate: float | None
+    n_routers: int,
+    avg_tx: float | None,
+    retry_rate: float | None,
+    hops_from_topology: bool = False,
 ) -> dict:
     """Pricing context recorded on a ledger row: the values in force when the
     row was last written, and whether each came from a counter window or the
     model default. This is what lets a later parameter improvement be told
-    apart from a real traffic change."""
+    apart from a real traffic change.
+
+    Hop counts are per target, so a daily row (which aggregates many targets)
+    records only whether a topology snapshot was available to price them; the
+    alternative was a single hop number that would be wrong for most of the
+    chains it covers.
+    """
     return {
         "n_routers": n_routers,
         "avg_tx": round(avg_tx, 3) if avg_tx is not None else airtime.DEFAULT_AVG_TX,
         "avg_tx_measured": avg_tx is not None,
         "retry_rate": round(retry_rate, 4) if retry_rate is not None else 0.0,
         "retry_rate_measured": retry_rate is not None,
+        "hops_from_topology": hops_from_topology,
+        "pricing_version": PRICING_MODEL_VERSION,
     }
 
 
@@ -79,13 +112,27 @@ def price_chain(
     echo_count: int,
     avg_tx: float | None = None,
     retry_rate: float | None = None,
+    hops: int = 1,
 ) -> ChainPrice:
     """Model the airtime one command chain cost the mesh.
 
     TX: one groupcast amplified across the router census for a group target,
-    else one unicast scaled by the measured MAC retry rate. RX: each state
-    echo as one report frame arriving at the coordinator (last hop only,
-    matching the §10 RX accounting).
+    else one unicast scaled by the measured MAC retry rate and by `hops`, the
+    target's route depth. Both sides of that choice are now mesh-wide
+    quantities: pricing the groupcast across every router while pricing the
+    unicast at the coordinator's own hop made the two incomparable and
+    systematically flattered any change that replaced a groupcast with
+    unicasts. `hops` defaults to 1 so a caller that does not know the route
+    gets the coordinator hop only.
+
+    This is deliberately a different question from what ninja-tap measures:
+    the wire tier taps the coordinator's link and physically cannot observe a
+    relay, so it prices what it saw (one hop) while the ledger prices what the
+    mesh spent. The two are separate currencies by design (§10); do not
+    "reconcile" them.
+
+    RX: each state echo as one report frame arriving at the coordinator (last
+    hop only, matching the §10 RX accounting).
     """
     payload = ZCL_GET_BYTES if verb == "get" else ZCL_SET_BYTES
     effective_avg_tx = avg_tx if avg_tx is not None else airtime.DEFAULT_AVG_TX
@@ -93,7 +140,7 @@ def price_chain(
     if group_target:
         tx = airtime.groupcast_airtime_us(payload, n_routers, avg_tx=effective_avg_tx)
     else:
-        tx = airtime.unicast_airtime_us(payload, retry_rate=effective_retry)
+        tx = airtime.unicast_airtime_us(payload, retry_rate=effective_retry, hops=hops)
     rx = max(0, echo_count) * airtime.incoming_airtime_us(
         ZCL_REPORT_BYTES, group_addressed=False, acked=True
     )
@@ -106,6 +153,7 @@ def price_chain(
             "n_routers": n_routers if group_target else 0,
             "avg_tx": round(effective_avg_tx, 3) if group_target else None,
             "retry_rate": round(effective_retry, 4) if not group_target else None,
+            "hops": None if group_target else hops,
             "payload_bytes": payload,
         },
     )

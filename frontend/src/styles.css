@@ -919,6 +919,50 @@ nav button.nav-item.active {
   font-size: 12px;
 }
 
+/* ---- recommendations: significance + cost ---- */
+/* The low-relief group is collapsed by default and never dropped (detector
+   honesty), so it has to read as a fold rather than as one more card. */
+.low-band {
+  margin-top: 14px;
+}
+
+.low-band > summary {
+  padding: 6px 0;
+}
+
+/* What a change costs on a budget it does not save on. Every priced trade
+   gets the block; the variant carries how it should read. Neutral by default
+   (a cost paid in delay is a fact, not a warning), amber when the change adds
+   load, danger for the bad trade where a measured and finite budget is spent
+   to relieve one nobody is waiting on. */
+.cost-note {
+  border: 1px solid var(--line);
+  border-left-width: 3px;
+  background: color-mix(in srgb, var(--line) 30%, transparent);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin: 10px 0;
+  font-size: 13.5px;
+}
+
+.cost-note.warn {
+  border-color: var(--amber);
+  background: color-mix(in srgb, var(--amber) 9%, transparent);
+}
+
+.cost-note.bad {
+  border-color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+}
+
+.cost-note p {
+  margin: 6px 0 0;
+}
+
+.cost-note p:first-child {
+  margin-top: 0;
+}
+
 @media (max-width: 720px) {
   .shell {
     grid-template-columns: 1fr;

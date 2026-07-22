@@ -29,6 +29,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from ..store.db import Database
+from . import significance
 
 STATES = ("open", "dismissed", "applied", "verified", "regressed")
 # States a user may set through the API; verified and regressed are §V2-6
@@ -66,6 +67,14 @@ class Finding:
     confidence: str  # high | medium | low
     evidence: list = field(default_factory=list)
     fingerprint: dict = field(default_factory=dict)
+    # What the change would free, weighed against how contended that resource
+    # actually is (see significance.py). Empty when a detector has not been
+    # taught to assess it.
+    significance: dict = field(default_factory=dict)
+    # What the change would COST on the denominators it does not save on. A
+    # detector that raises load somewhere must say so here: the queue is not
+    # allowed to recommend spending a scarce resource to save an abundant one.
+    cost: dict = field(default_factory=dict)
 
     @property
     def id(self) -> str:
@@ -104,13 +113,24 @@ def materially_changed(old: dict, new: dict) -> bool:
     return False
 
 
-def _rank(row: dict) -> tuple[float, float, float]:
-    """Queue order (§V2-5): saving × confidence. Airtime savings rank first;
-    latency-only findings (µs/s of zero) rank among themselves by their
-    predicted p95 improvement at the same confidence weighting."""
+def _rank(row: dict) -> tuple[float, float, float, float]:
+    """Queue order: significance band, then §V2-5's saving × confidence.
+
+    The band leads because `saving × confidence` alone ranks a large saving on
+    an idle mesh above a small one on a saturated mesh, which is backwards: it
+    measures how much a change frees without asking whether anything needed
+    freeing. Within a band the original ordering is preserved exactly. Airtime
+    savings rank first; latency-only findings (µs/s of zero) rank among
+    themselves by their predicted p95 improvement at the same weighting.
+    """
     weight = CONFIDENCE_WEIGHT.get(row["confidence"], 0.3)
     saving = row["saving"] or {}
+    band = significance.BAND_RANK.get(
+        (row.get("significance") or {}).get("band"),
+        significance.BAND_RANK[significance.BAND_UNKNOWN],
+    )
     return (
+        float(band),
         weight * float(saving.get("us_per_s") or 0.0),
         weight * float(saving.get("p95_ms") or 0.0),
         row["updated_at"],
@@ -151,14 +171,16 @@ class RecommendationStore:
                 item.confidence,
                 json.dumps(item.evidence),
                 json.dumps(item.fingerprint),
+                json.dumps(item.significance),
+                json.dumps(item.cost),
                 now,
             )
             if row is None:
                 conn.execute(
                     "INSERT INTO recommendations (id, detector, instance, subject, "
                     "finding, action, saving, confidence, evidence, state, "
-                    "fingerprint, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)",
+                    "fingerprint, significance, cost, created_at, updated_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)",
                     (
                         rec_id,
                         item.detector,
@@ -170,6 +192,8 @@ class RecommendationStore:
                         item.confidence,
                         json.dumps(item.evidence),
                         json.dumps(item.fingerprint),
+                        json.dumps(item.significance),
+                        json.dumps(item.cost),
                         now,
                         now,
                     ),
@@ -178,7 +202,8 @@ class RecommendationStore:
             elif row["state"] == "open":
                 conn.execute(
                     "UPDATE recommendations SET finding = ?, action = ?, saving = ?, "
-                    "confidence = ?, evidence = ?, fingerprint = ?, updated_at = ? "
+                    "confidence = ?, evidence = ?, fingerprint = ?, significance = ?, "
+                    "cost = ?, updated_at = ? "
                     "WHERE id = ?",
                     (*payload, rec_id),
                 )
@@ -188,7 +213,8 @@ class RecommendationStore:
                 if materially_changed(old_fingerprint, item.fingerprint):
                     conn.execute(
                         "UPDATE recommendations SET finding = ?, action = ?, saving = ?, "
-                        "confidence = ?, evidence = ?, fingerprint = ?, updated_at = ?, "
+                        "confidence = ?, evidence = ?, fingerprint = ?, significance = ?, "
+                        "cost = ?, updated_at = ?, "
                         "state = 'open', state_changed_at = ?, state_note = ? "
                         "WHERE id = ?",
                         (
@@ -312,6 +338,8 @@ class RecommendationStore:
             "saving": json.loads(row["saving"] or "{}"),
             "confidence": row["confidence"],
             "evidence": json.loads(row["evidence"] or "[]"),
+            "significance": json.loads(row["significance"] or "{}"),
+            "cost": json.loads(row["cost"] or "{}"),
             "state": row["state"],
             "state_note": row["state_note"],
             "verification": json.loads(row["verification"]) if row["verification"] else None,

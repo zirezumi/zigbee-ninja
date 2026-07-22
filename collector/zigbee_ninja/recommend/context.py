@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -31,6 +31,11 @@ class DetectorContext:
     registry: object | None = None
     events_log: object | None = None
     topology_latest: Callable[[str], dict] | None = None
+    # headroom.utilization(): {instance: {channel_budget_pct, knee_eps, ...}}.
+    # How contended each denominator currently is, so a detector can weigh what
+    # a saving is worth instead of reporting its size alone (significance.py).
+    # Empty in minimal harnesses; significance then reports band "unknown".
+    utilization: dict = field(default_factory=dict)
 
     def window_start(self) -> float:
         return self.now - self.lookback_seconds

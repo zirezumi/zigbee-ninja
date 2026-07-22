@@ -218,3 +218,39 @@ def summarize(
             "benchmark_windows_excluded": loads["excluded"],
         }
     return {"window_seconds": seconds, "instances": instances}
+
+
+UTILIZATION_WINDOW_SECONDS = 24 * 3600
+
+
+def utilization(
+    db: Database,
+    instances_info: list[dict],
+    seconds: int = UTILIZATION_WINDOW_SECONDS,
+    clock: Callable[[], float] = time.time,
+) -> dict[str, dict]:
+    """Per-instance pressure on each denominator, for the recommendation
+    engine's significance term.
+
+    Deliberately the same aggregates the Headroom view shows, read through
+    `summarize` rather than recomputed, so a finding's "this budget is N% used"
+    can never disagree with the number the owner sees on the Headroom page.
+    A denominator with no measurement yet reports None, and significance
+    degrades to unknown rather than guessing.
+    """
+    view = summarize(db, seconds, instances_info, clock=clock)
+    out: dict[str, dict] = {}
+    for base, entry in (view.get("instances") or {}).items():
+        budget = (entry.get("denominators") or {}).get("channel_budget") or {}
+        headroom_entry = entry.get("headroom") or {}
+        rates = entry.get("rates") or {}
+        knee = entry.get("knee") or {}
+        out[base] = {
+            "channel_budget_pct": budget.get("pct"),
+            "knee_utilization_pct": headroom_entry.get("knee_utilization_pct"),
+            "p95_eps": rates.get("p95_eps"),
+            "max_eps": rates.get("max_eps"),
+            "knee_eps": knee.get("eps"),
+            "window_seconds": seconds,
+        }
+    return out

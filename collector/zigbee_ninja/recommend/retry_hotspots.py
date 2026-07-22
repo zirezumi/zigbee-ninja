@@ -19,6 +19,7 @@ from ..capacity import ledger
 from ..capacity.airtime import CHANNEL_BUDGET_US_PER_S
 from ..capacity.scenario import _chain_rows
 from ..ingest import topology
+from . import cost, significance
 from .context import DetectorContext
 from .store import Finding
 
@@ -34,6 +35,22 @@ WEAK_LQI = 80
 # links are weak.
 HEAVY_ROUTES = 3
 TOP_SUSPECTS = 5
+
+
+def _investigation_cost() -> dict:
+    """This detector's action kind is `investigate`, and looking costs the
+    mesh nothing on any denominator.
+
+    Declared rather than omitted: a reader comparing cards has to be able to
+    tell "this change is free" apart from "nobody worked out what this
+    change costs". Whatever the investigation leads to (a device moved, a
+    router added) is a change of its own and gets priced when it is proposed.
+    """
+    return cost.none(
+        "reading a network map costs nothing on the mesh; any placement or "
+        "routing change this leads to is a separate change and is priced "
+        "when it is proposed"
+    )
 
 
 def _unicast_us_per_s(ctx: DetectorContext, base: str) -> float:
@@ -149,6 +166,15 @@ def detect(ctx: DetectorContext) -> list[Finding]:
                 + [item["device"] for item in relays]
             )
         )
+        saving = {
+            "us_per_s": round(overhead_us, 3),
+            "pct_of_budget": round(overhead_us / CHANNEL_BUDGET_US_PER_S * 100.0, 4),
+            "basis": (
+                "recorded unicast spend times the measured per-hop retry "
+                "rate; an upper bound on what cleaner links could recover"
+            ),
+            "provenance": "modeled",
+        }
         findings.append(
             Finding(
                 detector=NAME,
@@ -161,17 +187,11 @@ def detect(ctx: DetectorContext) -> list[Finding]:
                     "retry_rate": round(retry_rate, 4),
                     "suspects": suspects,
                 },
-                saving={
-                    "us_per_s": round(overhead_us, 3),
-                    "pct_of_budget": round(
-                        overhead_us / CHANNEL_BUDGET_US_PER_S * 100.0, 4
-                    ),
-                    "basis": (
-                        "recorded unicast spend times the measured per-hop retry "
-                        "rate; an upper bound on what cleaner links could recover"
-                    ),
-                    "provenance": "modeled",
-                },
+                saving=saving,
+                significance=significance.for_airtime(
+                    saving, (ctx.utilization or {}).get(base)
+                ),
+                cost=_investigation_cost(),
                 confidence="low",
                 evidence=[
                     {

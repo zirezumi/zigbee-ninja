@@ -433,9 +433,22 @@ cost between the two knobs, never double-count it. At T1 the same
 reconstruction applies to ZCL payload sizes (near-exact); T0 estimates via a
 payload→ZCL mapping table (`inferred`).
 
-**Unicast cost:** `hops × (frame + ACK + IFS) × (1 + retry_rate)`. Hop counts
-come from topology snapshots (parent/route data); unknown routes default to a
-conservative 1–2 hops, tagged accordingly. **retry_rate is measured
+**Unicast cost:** `hops × (frame + ACK + IFS) × (1 + retry_rate)`. **Hop counts
+are derived from topology snapshots** by breadth-first search outward from the
+coordinator over the reduced networkmap's neighbour adjacency
+(`capacity/hops.py`, rooted on the registry's `coordinator_ieee` with the map's
+own coordinator-typed node as fallback). Neighbour adjacency is who can *hear*
+whom rather than the path a frame takes, so a BFS depth is the shortest route
+the radio topology permits: a **lower bound**, provenance `inferred (topology
+adjacency, shortest path)`, and the same posture the TX PSDU reconstruction
+already takes. A target the map cannot place (absent, or partitioned from the
+coordinator) takes `DEFAULT_UNKNOWN_HOPS`, which is set to the *pessimistic*
+end of the conservative 1–2 range: unicast is the alternative most
+recommendations propose, so under-pricing it would overstate their savings. A
+refinement available later: raw links carry ACTIVE routing-table rows naming
+their next hop, which is real path data rather than adjacency, but it is
+unusable as the primary source while some device firmware answers `Mgmt_Lqi`
+and not `Mgmt_Rtg` (its rows are simply missing). **retry_rate is measured
 passively, per coordinator**, from the harvested `readAndClearCounters`
 windows: `mac_tx_unicast_retry / mac_tx_unicast_success` per clearing read
 (each response is a self-contained window, so no window length or prior
@@ -466,6 +479,31 @@ modeled default simply stays in force, visibly. This supersedes the groupcast
 calibration stage originally specified in §11 (passive by default, P1). The
 amplification term is what explains why "one more group" costs far more
 airtime than coordinator counters suggest.
+
+**Two currencies, deliberately unreconciled.** The cost ledger and the wire
+tier price the same unicast differently, and that is correct rather than a
+defect to fix. ninja-tap observes the coordinator's link only and physically
+*cannot* see a relay, so it charges the one hop it witnessed: it measures.
+The ledger models what the command cost the whole mesh, so it charges every
+hop. Pricing the groupcast across the full router census while pricing the
+unicast at the coordinator's hop alone would make the two incomparable, and
+would systematically flatter any recommendation that replaced a groupcast with
+unicasts, which is the specific failure this split exists to prevent. Surfaces
+label which currency they are showing (the same way the burst envelope already
+distinguishes wire frames from T0 commands); nothing should "reconcile" them
+into one number.
+
+**Pricing-model versions.** Every ledger row records the cost model that priced
+it (`ledger.PRICING_MODEL_VERSION`; version 1 charged unicast at the
+coordinator hop only, version 2 charges §10 hops). The device ledger carries
+its own version, because autonomous reports are a last-hop quantity the hop
+term does not touch and a command-pricing change must not pause reporting
+verdicts. A daily row that accumulated across a model change records
+`MIXED_PRICING_VERSION` instead of the last writer's value. §V2-6 verification
+refuses to grade an applied recommendation whose before and after windows sit
+on different versions, holding at `pending` with a reason: a re-pricing is not
+a traffic change, and `REGRESSED_RATIO` of 1.25 would otherwise mark much of
+the queue regressed on the day a model lands.
 
 **Topology snapshots** (router census, parent/route tables, depth estimates)
 come from permission-gated, rate-limited networkmap pulls: they load the mesh,
@@ -736,11 +774,47 @@ engineering term.
 10. **Settings**: retention knobs (§12), client labels for the Attribution
     explorer, and the wire-tap agent token (revealed on demand).
 11. **Recommendations**: the V2 queue (V2_PROPOSAL.md §V2-5): findings
-    ordered by saving × confidence, plain-language detector labels,
-    expandable evidence, dismiss / mark-applied / reopen controls, an
-    on-demand scan, and an empty state that states the
-    provably-traffic-optimized claim. The toolbar exports the current
-    tab's list as a JSON file, and each card carries a one-click Copy
+    ordered by **significance band** and then, within a band, by the
+    original saving × confidence term (`recommend/significance.py`,
+    `recommend/store.py`); the view never re-sorts what the API ranked.
+    Plain-language detector labels, expandable evidence, dismiss /
+    mark-applied / reopen controls, an on-demand scan, and an empty state
+    that states the provably-traffic-optimized claim. Each card carries
+    the significance rationale as a plain sentence ("frees about 0.47% of
+    the channel airtime budget, which is currently 0.5% used; that budget
+    is not under pressure, so this relieves nothing today") next to a band
+    chip whose tooltip carries the share of current spend the change would
+    remove. Every budget either field can name carries a plain-language
+    gloss in that tooltip; the denominator vocabulary lives in
+    `recommend/cost.py` and a constant added there needs its gloss added
+    to the view in the same change.
+    Every priced trade carries a **cost block**: what the change costs on
+    the budgets it does not save on. `cost.kind` discriminates the shape
+    (`publish_delta`, `destination_load`, `completion_delay`, `staleness`,
+    `none`) and the view **dispatches on it** rather than sniffing which
+    keys are present, so each kind renders its own detail: command counts
+    before and after beside the coordinator's measured peak against its
+    capacity limit; the receiving coordinator's peak before and after
+    against its own limit; the burst that finishes later; the reporting
+    interval stretching, the delay that adds, and a presence-hardware chip
+    where that delay is felt first. A kind this GUI does not know renders
+    its authored `note`, which is why `note` is a contract field.
+    `raises_load` drives how the block **reads** (amber warning versus a
+    neutral fact) rather than whether it appears: a cost paid in delay is
+    still a cost, and a reader deciding whether to accept a change needs
+    it. `raises_load` together with band `low` is the product's own
+    verdict that the change is a **bad trade** (a measured, finite budget
+    spent to relieve one nobody is waiting on) and the block says so in
+    those words. `kind: "none"` (priced, and free) stays a quiet one-line
+    chip, deliberately distinct from an absent cost block (nobody priced
+    it), which renders nothing at all.
+    The `low` band is **collapsed behind a toggle, closed by default**,
+    labeled with its count ("12 findings that would relieve nothing
+    today") and with the number of bad trades inside it: per the
+    detector-honesty doctrine nothing is ever dropped from the queue, and
+    collapsing is the only permitted concession to volume. The toolbar
+    exports the current tab's list as a JSON file (the whole tab,
+    collapsed findings included), and each card carries a one-click Copy
     that puts the full record (detector, coordinator, finding, saving,
     evidence) on the clipboard; plain-http installations get the
     textarea copy fallback since the async Clipboard API needs a secure

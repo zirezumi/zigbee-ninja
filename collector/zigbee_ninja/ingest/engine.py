@@ -14,8 +14,9 @@ from .. import __version__
 from ..alerts import GLOBAL_INSTANCE, AlertManager
 from ..attribution.chains import Chain, ChainTracker, parse_command
 from ..calibration.benchmark import CalibrationManager
+from ..capacity import airtime, ledger
 from ..capacity import headroom as headroom_model
-from ..capacity import ledger
+from ..capacity import hops as hop_model
 from ..capacity.headroom import TX_BUCKETS
 from ..ha_discovery import PUBLISH_INTERVAL_SECONDS, DiscoveryPublisher
 from ..recommend.runner import RecommendationEngine
@@ -38,6 +39,7 @@ from .rates import GLOBAL, ROLLUP_SECONDS, RateTracker, classify
 from .registry import Registry
 from .tap import TapIngest
 from .topology import TopologyPuller
+from .topology import graph as topology_graph
 
 # Retention defaults (DESIGN.md §12); settings-backed knobs override at runtime.
 DEFAULT_ROLLUP_RETENTION_DAYS = 14  # 10s tiers
@@ -926,6 +928,35 @@ class Engine:
                 )
             return params_cache[instance]
 
+        hops_cache: dict[str, dict[str, int]] = {}
+        coordinators = {
+            row["base_topic"]: row.get("coordinator_ieee")
+            for row in self.registry.snapshot()
+        }
+
+        def target_hops(instance: str, target: str) -> int:
+            """Route depth for a unicast target (§10's hop term).
+
+            Cached for the whole flush pass: topology snapshots change on the
+            order of hours while chains arrive on the order of milliseconds,
+            so re-deriving per chain would be pure waste. A target the map
+            cannot place takes the conservative default rather than the
+            cheapest assumption.
+            """
+            depths = hops_cache.get(instance)
+            if depths is None:
+                entry = self.topology.latest(instance, include_raw=True).get(instance) or {}
+                raw = entry.get("raw")
+                depths = (
+                    hop_model.depths_by_name(
+                        topology_graph(raw), coordinators.get(instance)
+                    )
+                    if raw
+                    else {}
+                )
+                hops_cache[instance] = depths
+            return depths.get(target, airtime.DEFAULT_UNKNOWN_HOPS)
+
         rows: dict[tuple[str, str, str], dict] = {}
 
         def accumulate(
@@ -939,17 +970,21 @@ class Engine:
             entry["tx_us"] += price.tx_us * count
             entry["rx_us"] += price.rx_us * count
             entry["provenance"] = price.provenance
-            entry["params"] = ledger.instance_params(n_routers, avg_tx, retry_rate)
+            entry["params"] = ledger.instance_params(
+                n_routers, avg_tx, retry_rate, bool(hops_cache.get(instance))
+            )
 
         for chain in finalized:
             n_routers, avg_tx, retry_rate = context(chain.instance)
+            group_target = self.registry.is_group(chain.instance, chain.target)
             price = ledger.price_chain(
                 verb=chain.verb,
-                group_target=self.registry.is_group(chain.instance, chain.target),
+                group_target=group_target,
                 n_routers=n_routers,
                 echo_count=chain.echoes,
                 avg_tx=avg_tx,
                 retry_rate=retry_rate,
+                hops=1 if group_target else target_hops(chain.instance, chain.target),
             )
             day = ledger.utc_day(chain.opened_at)
             commander = chain.client or ledger.UNATTRIBUTED
@@ -958,6 +993,10 @@ class Engine:
         self_pending, self._ledger_self = self._ledger_self, {}
         for (instance, day, verb, group_target), count in self_pending.items():
             n_routers, avg_tx, retry_rate = context(instance)
+            # Self traffic aggregates by (verb, group_target) without keeping
+            # the target, so there is no route to price: it takes the
+            # coordinator hop. This under-counts our own probe reads slightly,
+            # which is the right direction for a self-attributed number.
             price = ledger.price_chain(
                 verb=verb,
                 group_target=group_target,
@@ -972,14 +1011,20 @@ class Engine:
         if rows:
             conn.executemany(
                 "INSERT INTO ledger_daily "
-                "(instance, day, commander, chains, tx_us, rx_us, provenance, params) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+                "(instance, day, commander, chains, tx_us, rx_us, provenance, params, "
+                "pricing_version) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(instance, day, commander) DO UPDATE SET "
                 "chains = chains + excluded.chains, "
                 "tx_us = tx_us + excluded.tx_us, "
                 "rx_us = rx_us + excluded.rx_us, "
                 "provenance = excluded.provenance, "
-                "params = excluded.params",
+                "params = excluded.params, "
+                # A day that accumulated under two cost models is not a
+                # comparable quantity; record that rather than letting the
+                # last writer's version speak for the whole row.
+                "pricing_version = CASE WHEN pricing_version = excluded.pricing_version "
+                "THEN pricing_version ELSE ? END",
                 [
                     (
                         instance,
@@ -990,6 +1035,8 @@ class Engine:
                         entry["rx_us"],
                         entry["provenance"],
                         json.dumps(entry["params"]),
+                        ledger.PRICING_MODEL_VERSION,
+                        ledger.MIXED_PRICING_VERSION,
                     )
                     for (instance, day, commander), entry in rows.items()
                 ],
@@ -1001,12 +1048,15 @@ class Engine:
             unit_us = ledger.autonomous_publish_cost_us()
             conn.executemany(
                 "INSERT INTO ledger_device_daily "
-                "(instance, day, device, publishes, autonomous_us, provenance) "
-                "VALUES (?, ?, ?, ?, ?, ?) "
+                "(instance, day, device, publishes, autonomous_us, provenance, "
+                "pricing_version) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT(instance, day, device) DO UPDATE SET "
                 "publishes = publishes + excluded.publishes, "
                 "autonomous_us = autonomous_us + excluded.autonomous_us, "
-                "provenance = excluded.provenance",
+                "provenance = excluded.provenance, "
+                "pricing_version = CASE WHEN pricing_version = excluded.pricing_version "
+                "THEN pricing_version ELSE ? END",
                 [
                     (
                         instance,
@@ -1015,6 +1065,8 @@ class Engine:
                         publishes,
                         publishes * unit_us,
                         ledger.AUTONOMOUS_PROVENANCE,
+                        ledger.AUTONOMOUS_PRICING_MODEL_VERSION,
+                        ledger.MIXED_PRICING_VERSION,
                     )
                     for (instance, day, device), publishes in auto_pending.items()
                 ],

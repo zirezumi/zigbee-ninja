@@ -40,7 +40,8 @@ def raw_map():
     }
 
 
-def context(tmp_path, retry_rates, topo=None, chains=200):
+def context(tmp_path, retry_rates, topo=None, chains=200, utilization=None):
+    """utilization: {instance: {...}} pressure, used for significance banding."""
     db = Database(tmp_path)
     conn = db.connect()
     for i in range(chains):
@@ -69,6 +70,7 @@ def context(tmp_path, retry_rates, topo=None, chains=200):
         pricing=lambda base: (None, retry_rates[base]),
         db=db,
         topology_latest=(lambda base: {"raw": topo}) if topo else (lambda base: {}),
+        utilization=utilization or {},
     )
 
 
@@ -127,6 +129,37 @@ def test_coordinator_never_names_itself_a_relay_and_suspects_dedupe(tmp_path):
     assert len(suspects) == len(set(suspects))
     weak = next(e for e in findings[0].evidence if e["kind"] == "weak_links")
     assert all(r["device"] != "Coordinator" for r in weak["heavy_relays"])
+
+
+def test_investigation_declares_that_it_costs_nothing(tmp_path):
+    # The action kind is `investigate`, and looking costs the mesh nothing.
+    # Declaring that beats omitting it: a reader has to be able to tell
+    # "this is free" apart from "nobody priced this".
+    ctx = context(tmp_path, {"z2m-a": 0.11}, topo=raw_map())
+    (finding,) = retry_hotspots.detect(ctx)
+    assert finding.cost["denominator"] is None
+    assert finding.cost["raises_load"] is False
+    assert "costs nothing on the mesh" in finding.cost["note"]
+
+
+def test_retry_saving_bands_against_the_channel_budget(tmp_path):
+    ctx = context(
+        tmp_path,
+        {"z2m-a": 0.11},
+        topo=raw_map(),
+        utilization={"z2m-a": {"channel_budget_pct": 0.4}},
+    )
+    (finding,) = retry_hotspots.detect(ctx)
+    assert finding.significance["denominator"] == "channel airtime"
+    assert finding.significance["band"] == "low"
+    assert "not under pressure" in finding.significance["rationale"]
+
+
+def test_retry_significance_is_unknown_before_a_calibration(tmp_path):
+    ctx = context(tmp_path, {"z2m-a": 0.11}, topo=raw_map())
+    (finding,) = retry_hotspots.detect(ctx)
+    assert finding.significance["band"] == "unknown"
+    assert "not measured yet" in finding.significance["rationale"]
 
 
 def test_healthy_coordinator_links_shift_the_story(tmp_path):

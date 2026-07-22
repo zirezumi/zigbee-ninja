@@ -157,6 +157,12 @@ A set of **detectors**, each emitting structured findings:
   "saving": { "us_per_s": 123.4, "pct_of_budget": 1.2,
               "basis": "replayed 24 h of recorded traffic",
               "provenance": "reconstructed|modeled" },
+  "significance": { "band": "high|moderate|low|unknown", "denominator": "channel airtime",
+                    "utilization_pct": 0.9, "relief_pct": 52.0,
+                    "rationale": "…plain sentence…" },
+  "cost": { "kind": "publish_delta|destination_load|completion_delay|staleness|none",
+            "denominator": "command rate", "raises_load": true,
+            "note": "…plain sentence…", "…kind-specific fields…": 0 },
   "confidence": "high|medium|low",
   "evidence": ["chain ids / window refs / journal refs"],
   "state": "open | dismissed | applied | verified | regressed"
@@ -168,6 +174,34 @@ store where possible (basis says so; anything else is `modeled` and says
 that instead); every recommendation carries confidence and evidence links;
 dismissals are durable (a dismissed finding never nags again unless its
 inputs materially change).
+
+Two further principles, both added after the groupcast detector was caught
+recommending a change that its own measurements refute:
+
+- **A saving is not a reason on its own.** `significance` bands the saving
+  against how contended its denominator actually is, so half a percent freed
+  on a budget running at one percent lands in the `low` band no matter how
+  large the number looks. Nothing is hidden (the honesty doctrine still
+  holds: the owner sees every finding and decides); the queue ranks by band
+  first and the GUI collapses `low` behind a toggle. An unmeasured
+  denominator reports `unknown` rather than being assumed idle.
+- **A recommendation must declare what it spends.** `cost` names the
+  denominator the action *pays* on, tagged by `kind` because the shapes are
+  not commensurable (more commands, a burst finishing later, state arriving
+  later, load landing on another coordinator, nothing at all). Airtime and
+  pipeline commands are different currencies, and without this the queue will
+  cheerfully propose spending a scarce one to relieve an abundant one: a
+  retarget that frees 0.5% of an idle channel by tripling the command count
+  toward a measured capacity limit has to be able to refute itself. An
+  explicit `kind: "none"` records an assessed-and-free trade, which reads
+  differently from a missing block (nobody checked).
+
+Detector 2 additionally checks that its action is **behavior-neutral** before
+proposing it: retargeting a group to per-member commands is only a cost
+optimization if no member carries outbound bindings, since a device-addressed
+command traverses those bindings while a group-addressed one does not. Where
+it is not neutral the action carries `behavior_neutral: false` with the bound
+members named, and confidence drops to low.
 
 **Detector inventory, first wave: ordered by expected value on real meshes:**
 
@@ -222,7 +256,8 @@ inputs materially change).
    multipliers get "investigate placement/route" findings. Low confidence
    by construction (radio weather exists); clearly tagged.
 
-**Recommendations view:** a queue ordered by modeled saving × confidence,
+**Recommendations view:** a queue ordered by significance band, then within
+a band by modeled saving × confidence,
 each expandable to evidence; empty queue + green budgets is the product's
 definition of *"provably traffic-optimized: nothing left that the evidence
 supports changing."*

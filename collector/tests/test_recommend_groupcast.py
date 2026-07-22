@@ -6,8 +6,21 @@ NOW = 3_000_000.0
 LOOKBACK = 3600.0
 
 
-def _context(tmp_path, groups=None, routers=20, pricing=(None, None)):
-    """groups: {group_name: [member names]} for one instance 'z2m-1'."""
+def _context(
+    tmp_path,
+    groups=None,
+    routers=20,
+    pricing=(None, None),
+    devices=None,
+    topology=None,
+    utilization=None,
+):
+    """groups: {group_name: [member names]} for one instance 'z2m-1'.
+
+    devices: registry rows, used for the binding-awareness guard.
+    topology: a {"raw": <networkmap>} entry, used for hop pricing.
+    utilization: {instance: {...}} pressure, used for significance banding.
+    """
     groups = groups or {}
     db = Database(tmp_path)
     return DetectorContext(
@@ -20,10 +33,17 @@ def _context(tmp_path, groups=None, routers=20, pricing=(None, None)):
         is_group=lambda base, target: target in groups,
         group_members=lambda base, target: list(groups.get(target, [])),
         groups=lambda base: [{"friendly_name": name} for name in groups],
-        devices=lambda base: [],
+        devices=lambda base: list(devices or []),
         router_count_for=lambda base: routers,
         pricing=lambda base: pricing,
+        topology_latest=(lambda base: topology) if topology is not None else None,
+        utilization=utilization or {},
     )
+
+
+def _bound(name, count=1):
+    """A registry row for a device carrying outbound bindings."""
+    return {"friendly_name": name, "binding_count": count}
 
 
 def _insert(ctx, commands):
@@ -131,9 +151,12 @@ def test_small_group_on_router_heavy_mesh_loses_to_unicast(tmp_path):
     assert finding.fingerprint["members"] == 2
 
 
-def test_single_member_group_reads_as_pure_overhead(tmp_path):
+def test_single_member_group_does_not_claim_the_group_is_pointless(tmp_path):
     # One member: singular phrasing, and no simultaneity claim (there is
-    # nothing to change "in the same instant").
+    # nothing to change "in the same instant"). The amplification is real, but
+    # a one-member group is a normal way to address a device without reaching
+    # what its bindings reach, so the finding must not assert the group buys
+    # nothing: it says to check why the group exists first.
     ctx = _context(tmp_path, groups={"tos_phantom": ["tos_light"]}, routers=29)
     _insert(
         ctx,
@@ -146,8 +169,124 @@ def test_single_member_group_reads_as_pure_overhead(tmp_path):
     (finding,) = groupcast.detect(ctx)
     assert "has 1 member," in finding.finding
     assert "1 individual command would cost" in finding.finding
-    assert "gains nothing from broadcast delivery" in finding.finding
     assert "same instant" not in finding.finding
+    assert "gains nothing" not in finding.finding
+    assert "before dissolving it" in finding.finding
+    # Nothing in the registry says this member is bound, so the action is
+    # still offered as behaviour-neutral.
+    assert finding.action["behavior_neutral"] is True
+    assert finding.action["bound_members"] == []
+    assert finding.confidence == "medium"
+
+
+def test_bound_member_makes_the_retarget_non_equivalent(tmp_path):
+    # The member carries its own bindings, so addressing it directly traverses
+    # them while a group command does not. That is a behaviour change, not a
+    # cheaper way to do the same thing: flag it and drop confidence.
+    ctx = _context(
+        tmp_path,
+        groups={"office_phantom": ["office_dimmer"]},
+        routers=29,
+        devices=[_bound("office_dimmer", count=3)],
+    )
+    _insert(
+        ctx,
+        [
+            (NOW - 1800 + i * 30, "office_phantom", "automation: Office", f"d{i}")
+            for i in range(10)
+        ],
+    )
+
+    (finding,) = groupcast.detect(ctx)
+    assert finding.confidence == "low"
+    assert finding.action["behavior_neutral"] is False
+    assert finding.action["bound_members"] == ["office_dimmer"]
+    # One bound member reads in the singular; the plural form is a separate
+    # branch because this text is the whole warning a reader acts on.
+    assert "this member" in finding.finding
+    assert "office_dimmer carries its own Zigbee bindings" in finding.finding
+    assert "before retargeting" in finding.finding
+    # A binding appearing or disappearing must reopen a dismissal.
+    assert finding.fingerprint["bound_members"] == 1
+
+
+def test_several_bound_members_read_in_the_plural(tmp_path):
+    members = ["dimmer_a", "dimmer_b"]
+    ctx = _context(
+        tmp_path,
+        groups={"hall_phantom": members},
+        routers=29,
+        devices=[_bound(name) for name in members],
+    )
+    _insert(
+        ctx,
+        [
+            (NOW - 1800 + i * 30, "hall_phantom", "automation: Hall", f"d{i}")
+            for i in range(10)
+        ],
+    )
+
+    (finding,) = groupcast.detect(ctx)
+    assert "these members" in finding.finding
+    assert "carry their own Zigbee bindings" in finding.finding
+    assert finding.fingerprint["bound_members"] == 2
+
+
+def test_retarget_reports_the_command_load_it_would_add(tmp_path):
+    # The recommendation buys airtime with pipeline commands. It has to say so:
+    # one group command per render becomes four device commands.
+    members = ["s_1", "s_2", "s_3", "s_4"]
+    ctx = _context(
+        tmp_path,
+        groups={"sconces": members},
+        routers=29,
+        utilization={"z2m-1": {"channel_budget_pct": 0.51, "max_eps": 8.4, "knee_eps": 30.8}},
+    )
+    _insert(
+        ctx,
+        [(NOW - 1800 + i * 30, "sconces", "automation: Room", f"d{i}") for i in range(20)],
+    )
+
+    (finding,) = groupcast.detect(ctx)
+    assert finding.cost["raises_load"] is True
+    assert finding.cost["publish_multiplier"] == 4.0
+    assert finding.cost["publishes_before"] == 20
+    assert finding.cost["publishes_after"] == 80
+    assert finding.cost["delta_eps_mean"] > 0
+    # The measured capacity limit travels with the cost so a reader can judge.
+    assert finding.cost["capacity_limit_eps"] == 30.8
+    assert finding.cost["measured_peak_eps"] == 8.4
+
+
+def test_idle_mesh_bands_the_retarget_low(tmp_path):
+    ctx = _context(
+        tmp_path,
+        groups={"sconces": ["s_1", "s_2"]},
+        routers=29,
+        utilization={"z2m-1": {"channel_budget_pct": 0.51, "max_eps": 8.4, "knee_eps": 30.8}},
+    )
+    _insert(
+        ctx,
+        [(NOW - 1800 + i * 30, "sconces", "automation: Room", f"d{i}") for i in range(20)],
+    )
+
+    (finding,) = groupcast.detect(ctx)
+    assert finding.significance["band"] == "low"
+    assert "not under pressure" in finding.significance["rationale"]
+
+
+def test_fanout_collapse_reports_lowering_command_load(tmp_path):
+    # The other direction: collapsing n unicasts into one group command lowers
+    # both currencies, and the cost block credits that rather than staying silent.
+    ctx = _context(tmp_path, groups={"hall_lights": TARGETS}, routers=3)
+    for occurrence in range(12):
+        _insert(ctx, _fanout(NOW - 1800 + occurrence * 60, TARGETS, "aa11"))
+
+    (finding,) = groupcast.detect(ctx)
+    assert finding.cost["raises_load"] is False
+    assert finding.cost["publishes_before"] == 12 * len(TARGETS)
+    assert finding.cost["publishes_after"] == 12
+    assert finding.cost["delta_eps_mean"] < 0
 
 
 def test_large_group_keeps_its_groupcast(tmp_path):

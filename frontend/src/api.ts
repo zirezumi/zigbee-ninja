@@ -742,6 +742,115 @@ export interface RecommendationSaving {
   provenance?: string;
 }
 
+/** How much a saving is worth given how contended its budget actually is
+ * (`recommend/significance.py`). Every field is optional: a detector that has
+ * not been taught to assess significance serves an empty object, and the view
+ * shows nothing rather than inventing a band. */
+export interface RecommendationSignificance {
+  band?: "high" | "moderate" | "low" | "unknown";
+  denominator?: string;
+  utilization_pct?: number | null;
+  relief_pct?: number | null;
+  /** A ready-to-display sentence body, lowercase and without a full stop. */
+  rationale?: string;
+}
+
+/** Fields every cost block carries, whatever its kind (`recommend/cost.py`). */
+interface RecommendationCostCommon {
+  /** Which budget pays. Null when the trade was assessed and found free. */
+  denominator?: string | null;
+  /** Whether the action adds load. Drives how a cost reads, not whether it
+   * is shown: a cost paid in delay is still a cost. */
+  raises_load?: boolean;
+  /** Plain-language sentence body authored by the detector. Contract field:
+   * it is what a consumer renders when it does not recognize the kind. */
+  note?: string;
+}
+
+/** The action sends more (or fewer) commands. */
+export interface CostPublishDelta extends RecommendationCostCommon {
+  kind: "publish_delta";
+  publishes_before?: number;
+  publishes_after?: number;
+  publish_multiplier?: number | null;
+  delta_commands_per_day?: number | null;
+  delta_eps_mean?: number | null;
+  measured_peak_eps?: number | null;
+  capacity_limit_eps?: number | null;
+}
+
+/** The relief is bought on another coordinator: the one kind whose cost lands
+ * on a different instance than its saving, so it names that instance. */
+export interface CostDestinationLoad extends RecommendationCostCommon {
+  kind: "destination_load";
+  /** The coordinator that RECEIVES the load, which is never the one the
+   * recommendation is filed under: this is the only kind whose cost and
+   * saving land on different instances. */
+  destination_instance?: string;
+  peak_eps_before?: number;
+  peak_eps_after?: number;
+  capacity_limit_eps?: number | null;
+  ceiling_eps?: number | null;
+  peak_pct_of_limit_after?: number | null;
+  verdict_after?: string;
+  steady_us_per_s_delta?: number;
+  fleet_steady_delta_us_per_s?: number;
+}
+
+/** The same commands, spread out: paid in wall clock, not in traffic.
+ *
+ * Deliberately carries no before/after publish counts: this is the one kind
+ * that by construction moves no commands, so borrowing publish_delta's fields
+ * would put a row of zeros on every finding. `commands_in_burst` is how many
+ * commands the burst contains, not a delta. */
+export interface CostCompletionDelay extends RecommendationCostCommon {
+  kind: "completion_delay";
+  commands_in_burst?: number;
+  added_completion_ms?: number;
+}
+
+/** Fewer reports: paid in how late everything else hears about a change. */
+export interface CostStaleness extends RecommendationCostCommon {
+  kind: "staleness";
+  reports_per_day_now?: number;
+  reports_per_day_at_reference?: number;
+  mean_interval_s_now?: number | null;
+  mean_interval_s_at_reference?: number | null;
+  added_delay_s?: number | null;
+  presence_hardware?: boolean;
+}
+
+/** Assessed, and free. Deliberately distinct from an absent cost block, which
+ * means nobody worked the trade out. */
+export interface CostNone extends RecommendationCostCommon {
+  kind: "none";
+}
+
+/** No kind this build can read: either no detector priced the trade (the API
+ * serves `{}`), or the block came from a newer collector. Both render from
+ * `note` alone, which is why `note` is a contract field.
+ *
+ * `kind` is typed as absent rather than `string` so the union keeps
+ * discriminating. An unrecognized kind arriving over the wire falls through
+ * the same default branch at runtime, which is what this member describes. */
+export interface CostUnassessed extends RecommendationCostCommon {
+  kind?: undefined;
+}
+
+/** What a change costs on the budgets it does not save on (`recommend/cost.py`).
+ *
+ * The shapes are not commensurable (commands, wall clock, staleness, a peak on
+ * another coordinator, nothing at all), so the backend tags each with a `kind`
+ * discriminator instead of serving one flat bag of optional fields. Consumers
+ * dispatch on `kind`; they never sniff which keys happen to be present. */
+export type RecommendationCost =
+  | CostPublishDelta
+  | CostDestinationLoad
+  | CostCompletionDelay
+  | CostStaleness
+  | CostNone
+  | CostUnassessed;
+
 export interface RecommendationVerification {
   verdict: string;
   metric?: string;
@@ -770,6 +879,8 @@ export interface Recommendation {
   finding: string;
   action: Record<string, unknown>;
   saving: RecommendationSaving;
+  significance: RecommendationSignificance;
+  cost: RecommendationCost;
   confidence: "high" | "medium" | "low";
   evidence: Array<Record<string, unknown>>;
   state: string;

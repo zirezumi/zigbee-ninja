@@ -260,6 +260,55 @@ def test_rare_pressure_downgrades_confidence(world):
     assert "rare event" in findings[0].finding
 
 
+def test_pressured_source_bands_on_its_command_rate(world):
+    # The headline saving is steady airtime and it is routinely nothing:
+    # banding on that would rate a coordinator sitting above its measured
+    # limit as not worth doing. The contended denominator is the command
+    # rate inside the peak second, and it is over the limit by construction.
+    db, events, registry = world
+    add_calibration(db, "z2m-a", 8.0, 12.0)
+    add_calibration(db, "z2m-b", 8.0, 12.0)
+    for repeat in range(3):
+        at = START + 100 + repeat * 600
+        add_burst(db, events, "z2m-a", "hot_1", at, 6, spacing=0.1)
+        add_burst(db, events, "z2m-a", "hot_2", at + 0.05, 6, spacing=0.1)
+    events.flush()
+
+    (finding,) = rebalance.detect(context(db, events, registry))
+    assert finding.significance["denominator"] == "command rate"
+    assert finding.significance["utilization_pct"] > 100.0
+    assert finding.significance["relief_pct"] >= 10.0
+    assert finding.significance["band"] == "high"
+
+
+def test_cost_lands_on_the_destination_against_its_own_limit(world):
+    # The one detector whose cost lands on a different instance than its
+    # saving: nothing is removed, the load is handed to z2m-b, and the only
+    # way to tell relief from relocation is to judge it against z2m-b's own
+    # measured limit.
+    db, events, registry = world
+    add_calibration(db, "z2m-a", 8.0, 12.0)
+    add_calibration(db, "z2m-b", 8.0, 12.0)
+    for repeat in range(3):
+        at = START + 100 + repeat * 600
+        add_burst(db, events, "z2m-a", "hot_1", at, 6, spacing=0.1)
+        add_burst(db, events, "z2m-a", "hot_2", at + 0.05, 6, spacing=0.1)
+    events.flush()
+
+    (finding,) = rebalance.detect(context(db, events, registry))
+    cost = finding.cost
+    assert cost["destination_instance"] == "z2m-b"
+    assert cost["denominator"] == "command rate"
+    assert cost["raises_load"] is True
+    assert cost["peak_eps_after"] > cost["peak_eps_before"]
+    assert cost["capacity_limit_eps"] == 8.0
+    # The proposal guard's own promise: the moves never push the destination
+    # past the limit they are judged against.
+    assert cost["peak_pct_of_limit_after"] <= 100.0
+    assert cost["verdict_after"] in rebalance.ACCEPTABLE_VERDICTS
+    assert "z2m-b" in cost["note"]
+
+
 def test_without_scenario_dependencies_detector_degrades(world):
     db, events, registry = world
     ctx = context(db, events, registry)

@@ -20,7 +20,8 @@ def _device(name, vendor="Acme", model="Sensor-1"):
     }
 
 
-def _context(tmp_path, devices):
+def _context(tmp_path, devices, utilization=None):
+    """utilization: {instance: {...}} pressure, used for significance banding."""
     db = Database(tmp_path)
     ctx = DetectorContext(
         conn=db.connect(),
@@ -35,6 +36,7 @@ def _context(tmp_path, devices):
         devices=lambda base: devices if base == "z2m-1" else [],
         router_count_for=lambda base: 20,
         pricing=lambda base: (None, None),
+        utilization=utilization or {},
     )
     ctx.conn.execute(
         "INSERT INTO settings (key, value) VALUES ('ledger_since', ?)",
@@ -139,6 +141,89 @@ def test_loud_device_among_silent_peers_still_flags(tmp_path):
     (finding,) = [f for f in findings if f.subject == "plug_0"]
     assert finding.evidence[0]["peer_median_us_per_s"] == 0.0
     assert finding.saving["us_per_s"] == 400.0
+
+
+def test_reporting_cost_is_staleness_not_load(tmp_path):
+    # Slowing a device's reports removes traffic: nothing on the mesh rises.
+    # What it spends is freshness, and the cost has to quote that in the
+    # currency the owner feels rather than claiming the change is free.
+    devices = [_device(f"plug_{i}") for i in range(4)]
+    ctx = _context(tmp_path, devices)
+    _spend(ctx, "plug_0", 900.0, publishes=20000)
+    for i in range(1, 4):
+        _spend(ctx, f"plug_{i}", 60.0, publishes=1200)
+
+    (finding,) = [f for f in reporting.detect(ctx) if f.subject == "plug_0"]
+    cost = finding.cost
+    assert cost["denominator"] == reporting.STALENESS
+    assert cost["raises_load"] is False
+    # 20000 reports a day is one every 4.3 s; reporting like its 60 µs/s
+    # peers means one every 64.8 s, so a state change lands a minute later.
+    assert cost["reports_per_day_now"] == 20000
+    assert cost["mean_interval_s_now"] == 4.3
+    assert cost["mean_interval_s_at_reference"] == 64.8
+    assert cost["added_delay_s"] == 60.5
+    assert "later" in cost["note"]
+
+
+def test_silent_peers_leave_the_reference_interval_unquotable(tmp_path):
+    # Peers that never report give a zero reference rate: there is no interval
+    # to move toward, and the cost says so rather than dividing by zero or
+    # quoting a fabricated one.
+    devices = [_device(f"plug_{i}") for i in range(4)]
+    ctx = _context(tmp_path, devices)
+    _spend(ctx, "plug_0", 400.0, publishes=9000)
+
+    (finding,) = [f for f in reporting.detect(ctx) if f.subject == "plug_0"]
+    assert finding.cost["mean_interval_s_at_reference"] is None
+    assert finding.cost["added_delay_s"] is None
+    assert finding.cost["raises_load"] is False
+    assert "report essentially never" in finding.cost["note"]
+
+
+def test_presence_hardware_carries_the_delay_warning_into_the_cost(tmp_path):
+    devices = [_device("closet_sensor", vendor="Aqara", model="RTCZCGQ11LM mmWave")]
+    devices += [_device(f"bulb_{i}", model="Bulb-2") for i in range(6)]
+    ctx = _context(tmp_path, devices)
+    _spend(ctx, "closet_sensor", 800.0, publishes=24000)
+    for i in range(6):
+        _spend(ctx, f"bulb_{i}", 20.0, publishes=300)
+
+    (finding,) = [f for f in reporting.detect(ctx) if f.subject == "closet_sensor"]
+    assert finding.cost["presence_hardware"] is True
+    assert "most likely to be felt" in finding.cost["note"]
+
+
+def test_idle_channel_bands_the_reporting_finding_low(tmp_path):
+    # The largest recoverable cost on many installations is still worth
+    # nothing today if the channel it would free is barely used.
+    devices = [_device(f"plug_{i}") for i in range(4)]
+    ctx = _context(
+        tmp_path, devices, utilization={"z2m-1": {"channel_budget_pct": 0.9}}
+    )
+    _spend(ctx, "plug_0", 900.0, publishes=20000)
+    for i in range(1, 4):
+        _spend(ctx, f"plug_{i}", 60.0, publishes=1200)
+
+    (finding,) = [f for f in reporting.detect(ctx) if f.subject == "plug_0"]
+    assert finding.significance["band"] == "low"
+    assert finding.significance["denominator"] == "channel airtime"
+    assert "not under pressure" in finding.significance["rationale"]
+
+
+def test_busy_channel_bands_the_reporting_finding_by_relief(tmp_path):
+    devices = [_device(f"plug_{i}") for i in range(4)]
+    ctx = _context(
+        tmp_path, devices, utilization={"z2m-1": {"channel_budget_pct": 70.0}}
+    )
+    _spend(ctx, "plug_0", 900.0, publishes=20000)
+    for i in range(1, 4):
+        _spend(ctx, f"plug_{i}", 60.0, publishes=1200)
+
+    (finding,) = [f for f in reporting.detect(ctx) if f.subject == "plug_0"]
+    assert finding.significance["band"] == "moderate"
+    assert finding.significance["utilization_pct"] == 70.0
+    assert finding.significance["relief_pct"] < 10.0
 
 
 def test_no_recording_mark_means_no_findings(tmp_path):

@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import json
 
-from ..capacity import scenario
+from ..capacity import ledger, scenario
 from .context import DetectorContext
 from .store import RecommendationStore
 
@@ -58,22 +58,37 @@ def _utc_day(ts: float) -> str:
     return utc_day(ts)
 
 
+def _day_pricing_version(row) -> int:
+    """The cost model a per-day row was priced under, or MIXED when the day
+    accumulated across a model change (vmin != vmax), which makes its µs an
+    incomparable quantity."""
+    vmin, vmax = row["vmin"], row["vmax"]
+    if vmin is None or vmax is None or vmin != vmax:
+        return ledger.MIXED_PRICING_VERSION
+    return int(vmin)
+
+
 def _completed_days(conn, sql: str, params: tuple, boundary: float, now: float):
-    """(before_days, after_days) mean µs/day from a per-day query. Only
-    completed UTC days count: the boundary day and today are partial on
-    the wrong side and stay out."""
+    """(before_days, after_days, before_versions, after_versions): mean µs/day
+    from a per-day query, plus the cost-model version each day was priced
+    under. Only completed UTC days count: the boundary day and today are
+    partial on the wrong side and stay out."""
     boundary_day = _utc_day(boundary)
     today = _utc_day(now)
     earliest = _utc_day(boundary - BASELINE_DAYS * 86400.0)
     before: list[float] = []
     after: list[float] = []
+    before_versions: set[int] = set()
+    after_versions: set[int] = set()
     for row in conn.execute(sql, params):
         day = row["day"]
         if earliest <= day < boundary_day:
             before.append(row["us"])
+            before_versions.add(_day_pricing_version(row))
         elif boundary_day < day < today:
             after.append(row["us"])
-    return before, after
+            after_versions.add(_day_pricing_version(row))
+    return before, after, before_versions, after_versions
 
 
 def _spend_metric(ctx: DetectorContext, rec: dict, boundary: float):
@@ -81,29 +96,34 @@ def _spend_metric(ctx: DetectorContext, rec: dict, boundary: float):
     detector = rec["detector"]
     if detector == "reporting":
         sql = (
-            "SELECT day, SUM(autonomous_us) AS us FROM ledger_device_daily "
+            "SELECT day, SUM(autonomous_us) AS us, MIN(pricing_version) AS vmin, "
+            "MAX(pricing_version) AS vmax FROM ledger_device_daily "
             "WHERE instance = ? AND device = ? GROUP BY day"
         )
         params = (rec["instance"], rec["subject"])
         label = f"{rec['subject']}'s reporting spend"
     elif detector == "redundancy":
         sql = (
-            "SELECT day, SUM(tx_us + rx_us) AS us FROM ledger_daily "
+            "SELECT day, SUM(tx_us + rx_us) AS us, MIN(pricing_version) AS vmin, "
+            "MAX(pricing_version) AS vmax FROM ledger_daily "
             "WHERE instance = ? AND commander = ? GROUP BY day"
         )
         params = (rec["instance"], rec["subject"])
         label = f"{rec['subject']}'s command spend"
     elif detector == "groupcast_economics":
         sql = (
-            "SELECT day, SUM(tx_us + rx_us) AS us FROM ledger_daily "
+            "SELECT day, SUM(tx_us + rx_us) AS us, MIN(pricing_version) AS vmin, "
+            "MAX(pricing_version) AS vmax FROM ledger_daily "
             "WHERE instance = ? GROUP BY day"
         )
         params = (rec["instance"],)
         label = f"{rec['instance']}'s commanded spend"
     else:
         return None
-    before, after = _completed_days(ctx.conn, sql, params, boundary, ctx.now)
-    return before, after, label
+    before, after, before_versions, after_versions = _completed_days(
+        ctx.conn, sql, params, boundary, ctx.now
+    )
+    return before, after, label, before_versions, after_versions
 
 
 def _evidence(rec: dict, kind: str) -> dict | None:
@@ -185,7 +205,33 @@ def _verify_spend(
     metric = _spend_metric(ctx, rec, boundary)
     if metric is None:
         return "unsupported"
-    before, after, label = metric
+    before, after, label, before_versions, after_versions = metric
+    # A spend verdict is a comparison of two µs quantities, so it is only
+    # meaningful if both sides were priced by the same cost model. When a
+    # model change sits between them the ratio measures the re-pricing, not
+    # the user's change, and grading it would write a durable verdict off an
+    # artefact: REGRESSED_RATIO is 1.25 and a hop-pricing bump moves unicast
+    # spend by more than that on its own. Hold at pending instead; the
+    # comparison becomes possible again once both sides sit on the new model.
+    versions = before_versions | after_versions
+    if versions and (len(versions) > 1 or ledger.MIXED_PRICING_VERSION in versions):
+        receipts = {
+            "verdict": "pending",
+            "metric": label,
+            "unit": "us_per_day",
+            "before_days": len(before),
+            "after_days": len(after),
+            "note": (
+                "the cost model changed inside this comparison window, so "
+                "before and after are not the same currency; verification "
+                "resumes once both sides are priced the same way"
+            ),
+            "pricing_versions": sorted(versions),
+            "basis": SPEND_NOTE,
+            "checked_at": ctx.now,
+        }
+        store.record_verification(rec["id"], receipts)
+        return "pending"
     if len(before) < MIN_SPEND_DAYS or len(after) < MIN_SPEND_DAYS:
         receipts = {
             "verdict": "pending",

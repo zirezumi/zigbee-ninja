@@ -208,6 +208,14 @@ _MIGRATIONS = [
     """
     ALTER TABLE recommendations ADD COLUMN verification TEXT;
     """,
+    """
+    ALTER TABLE recommendations ADD COLUMN significance TEXT NOT NULL DEFAULT '{}';
+    ALTER TABLE recommendations ADD COLUMN cost TEXT NOT NULL DEFAULT '{}';
+    """,
+    """
+    ALTER TABLE ledger_daily ADD COLUMN pricing_version INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE ledger_device_daily ADD COLUMN pricing_version INTEGER NOT NULL DEFAULT 1;
+    """,
 ]
 
 

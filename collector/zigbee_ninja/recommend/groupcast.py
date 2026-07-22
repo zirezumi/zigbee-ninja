@@ -13,7 +13,10 @@ measured avg_tx / MAC retry rate when counter windows have produced them):
 (b) **Amplification losers**: groups so small or so router-heavy a mesh
     that per-member unicasts beat the broadcast amplification. Individual
     commands arrive sequentially, so members stop changing in the same
-    instant; the finding says so and the confidence stays medium.
+    instant; the finding says so and the confidence stays medium. Where a
+    member carries its own bindings the retarget is not equivalent at all
+    (see `_bound_members`), so the action is flagged non-neutral and the
+    confidence drops to low.
 (c) **Co-fired groups**: a group whose commands nearly always arrive
     alongside an identical command to another group containing all of its
     members; one of the two commands is redundant traffic.
@@ -26,7 +29,9 @@ from __future__ import annotations
 
 import hashlib
 
-from ..capacity import airtime, ledger
+from ..capacity import airtime, hops, ledger
+from ..ingest import topology
+from . import cost, significance
 from .context import DetectorContext
 from .store import Finding
 
@@ -51,19 +56,48 @@ def _label(counts: dict[str, int]) -> str:
     return top if top_count / total >= MAJORITY_FRACTION else MULTIPLE_COMMANDERS
 
 
+def _hop_depths(ctx: DetectorContext, instance: str) -> dict[str, int]:
+    """Per-device route depth from this instance's freshest topology snapshot,
+    or empty when no snapshot has been pulled (§10 then prices the default)."""
+    entry = (ctx.topology_latest(instance) if ctx.topology_latest else None) or {}
+    raw = entry.get("raw")
+    if not raw:
+        return {}
+    coordinator = (ctx.instance_info.get(instance) or {}).get("coordinator_ieee")
+    return hops.depths_by_name(topology.graph(raw), coordinator)
+
+
 def _prices(ctx: DetectorContext, instance: str) -> dict:
     avg_tx, retry_rate = ctx.pricing(instance)
     routers = ctx.router_count_for(instance)
+    retry = retry_rate or 0.0
+    depths = _hop_depths(ctx, instance)
+
+    def unicast_for(name: str) -> float:
+        """§10 prices a unicast per hop, so a far member costs more to address
+        individually than a near one. Unknown routes take the conservative
+        default rather than the cheapest assumption."""
+        return airtime.unicast_airtime_us(
+            ledger.ZCL_SET_BYTES,
+            retry_rate=retry,
+            hops=depths.get(name, airtime.DEFAULT_UNKNOWN_HOPS),
+        )
+
     return {
-        "unicast_us": airtime.unicast_airtime_us(
-            ledger.ZCL_SET_BYTES, retry_rate=retry_rate or 0.0
-        ),
+        "unicast_for": unicast_for,
+        # Single-hop reference price, kept so evidence rows stay comparable
+        # across findings whose member sets sit at different depths.
+        "unicast_us": airtime.unicast_airtime_us(ledger.ZCL_SET_BYTES, retry_rate=retry),
         "groupcast_us": airtime.groupcast_airtime_us(
             ledger.ZCL_SET_BYTES, routers, avg_tx=avg_tx or airtime.DEFAULT_AVG_TX
         ),
         "routers": routers,
         "avg_tx": round(avg_tx, 3) if avg_tx is not None else airtime.DEFAULT_AVG_TX,
         "avg_tx_measured": avg_tx is not None,
+        "hop_depths": depths,
+        "hops_provenance": (
+            hops.PROVENANCE_TOPOLOGY if depths else hops.PROVENANCE_DEFAULT
+        ),
     }
 
 
@@ -75,15 +109,26 @@ def _rates(saved_us: float, seconds: float) -> dict:
     }
 
 
-def _pricing_evidence(prices: dict) -> dict:
-    return {
+def _pricing_evidence(prices: dict, members: list[str] | None = None) -> dict:
+    row = {
         "kind": "pricing",
         "unicast_us": round(prices["unicast_us"], 1),
         "groupcast_us": round(prices["groupcast_us"], 1),
         "routers": prices["routers"],
         "avg_tx": prices["avg_tx"],
         "avg_tx_measured": prices["avg_tx_measured"],
+        "hops_provenance": prices["hops_provenance"],
     }
+    if members:
+        depths = prices["hop_depths"]
+        priced = [depths.get(name, airtime.DEFAULT_UNKNOWN_HOPS) for name in members]
+        row["hops_min"] = min(priced)
+        row["hops_max"] = max(priced)
+        row["hops_from_topology"] = sum(1 for name in members if name in depths)
+        row["unicast_us_priced"] = round(
+            sum(prices["unicast_for"](name) for name in members), 1
+        )
+    return row
 
 
 def detect(ctx: DetectorContext) -> list[Finding]:
@@ -167,7 +212,7 @@ def _fanouts(
         if len(events) < MIN_OCCURRENCES:
             continue
         n = len(targets)
-        unicast_sum = n * prices["unicast_us"]
+        unicast_sum = sum(prices["unicast_for"](name) for name in targets)
         groupcast = prices["groupcast_us"]
         double_sent = sum(1 for event in events if event["covered"])
         signature = hashlib.sha1(
@@ -210,7 +255,15 @@ def _fanouts(
                         "provenance": "modeled",
                     },
                     confidence="high",
-                    evidence=[*windows, _pricing_evidence(prices)],
+                    evidence=[*windows, _pricing_evidence(prices, sorted(targets))],
+                    significance=significance.for_airtime(
+                        saved, (ctx.utilization or {}).get(instance)
+                    ),
+                    # Pure removal: the group command already covers these, so
+                    # dropping the duplicates lowers both currencies.
+                    cost=cost.publish_delta_for(
+                        ctx, instance, before=len(events) * n, after=0
+                    ),
                     fingerprint={
                         "us_per_s": saved["us_per_s"],
                         "occurrences": len(events),
@@ -260,7 +313,15 @@ def _fanouts(
                     "provenance": "modeled",
                 },
                 confidence=confidence,
-                evidence=[*windows, _pricing_evidence(prices)],
+                evidence=[*windows, _pricing_evidence(prices, sorted(targets))],
+                significance=significance.for_airtime(
+                    saved, (ctx.utilization or {}).get(instance)
+                ),
+                # Collapsing a fan-out lowers both currencies: n publishes per
+                # burst become one.
+                cost=cost.publish_delta_for(
+                    ctx, instance, before=len(events) * n, after=len(events)
+                ),
                 fingerprint={
                     "us_per_s": saved["us_per_s"],
                     "occurrences": len(events),
@@ -272,6 +333,27 @@ def _fanouts(
 
 
 # -- (b) groups that lose to unicast --------------------------------------------------
+
+
+def _bound_members(ctx: DetectorContext, instance: str, members: list[str]) -> list[str]:
+    """Members whose own binding table makes a device-addressed command behave
+    differently from a group-addressed one.
+
+    A retarget is only a cost optimization if it is behavior-neutral, and it
+    is not when a member has outbound bindings: a command sent to the device
+    traverses that binding (Smart Bulb Mode, an endpoint bound to a light
+    group, a scene binding) while the same command to a group the device
+    belongs to does not. Groups of exactly one member are a common shape for
+    precisely this reason: they address the device without waking what its
+    bindings reach. The registry already counts bindings for the calibration
+    candidate ranker, which penalises them as entanglement risk for the same
+    underlying reason.
+    """
+    counts = {
+        device.get("friendly_name"): device.get("binding_count") or 0
+        for device in (ctx.devices(instance) or [])
+    }
+    return sorted(name for name in members if counts.get(name, 0) > 0)
 
 
 def _amplification_losers(
@@ -288,7 +370,7 @@ def _amplification_losers(
         members = ctx.group_members(instance, group)
         if not members:
             continue
-        unicast_sum = len(members) * prices["unicast_us"]
+        unicast_sum = sum(prices["unicast_for"](name) for name in members)
         groupcast = prices["groupcast_us"]
         if unicast_sum >= groupcast * (1.0 - SAVING_MARGIN):
             continue
@@ -301,23 +383,38 @@ def _amplification_losers(
             commanders[name] = commanders.get(name, 0) + 1
         pct = (groupcast - unicast_sum) / groupcast * 100.0
         count = len(members)
-        if count == 1:
-            # A single-member group has no simultaneity to lose; the group
-            # wrapper is pure amplification overhead.
-            alternative = (
-                f"1 individual command would cost about "
-                f"{unicast_sum / 1000.0:.1f}k µs ({pct:.0f}% less). "
-                f"{len(rows)} commands in the last 24 h. A single-member group "
-                f"gains nothing from broadcast delivery."
+        bound = _bound_members(ctx, instance, members)
+        alternative = (
+            f"{count} individual "
+            f"{'command' if count == 1 else 'commands'} would cost about "
+            f"{unicast_sum / 1000.0:.1f}k µs ({pct:.0f}% less). "
+            f"{len(rows)} commands in the last 24 h."
+        )
+        if bound:
+            named = ", ".join(bound[:3])
+            others = f" and {len(bound) - 3} more" if len(bound) > 3 else ""
+            one = len(bound) == 1
+            caveat = (
+                f"Addressing {'this member' if one else 'these members'} "
+                f"individually is not equivalent: {named}{others} "
+                f"{'carries its own' if one else 'carry their own'} Zigbee "
+                f"bindings, so a command sent to the device traverses those "
+                f"bindings while a group command does not. Confirm the group is "
+                f"not there to keep the two apart before retargeting."
+            )
+        elif count == 1:
+            caveat = (
+                "A one-member group carries no fan-out, so the amplification "
+                "buys nothing by itself. A group can still exist to address the "
+                "device without reaching what its bindings reach, so confirm "
+                "that is not why it is here before dissolving it."
             )
         else:
-            alternative = (
-                f"{count} individual commands would cost about "
-                f"{unicast_sum / 1000.0:.1f}k µs ({pct:.0f}% less). "
-                f"{len(rows)} commands in the last 24 h. Individual commands "
-                f"arrive one after another, so the members would no longer "
-                f"change in the same instant."
+            caveat = (
+                "Individual commands arrive one after another, so the members "
+                "would no longer change in the same instant."
             )
+        alternative = f"{alternative} {caveat}"
         findings.append(
             Finding(
                 detector=NAME,
@@ -337,13 +434,24 @@ def _amplification_losers(
                     "group": group,
                     "to": "per-member commands",
                     "members": sorted(members)[:10],
+                    # A consumer that only wants safe-to-automate actions
+                    # filters on this: false means applying the action changes
+                    # delivery semantics, not just cost.
+                    "behavior_neutral": not bound,
+                    "bound_members": bound[:10],
                 },
                 saving={
                     **saved,
                     "basis": f"replayed {len(rows)} recorded group commands from the last 24 h",
                     "provenance": "modeled",
                 },
-                confidence="medium",
+                confidence="low" if bound else "medium",
+                significance=significance.for_airtime(
+                    saved, (ctx.utilization or {}).get(instance)
+                ),
+                cost=cost.publish_delta_for(
+                    ctx, instance, before=len(rows), after=len(rows) * count
+                ),
                 evidence=[
                     {
                         "kind": "group",
@@ -352,13 +460,16 @@ def _amplification_losers(
                         "commands": len(rows),
                         "commanders": commanders,
                     },
-                    _pricing_evidence(prices),
+                    _pricing_evidence(prices, sorted(members)),
                 ],
                 fingerprint={
                     "us_per_s": saved["us_per_s"],
                     "commands": len(rows),
                     "members": len(members),
                     "routers": prices["routers"],
+                    # Bindings appearing or disappearing changes whether the
+                    # action is safe at all, so it must reopen a dismissal.
+                    "bound_members": len(bound),
                 },
             )
         )
@@ -429,6 +540,11 @@ def _cofired_groups(
                         "provenance": "modeled",
                     },
                     confidence="high" if fraction >= 0.95 else "medium",
+                    significance=significance.for_airtime(
+                        saved, (ctx.utilization or {}).get(instance)
+                    ),
+                    # Dropping the covered command removes publishes outright.
+                    cost=cost.publish_delta_for(ctx, instance, before=matched, after=0),
                     evidence=[
                         {
                             "kind": "cofire",

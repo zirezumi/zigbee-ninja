@@ -200,6 +200,69 @@ def test_mixed_commanders_group_under_multiple_label(tmp_path):
     assert len(windows[0]["commanders"]) == 3
 
 
+def test_aggregate_pressure_bands_on_the_peak_command_rate(tmp_path):
+    # Airtime is the wrong denominator for pacing: a spread burst transmits
+    # exactly the same frames, so for_airtime would report a truthful and
+    # useless "frees 0.00% of the channel budget" on every finding. The
+    # contended denominator is the pipeline inside the peak second.
+    knees = {"z2m-1": {"spread": _knee(30.0, "spread"), "single": _knee(16.0, "single")}}
+    ctx = _context(tmp_path, knees)
+    for occurrence in range(3):
+        _insert_chains(ctx, "z2m-1", _burst(NOW - 3600 - occurrence * 600, 30, 0.033))
+
+    (finding,) = pacing.detect(ctx)
+    assert finding.significance["denominator"] == pacing.PEAK_COMMAND_RATE
+    # 30 commands in the peak second against a measured 30/s limit, paced to
+    # half of it: the burst sits at the limit and pacing takes half of it off.
+    assert finding.significance["utilization_pct"] == 100.0
+    assert finding.significance["relief_pct"] == 50.0
+    assert finding.significance["band"] == "high"
+
+
+def test_device_overload_bands_on_that_device_service_rate(tmp_path):
+    # 20 commands a second into a queue measured at 16/s is a far more
+    # contended denominator than the same 20 read against a 30/s coordinator,
+    # so a device overload is banded on the ceiling it actually crosses.
+    knees = {"z2m-1": {"spread": _knee(30.0, "spread"), "single": _knee(16.0, "single")}}
+    ctx = _context(tmp_path, knees)
+    _insert_chains(
+        ctx,
+        "z2m-1",
+        [(NOW - 3600 + i * 0.05, "hall_dimmer", "automation: Dial") for i in range(20)],
+    )
+
+    (finding,) = pacing.detect(ctx)
+    assert finding.significance["denominator"] == pacing.DEVICE_SERVICE_RATE
+    assert finding.significance["utilization_pct"] == 125.0
+    assert finding.significance["band"] == "high"
+
+
+def test_pacing_declares_time_spent_not_load_added(tmp_path):
+    # The same publishes ride the same window, just further apart: reporting a
+    # load delta here would be inventing one. What pacing spends is time.
+    knees = {"z2m-1": {"spread": _knee(30.0, "spread"), "single": _knee(16.0, "single")}}
+    ctx = _context(tmp_path, knees)
+    for occurrence in range(3):
+        _insert_chains(ctx, "z2m-1", _burst(NOW - 3600 - occurrence * 600, 30, 0.033))
+
+    (finding,) = pacing.detect(ctx)
+    cost = finding.cost
+    assert cost["denominator"] == pacing.BURST_COMPLETION
+    assert cost["raises_load"] is False
+    assert cost["commands_in_burst"] == 30
+    # This kind moves no commands, so it carries no publish delta at all
+    # rather than a row of zeros borrowed from publish_delta's shape.
+    assert "publishes_before" not in cost
+    assert "delta_eps_mean" not in cost
+    # 30 commands paced to 15/s take 2 s; they arrive inside 1 s today.
+    assert (
+        cost["added_completion_ms"]
+        == finding.action["stagger_ms"] - finding.action["over_ms"]
+    )
+    assert 1000 <= cost["added_completion_ms"] <= 1050
+    assert "moves commands in time" in cost["note"]
+
+
 def test_curve_interpolation_helper():
     points = [(8.0, 40.0), (16.0, 41.0), (32.0, 124.0)]
     value, beyond = pacing.p95_at(points, 24.0)
