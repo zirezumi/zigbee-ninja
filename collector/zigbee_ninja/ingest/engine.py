@@ -980,8 +980,17 @@ class Engine:
             entry["tx_us"] += price.tx_us * count
             entry["rx_us"] += price.rx_us * count
             entry["provenance"] = price.provenance
+            # Tri-state on purpose. hops_cache is filled lazily and only by
+            # unicast pricing, so a plain bool() would report False for an
+            # instance whose traffic this pass was entirely group commands,
+            # which reads as "topology was unavailable" when the truth is
+            # "nothing needed a hop count". None says the latter.
+            depths = hops_cache.get(instance)
             entry["params"] = ledger.instance_params(
-                n_routers, avg_tx, retry_rate, bool(hops_cache.get(instance))
+                n_routers,
+                avg_tx,
+                retry_rate,
+                None if depths is None else bool(depths),
             )
 
         for chain in finalized:
@@ -1132,8 +1141,13 @@ class Engine:
                 # while a calibration run needs the pacer undisturbed.
                 if self.recommendations.due() and not self.calibration.active:
                     await asyncio.to_thread(self.recommendations.run)
-            except Exception:
-                pass
+            except Exception as exc:
+                # A pass that raises before the per-detector isolation inside
+                # run() (context assembly, say) must not vanish: this used to
+                # `pass`, and a whole-pass failure then read as "no findings",
+                # indistinguishable from a healthy quiet fleet. Record it where
+                # /api/recommendations status already surfaces the last result.
+                self.recommendations.note_run_error(exc)
 
     async def _loop_lag_loop(self) -> None:
         while True:

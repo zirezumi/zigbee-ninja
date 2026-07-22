@@ -69,7 +69,7 @@ def instance_params(
     n_routers: int,
     avg_tx: float | None,
     retry_rate: float | None,
-    hops_from_topology: bool = False,
+    hops_from_topology: bool | None = None,
 ) -> dict:
     """Pricing context recorded on a ledger row: the values in force when the
     row was last written, and whether each came from a counter window or the
@@ -79,7 +79,11 @@ def instance_params(
     Hop counts are per target, so a daily row (which aggregates many targets)
     records only whether a topology snapshot was available to price them; the
     alternative was a single hop number that would be wrong for most of the
-    chains it covers.
+    chains it covers. `hops_from_topology` is tri-state: True when depths were
+    derived and used, False when a unicast was priced without them (the
+    conservative default applied), and None when the pass priced no unicast at
+    all and the question never arose. False and None are genuinely different
+    facts to anyone later asking why a number moved.
     """
     return {
         "n_routers": n_routers,

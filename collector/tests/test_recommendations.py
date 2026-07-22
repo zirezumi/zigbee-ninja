@@ -270,6 +270,40 @@ def test_runner_isolates_a_crashing_detector(tmp_path):
     assert detectors == {"redundancy", "pacing"}
 
 
+def test_context_failure_is_reported_not_raised(tmp_path):
+    # A pass that dies assembling its context (headroom, registry) must record
+    # the failure and return, not raise into the flush loop where it would be
+    # swallowed and look like a healthy quiet fleet.
+    clock = FakeClock()
+    engine = RecommendationEngine(
+        Database(tmp_path),
+        registry=_fake_registry(),
+        pricing=lambda instance: (None, None),
+        clock=clock,
+    )
+    engine._context = lambda: (_ for _ in ()).throw(RuntimeError("headroom exploded"))
+    result = engine.run()
+    assert "context assembly failed" in result["error"]
+    assert "headroom exploded" in result["error"]
+    assert engine.status()["last_result"]["error"]
+
+
+def test_note_run_error_surfaces_on_status(tmp_path):
+    # The flush loop calls this when run() raised before it could record
+    # itself; the failure has to reach the API status rather than vanish.
+    clock = FakeClock()
+    engine = RecommendationEngine(
+        Database(tmp_path),
+        registry=_fake_registry(),
+        pricing=lambda instance: (None, None),
+        clock=clock,
+    )
+    engine.note_run_error(RuntimeError("thread pool rejected the pass"))
+    last = engine.status()["last_result"]
+    assert "thread pool rejected the pass" in last["error"]
+    assert last["ran_at"] == clock.now
+
+
 # -- API ---------------------------------------------------------------------------
 
 

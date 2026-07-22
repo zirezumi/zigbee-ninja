@@ -92,12 +92,39 @@ class RecommendationEngine:
             topology_latest=self._topology_latest,
         )
 
+    def note_run_error(self, exc: BaseException) -> None:
+        """Record a pass that failed before it could record itself.
+
+        The flush loop calls run() and used to swallow any exception silently;
+        a failure there then looked identical to a healthy quiet fleet. There
+        is no logger in this service by design (state is surfaced through the
+        API), so the failure is stamped onto last_result where /api status
+        already reads it."""
+        with self._run_lock:
+            self._last_run_at = self._clock()
+            self._last_result = {
+                "ran_at": self._last_run_at,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
     def run(self) -> dict:
         """One full detector pass; safe on a worker thread (thread-local DB
         connections, snapshot-style registry reads, serialized passes)."""
         with self._run_lock:
             started = self._clock()
-            ctx = self._context()
+            # Context assembly reads the store and headroom; if it raises, the
+            # whole pass raises, so it sits inside the same reporting as a
+            # detector rather than taking the run down with an opaque stack.
+            try:
+                ctx = self._context()
+            except Exception as exc:
+                self._last_run_at = started
+                self._last_result = {
+                    "ran_at": started,
+                    "duration_ms": round((self._clock() - started) * 1000.0, 1),
+                    "error": f"context assembly failed: {type(exc).__name__}: {exc}",
+                }
+                return self._last_result
             detectors: dict[str, dict] = {}
             for detector in self._detectors:
                 name = detector.NAME

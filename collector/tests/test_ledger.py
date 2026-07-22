@@ -122,8 +122,9 @@ def test_flush_prices_finalized_chains_into_daily_ledger(client):
     assert params["retry_rate_measured"] is False
     assert named["provenance"].startswith("inferred")
 
-    # Without a snapshot the row says so, so a later re-pricing under real
-    # topology is distinguishable from a traffic change.
+    # A unicast was priced and no snapshot was available, so the conservative
+    # default applied: the row says so, which is what lets a later re-pricing
+    # under real topology be told apart from a traffic change.
     assert params["hops_from_topology"] is False
     assert params["pricing_version"] == ledger.PRICING_MODEL_VERSION
 
@@ -190,6 +191,21 @@ def test_ledger_prices_a_known_route_by_its_hop_count(client):
     row = _ledger_rows(client)[ledger.UNATTRIBUTED]
     assert row["tx_us"] == airtime.unicast_airtime_us(ledger.ZCL_SET_BYTES, hops=2)
     assert json.loads(row["params"])["hops_from_topology"] is True
+
+
+def test_group_only_traffic_reports_hops_as_not_applicable(client):
+    # Hop depths are resolved lazily and only for unicast targets, so a pass
+    # carrying nothing but group commands never asks for one. That must record
+    # as None ("the question did not arise"), not False ("topology was
+    # unavailable"): a room that renders entirely through groups otherwise
+    # looks, in the ledger, exactly like one whose topology pull is missing.
+    engine, clock = _prepare_engine(client)
+    engine.on_message("z2m-test/room_group/set", b'{"state":"ON"}')
+    clock.now += 20
+    engine.flush_rollups()
+
+    row = _ledger_rows(client)[ledger.UNATTRIBUTED]
+    assert json.loads(row["params"])["hops_from_topology"] is None
 
 
 def test_self_mesh_commands_priced_under_self_commander(client):
