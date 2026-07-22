@@ -120,7 +120,17 @@ class LoopActivityLog:
     def __init__(self, clock=time.monotonic, wall=time.time):
         self._clock = clock
         self._wall = wall
-        self._lock = threading.Lock()
+        # RLock, not Lock, and the distinction is load-bearing: note() allocates
+        # inside the critical section (setdefault, append, round), any allocation
+        # can trigger a collection, and a collection fires _on_gc on the very
+        # same thread, which calls note() again. With a non-reentrant lock that
+        # is a permanent self-deadlock: the thread waits forever for a lock it
+        # already holds. It is a race (the collection has to land inside the
+        # critical section) which is why it survived so long, and it is most
+        # likely exactly when span() is busiest: the retained-message burst
+        # right after a restart. Observed 2026-07-22 wedging the event loop on
+        # startup, twice, with every thread parked in futex_do_wait.
+        self._lock = threading.RLock()
         self._totals: dict[str, dict] = {}
         self._slow: list[dict] = []
         self._gc_started: dict[int, float] = {}
