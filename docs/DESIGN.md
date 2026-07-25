@@ -464,6 +464,13 @@ each key. That one is intent-free and survives where the pair classification
 cannot: it measures the *precondition* for the whole bug class, divided
 ownership, rather than a caught instance of it. Read the two together.
 
+Keys that qualify *how* a command applies rather than *what* it asks for are
+excluded outright (`MODIFIER_KEYS`, currently `transition`). Two commands
+carrying different ramp times are not steering the same setting: one says "reach
+X over 0.2 s", the other "reach Y over 3 s", and the ramp belongs to each
+command. Left in, it was the loudest key in the report, because nearly every
+render varies it.
+
 ## §10 Capacity & airtime model
 
 **Per-frame airtime** (802.15.4, 2.4 GHz O-QPSK, 250 kbps → 32 µs/byte):

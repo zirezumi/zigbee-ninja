@@ -9,6 +9,13 @@ from .chains import parse_key_digests
 
 TOP_LIMIT = 15
 
+# Keys that qualify HOW a command is applied rather than WHAT state it asks for.
+# Two commands carrying different ramp times are not in disagreement about the
+# device: one says "reach X over 0.2 s", the other "reach Y over 3 s", and the
+# ramp is a property of each command, not a setting they are both steering. Left
+# in, `transition` swamps the report, since nearly every render varies it.
+MODIFIER_KEYS = frozenset({"transition"})
+
 
 def summary(db: Database, seconds: int) -> dict:
     conn = db.connect()
@@ -147,6 +154,8 @@ def conflicts(db: Database, seconds: int, window: float = 2.0) -> dict:
     writers: dict[tuple[str, str, str], set[str]] = {}
     for row in rows:
         for key, digest in parse_key_digests(row["payload_keys"]).items():
+            if key in MODIFIER_KEYS:
+                continue
             ident = (row["instance"], row["target"], key)
             seen_values.setdefault(ident, set()).add(digest)
             writers.setdefault(ident, set()).add(row["client"] or "(unattributed)")
@@ -182,6 +191,7 @@ def conflicts(db: Database, seconds: int, window: float = 2.0) -> dict:
                     key
                     for key in first_keys.keys() & second_keys.keys()
                     if first_keys[key] != second_keys[key]
+                    and key not in MODIFIER_KEYS
                 )
                 if not disputed:
                     continue

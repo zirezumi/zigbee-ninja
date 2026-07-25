@@ -134,6 +134,25 @@ def test_lli_sandwich_shape_lands_in_alternating(tmp_path):
     assert result["alternating_pairs"] >= 5
 
 
+def test_transition_disagreement_is_not_a_conflict(tmp_path):
+    """`transition` says how fast to get there, not where to go.
+
+    Measured live, it was the single loudest "novel" key, because nearly every
+    render varies the ramp. Two commands with different ramps are not steering
+    the same setting, so it is excluded from disputes and from writer diversity.
+    """
+    db = make_db(tmp_path)
+    now = time.time()
+    insert(db, target="lamp", client="automation: Lifecycle", opened_at=now,
+           payload=b'{"brightness": 200, "transition": 0.2}')
+    insert(db, target="lamp", client="automation: Rendering", opened_at=now + 0.3,
+           payload=b'{"brightness": 200, "transition": 3.0}')
+
+    result = conflicts(db, seconds=600, window=2.0)
+    assert result["total_pairs_same_key_different_value"] == 0
+    assert not any(e["key"] == "transition" for e in result["writer_diversity"])
+
+
 def test_writer_diversity_is_reported_even_without_a_novel_pair(tmp_path):
     """Divided ownership is the precondition for the bug and is intent-free, so
     it survives where the pair classification cannot."""
