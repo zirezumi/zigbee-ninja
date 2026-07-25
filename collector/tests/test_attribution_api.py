@@ -99,5 +99,6 @@ def test_conflicts_endpoint_reports_a_disagreement(client):
     client.app.state.db.connect().commit()
 
     body = client.get("/api/attribution/conflicts?seconds=600&window=2").json()
-    assert body["cross_commander_pairs"] == 1
+    assert body["novel_cross_commander_pairs"] == 1
     assert body["conflicts"][0]["key"] == "brightness"
+    assert body["conflicts"][0]["kind"] == "novel"

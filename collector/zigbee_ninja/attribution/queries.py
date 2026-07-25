@@ -88,28 +88,45 @@ def redundant(db: Database, seconds: int) -> list[dict]:
 
 
 def conflicts(db: Database, seconds: int, window: float = 2.0) -> dict:
-    """Commands that DISAGREE about a parameter, not merely repeat one.
+    """Commands that set the SAME key to DIFFERENT values inside one window.
 
-    A duplicate wastes airtime. A conflict decides a device's state by arrival
-    order instead of by intent, so it is the failure a redundancy report cannot
-    see: both look like "different payload to the same target" once the payload
-    is reduced to a single digest. Comparing per-key digests separates them.
+    Comparing per-key digests, rather than one whole-payload digest, is what
+    makes this answerable at all: reduced to a single digest, "two owners
+    disagreed about brightness" and "one owner wrote brightness, then colour,
+    then a config byte" are the same observation. Disjoint-key sequences drop
+    out here by construction.
 
-    A pair counts as conflicting when, inside `window` seconds on one target,
-    two commands set the SAME key to DIFFERENT values. Two commands touching
-    disjoint keys are a normal multi-key sequence and are ignored, which is what
-    makes this different from the whole-payload view: one writer setting
-    brightness then colour then a config byte registers three "different
-    payloads" and zero conflicts.
+    **What this cannot do, and why the split below exists.** A key that
+    legitimately oscillates between a few states produces a hit on every
+    transition, and telemetry cannot see the difference between a transition and
+    a disagreement: both are "same key, new value, soon after the last one".
+    Measured on a live fleet, the loudest hits were an LED bar alternating
+    56 -> 0 -> 56 and an indicator timeout alternating `Stay Off` -> `3 Seconds`,
+    both entirely intentional.
 
-    `same_commander` conflicts are a read-then-write race inside one automation;
-    `cross_commander` ones are two owners fighting over a parameter. Both are
-    reported, split, because they call for different fixes.
+    So each pair is classified:
 
-    Skew-aware, for the same reason the redundancy test is: chain timestamps are
-    processing time, so a stall can pull two unrelated commands into apparent
-    proximity. A pair only counts when the gap plus the doubt still fits the
-    window.
+    * `alternating` -- the second value has already been seen on that key inside
+      the query window, so the key is cycling through states it keeps returning
+      to. Bracketing sequences and on/off state machines land here.
+    * `novel` -- the second value has not been seen on that key in the window.
+      A genuinely new decision landing on top of a fresh one, which is the shape
+      worth investigating.
+
+    `novel` is the headline. It under-reports by construction: a real
+    disagreement between two values that both recur (two owners each repeatedly
+    asserting their own brightness) reads as `alternating`. Which is why
+    `writer_diversity` is reported alongside: the count of distinct commanders
+    touching each key is intent-free evidence of divided ownership, the
+    precondition for this class of bug, whether or not a collision was caught.
+
+    `same_commander` pairs are a read-then-write race inside one automation;
+    cross-commander pairs are two owners on one parameter. Different fixes, so
+    they stay split.
+
+    Skew-aware on the same terms as the redundancy test: chain timestamps are
+    processing time, so a stall can pull unrelated commands into apparent
+    proximity. A pair counts only when the gap plus the doubt still fits.
     """
     conn = db.connect()
     since = time.time() - seconds
@@ -124,18 +141,36 @@ def conflicts(db: Database, seconds: int, window: float = 2.0) -> dict:
     for row in rows:
         by_target.setdefault((row["instance"], row["target"]), []).append(dict(row))
 
+    # Value history and writer set per (instance, target, key) over the whole
+    # window, which is what lets a cycling key be told from a disputed one.
+    seen_values: dict[tuple[str, str, str], set[str]] = {}
+    writers: dict[tuple[str, str, str], set[str]] = {}
+    for row in rows:
+        for key, digest in parse_key_digests(row["payload_keys"]).items():
+            ident = (row["instance"], row["target"], key)
+            seen_values.setdefault(ident, set()).add(digest)
+            writers.setdefault(ident, set()).add(row["client"] or "(unattributed)")
+
     found: dict[tuple, dict] = {}
     pairs_examined = 0
     skew_skipped = 0
     for (instance, target), chains in by_target.items():
-        for index, first in enumerate(chains):
-            first_keys = parse_key_digests(first["payload_keys"])
-            if not first_keys:
-                continue
-            for second in chains[index + 1 :]:
+        parsed = [parse_key_digests(c["payload_keys"]) for c in chains]
+        # Walk forward over the SECOND element of each pair, so `history` holds
+        # exactly what was written before that arrival. Advancing it on the
+        # first element instead would freeze it for a whole inner loop and count
+        # the same value as unseen repeatedly.
+        history: dict[str, set[str]] = {}
+        for j, second in enumerate(chains):
+            second_keys = parsed[j]
+            for i in range(j - 1, -1, -1):
+                first = chains[i]
+                first_keys = parsed[i]
                 gap = second["opened_at"] - first["opened_at"]
                 if gap > window:
                     break
+                if not first_keys or not second_keys:
+                    continue
                 pairs_examined += 1
                 doubt = max(
                     first["clock_skew_ms"] or 0.0, second["clock_skew_ms"] or 0.0
@@ -143,7 +178,6 @@ def conflicts(db: Database, seconds: int, window: float = 2.0) -> dict:
                 if gap + doubt > window:
                     skew_skipped += 1
                     continue
-                second_keys = parse_key_digests(second["payload_keys"])
                 disputed = sorted(
                     key
                     for key in first_keys.keys() & second_keys.keys()
@@ -154,33 +188,77 @@ def conflicts(db: Database, seconds: int, window: float = 2.0) -> dict:
                 a = first["client"] or "(unattributed)"
                 b = second["client"] or "(unattributed)"
                 for key in disputed:
+                    # Has this key held the incoming value before now? If so the
+                    # key is cycling, not being disputed.
+                    kind = (
+                        "alternating"
+                        if second_keys[key] in history.get(key, set())
+                        else "novel"
+                    )
                     entry = found.setdefault(
-                        (instance, target, a, b, key),
+                        (instance, target, a, b, key, kind),
                         {
                             "instance": instance,
                             "target": target,
                             "key": key,
+                            "kind": kind,
                             "first_client": a,
                             "second_client": b,
                             "same_commander": a == b,
                             "count": 0,
                             "min_gap_ms": None,
+                            "distinct_values_seen": len(
+                                seen_values.get((instance, target, key), ())
+                            ),
+                            "writers": sorted(
+                                writers.get((instance, target, key), ())
+                            ),
                         },
                     )
                     entry["count"] += 1
                     gap_ms = round(gap * 1000.0, 1)
                     if entry["min_gap_ms"] is None or gap_ms < entry["min_gap_ms"]:
                         entry["min_gap_ms"] = gap_ms
+            # Only now does this arrival become part of the past.
+            for key, digest in second_keys.items():
+                history.setdefault(key, set()).add(digest)
 
     ranked = sorted(found.values(), key=lambda e: -e["count"])
+    novel = [e for e in ranked if e["kind"] == "novel"]
+
+    # Divided ownership: how many distinct commanders touch each key. Intent
+    # free, so it stands up where the pair classification cannot: it measures
+    # the precondition for a race rather than a caught instance of one.
+    diversity = [
+        {
+            "instance": inst,
+            "target": tgt,
+            "key": key,
+            "writers": sorted(names),
+            "writer_count": len(names),
+        }
+        for (inst, tgt, key), names in writers.items()
+        if len(names) > 1
+    ]
+    diversity.sort(key=lambda e: -e["writer_count"])
+
     return {
         "window_seconds": window,
         "pairs_examined": pairs_examined,
         "pairs_skipped_for_clock_skew": skew_skipped,
         "chains_considered": len(rows),
-        "conflicts": ranked[:TOP_LIMIT],
-        "total_conflicting_pairs": sum(e["count"] for e in ranked),
-        "cross_commander_pairs": sum(
-            e["count"] for e in ranked if not e["same_commander"]
+        # The headline. `alternating` pairs are excluded: see the docstring for
+        # what that trades away.
+        "novel_pairs": sum(e["count"] for e in novel),
+        "novel_cross_commander_pairs": sum(
+            e["count"] for e in novel if not e["same_commander"]
         ),
+        "conflicts": novel[:TOP_LIMIT],
+        "alternating_pairs": sum(
+            e["count"] for e in ranked if e["kind"] == "alternating"
+        ),
+        "alternating": [e for e in ranked if e["kind"] == "alternating"][:TOP_LIMIT],
+        "writer_diversity": diversity[:TOP_LIMIT],
+        # Kept so a caller can see the unfiltered total this was reduced from.
+        "total_pairs_same_key_different_value": sum(e["count"] for e in ranked),
     }

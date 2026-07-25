@@ -60,7 +60,7 @@ def test_multi_key_sequence_from_one_writer_is_not_a_conflict(tmp_path):
            payload=b'{"ledColorWhenOn": 170}')
 
     result = conflicts(db, seconds=600, window=2.0)
-    assert result["total_conflicting_pairs"] == 0
+    assert result["total_pairs_same_key_different_value"] == 0
     assert result["pairs_examined"] == 3  # they were compared, and cleared
 
 
@@ -73,10 +73,11 @@ def test_two_writers_disagreeing_about_one_key_is_a_conflict(tmp_path):
            payload=b'{"brightness": 120, "transition": 0.2}')
 
     result = conflicts(db, seconds=600, window=2.0)
-    assert result["total_conflicting_pairs"] == 1
-    assert result["cross_commander_pairs"] == 1
+    assert result["novel_pairs"] == 1
+    assert result["novel_cross_commander_pairs"] == 1
     entry = result["conflicts"][0]
     assert entry["key"] == "brightness"  # transition agreed, so it is not listed
+    assert entry["kind"] == "novel"
     assert entry["same_commander"] is False
     assert entry["min_gap_ms"] == 300.0
 
@@ -92,9 +93,62 @@ def test_same_commander_conflict_is_reported_but_split(tmp_path):
            payload=b'{"brightness": 250}')
 
     result = conflicts(db, seconds=600, window=2.0)
-    assert result["total_conflicting_pairs"] == 1
-    assert result["cross_commander_pairs"] == 0
+    assert result["novel_pairs"] == 1
+    assert result["novel_cross_commander_pairs"] == 0
     assert result["conflicts"][0]["same_commander"] is True
+
+
+def test_alternating_state_machine_is_not_the_headline(tmp_path):
+    """The real false positive this classification exists for.
+
+    Measured live: an LED bar cycling 56 -> 0 -> 56 -> 0, and an indicator
+    timeout cycling `Stay Off` -> `3 Seconds`. Every transition sets the same
+    key to a different value inside the window, and every one of them is
+    intentional. They must not sit in the headline count.
+    """
+    db = make_db(tmp_path)
+    now = time.time()
+    for i, bri in enumerate([56, 0, 56, 0, 56]):
+        insert(db, target="bar", client="script: publish", opened_at=now + i * 0.5,
+               payload=b'{"ledIntensityWhenOn": %d}' % bri)
+
+    result = conflicts(db, seconds=600, window=2.0)
+    # Exactly one novel pair: the very first sighting of 0 on this key really is
+    # new information. Every transition after that is the cycle repeating, and
+    # the cycle is what used to drown the signal.
+    assert result["novel_pairs"] == 1
+    assert result["alternating_pairs"] >= 3
+    assert result["alternating"][0]["kind"] == "alternating"
+
+
+def test_lli_sandwich_shape_lands_in_alternating(tmp_path):
+    db = make_db(tmp_path)
+    now = time.time()
+    cycle = ["Stay Off", "3 Seconds", "Stay Off", "3 Seconds", "Stay Off", "3 Seconds"]
+    for i, val in enumerate(cycle):
+        insert(db, target="dimmer", client="script: silent sync",
+               opened_at=now + i * 0.4,
+               payload=b'{"loadLevelIndicatorTimeout": "%s"}' % val.encode())
+    result = conflicts(db, seconds=600, window=2.0)
+    assert result["novel_pairs"] == 1  # first sighting of the second value only
+    assert result["alternating_pairs"] >= 5
+
+
+def test_writer_diversity_is_reported_even_without_a_novel_pair(tmp_path):
+    """Divided ownership is the precondition for the bug and is intent-free, so
+    it survives where the pair classification cannot."""
+    db = make_db(tmp_path)
+    now = time.time()
+    insert(db, target="lamp", client="automation: A", opened_at=now,
+           payload=b'{"brightness": 10}')
+    insert(db, target="lamp", client="automation: B", opened_at=now + 60.0,
+           payload=b'{"brightness": 10}')
+
+    result = conflicts(db, seconds=600, window=2.0)
+    assert result["novel_pairs"] == 0  # never collided
+    entry = next(e for e in result["writer_diversity"] if e["key"] == "brightness")
+    assert entry["writer_count"] == 2
+    assert entry["writers"] == ["automation: A", "automation: B"]
 
 
 def test_identical_payloads_are_redundant_not_conflicting(tmp_path):
@@ -103,7 +157,8 @@ def test_identical_payloads_are_redundant_not_conflicting(tmp_path):
     for offset in (0.0, 0.4):
         insert(db, target="lamp", client="a", opened_at=now + offset,
                payload=b'{"brightness": 200}')
-    assert conflicts(db, seconds=600, window=2.0)["total_conflicting_pairs"] == 0
+    result = conflicts(db, seconds=600, window=2.0)
+    assert result["total_pairs_same_key_different_value"] == 0
 
 
 def test_commands_outside_the_window_do_not_pair(tmp_path):
@@ -112,7 +167,7 @@ def test_commands_outside_the_window_do_not_pair(tmp_path):
     insert(db, target="lamp", client="a", opened_at=now, payload=b'{"brightness": 1}')
     insert(db, target="lamp", client="b", opened_at=now + 30.0,
            payload=b'{"brightness": 2}')
-    assert conflicts(db, seconds=600, window=2.0)["total_conflicting_pairs"] == 0
+    assert conflicts(db, seconds=600, window=2.0)["novel_pairs"] == 0
 
 
 def test_different_targets_do_not_pair(tmp_path):
@@ -121,7 +176,7 @@ def test_different_targets_do_not_pair(tmp_path):
     insert(db, target="lamp_a", client="a", opened_at=now, payload=b'{"brightness": 1}')
     insert(db, target="lamp_b", client="b", opened_at=now + 0.1,
            payload=b'{"brightness": 2}')
-    assert conflicts(db, seconds=600, window=2.0)["total_conflicting_pairs"] == 0
+    assert conflicts(db, seconds=600, window=2.0)["novel_pairs"] == 0
 
 
 def test_clock_skew_suppresses_an_untrustworthy_pair(tmp_path):
@@ -135,5 +190,5 @@ def test_clock_skew_suppresses_an_untrustworthy_pair(tmp_path):
            payload=b'{"brightness": 2}', skew_ms=5000.0)
 
     result = conflicts(db, seconds=600, window=2.0)
-    assert result["total_conflicting_pairs"] == 0
+    assert result["novel_pairs"] == 0
     assert result["pairs_skipped_for_clock_skew"] == 1

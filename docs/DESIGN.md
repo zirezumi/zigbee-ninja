@@ -447,6 +447,23 @@ those call for different fixes. Disjoint-key sequences are ignored by
 construction. The pairing is skew-aware on the same terms as the redundancy test,
 and reports how many pairs it dropped for skew rather than hiding them.
 
+**A key that oscillates is not a key in dispute, and telemetry cannot see the
+difference directly.** An LED bar cycling `56 → 0 → 56` and an indicator timeout
+cycling `Stay Off → 3 Seconds` both set the same key to a new value inside the
+window on every transition, and both are entirely intentional; on first
+measurement they were the loudest "conflicts" on the fleet. Each pair is
+therefore classified `alternating` (the incoming value has already been seen on
+that key earlier in the window, so the key is cycling through states it returns
+to) or `novel` (it has not). `novel` is the headline; `alternating` stays
+visible rather than being silently dropped.
+
+That trade under-reports on purpose: two owners each repeatedly asserting their
+own brightness read as `alternating`, because both values recur. So the response
+also carries **`writer_diversity`**, the count of distinct commanders touching
+each key. That one is intent-free and survives where the pair classification
+cannot: it measures the *precondition* for the whole bug class, divided
+ownership, rather than a caught instance of it. Read the two together.
+
 ## §10 Capacity & airtime model
 
 **Per-frame airtime** (802.15.4, 2.4 GHz O-QPSK, 250 kbps → 32 µs/byte):
