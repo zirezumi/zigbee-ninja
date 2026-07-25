@@ -1,7 +1,7 @@
 import json
 import time
 
-from zigbee_ninja.attribution.chains import ChainTracker
+from zigbee_ninja.attribution.chains import ChainTracker, payload_key_digests
 from zigbee_ninja.ingest.rates import RateTracker
 
 SETUP = {"username": "admin", "password": "correct-horse"}
@@ -82,3 +82,22 @@ def test_end_to_end_attribution_flow(client):
 def test_attribution_endpoints_require_auth(client):
     assert client.get("/api/attribution/summary").status_code == 401
     assert client.get("/api/attribution/redundant").status_code == 401
+    assert client.get("/api/attribution/conflicts").status_code == 401
+
+
+def test_conflicts_endpoint_reports_a_disagreement(client):
+    client.post("/api/setup", json=SETUP)
+    now = time.time()
+    writers = ((0.0, "automation: Lifecycle", 200), (0.3, "automation: Rendering", 120))
+    for offset, who, bri in writers:
+        client.app.state.db.connect().execute(
+            "INSERT INTO chains (instance, target, verb, opened_at, client, payload_size, "
+            "echo_count, first_echo_ms, redundant, payload_digest, clock_skew_ms, payload_keys) "
+            "VALUES ('z2m-1', 'lamp', 'set', ?, ?, 10, 0, NULL, 0, 'd', 0, ?)",
+            (now + offset, who, payload_key_digests(b'{"brightness": %d}' % bri)),
+        )
+    client.app.state.db.connect().commit()
+
+    body = client.get("/api/attribution/conflicts?seconds=600&window=2").json()
+    assert body["cross_commander_pairs"] == 1
+    assert body["conflicts"][0]["key"] == "brightness"

@@ -10,6 +10,7 @@ traffic arrives with the T1/T2 tiers.
 from __future__ import annotations
 
 import hashlib
+import json
 import threading
 import time
 from collections import deque
@@ -19,6 +20,50 @@ from dataclasses import dataclass
 CHAIN_WINDOWS = {"set": 1.5, "get": 3.0}
 FINALIZE_LATENESS = 2.0
 REDUNDANT_WINDOW = 5.0
+# Per-key digests are capped so one pathological payload cannot bloat the row.
+# Zigbee /set payloads are a handful of scalar parameters; anything past this is
+# not a command this analysis has anything useful to say about.
+MAX_PAYLOAD_KEYS = 24
+KEY_DIGEST_CHARS = 8
+
+
+def payload_key_digests(payload: bytes) -> str | None:
+    """Per-key value fingerprints for a command payload, as `key:digest` pairs.
+
+    A whole-payload digest cannot tell "one commander wrote three different
+    parameters" apart from "two commanders disagreed about one parameter": both
+    read as different payloads. Digesting each top-level key separately makes
+    that distinction answerable, and keeps the stored form bounded and free of
+    the values themselves.
+
+    Returns None for anything that is not a JSON object, which includes the
+    bare-scalar `/set/<attribute>` form: there the attribute is already in the
+    topic, so the chain's target carries it.
+    """
+    try:
+        parsed = json.loads(payload)
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    pairs = []
+    for key in sorted(parsed)[:MAX_PAYLOAD_KEYS]:
+        value = json.dumps(parsed[key], sort_keys=True, separators=(",", ":"))
+        digest = hashlib.sha1(value.encode("utf-8")).hexdigest()[:KEY_DIGEST_CHARS]
+        pairs.append(f"{key}:{digest}")
+    return ",".join(pairs)
+
+
+def parse_key_digests(stored: str | None) -> dict[str, str]:
+    """Inverse of payload_key_digests, tolerant of NULL and of malformed rows."""
+    if not stored:
+        return {}
+    out: dict[str, str] = {}
+    for pair in stored.split(","):
+        key, _, digest = pair.rpartition(":")
+        if key:
+            out[key] = digest
+    return out
 
 
 def parse_command(suffix: str) -> tuple[str, str] | None:
@@ -53,6 +98,10 @@ class Chain:
     # timestamps to anything else must treat a chain with a large skew as
     # having an unknown position inside that bracket. See on_command.
     clock_skew_ms: float = 0.0
+    # `key:digest` pairs for the payload's top-level keys; None when the payload
+    # is not a JSON object. Lets a conflict (two writers disagreeing about ONE
+    # parameter) be told apart from a normal multi-key write sequence.
+    payload_keys: str | None = None
 
     def window(self) -> float:
         return CHAIN_WINDOWS.get(self.verb, CHAIN_WINDOWS["set"])
@@ -106,6 +155,7 @@ class ChainTracker:
             payload_digest=digest,
             client=client,
             clock_skew_ms=skew_ms,
+            payload_keys=payload_key_digests(payload),
         )
         with self._mutex:
             if verb == "set":

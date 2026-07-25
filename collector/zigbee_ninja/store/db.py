@@ -219,6 +219,9 @@ _MIGRATIONS = [
     """
     ALTER TABLE chains ADD COLUMN clock_skew_ms REAL NOT NULL DEFAULT 0;
     """,
+    """
+    ALTER TABLE chains ADD COLUMN payload_keys TEXT;
+    """,
 ]
 
 

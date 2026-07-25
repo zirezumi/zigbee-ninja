@@ -920,8 +920,8 @@ class Engine:
             conn.executemany(
                 "INSERT INTO chains (instance, target, verb, opened_at, client, "
                 "payload_size, echo_count, first_echo_ms, redundant, payload_digest, "
-                "clock_skew_ms) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "clock_skew_ms, payload_keys) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     (
                         chain.instance,
@@ -935,6 +935,7 @@ class Engine:
                         int(chain.redundant),
                         chain.payload_digest,
                         chain.clock_skew_ms,
+                        chain.payload_keys,
                     )
                     for chain in finalized
                 ],

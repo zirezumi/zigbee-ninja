@@ -354,6 +354,22 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
         engine.flush_rollups()
         return {"redundant": _label_clients(attribution_queries.redundant(db, seconds))}
 
+    @app.get("/api/attribution/conflicts")
+    def attribution_conflicts(
+        request: Request, seconds: int = 3600, window: float = 2.0
+    ) -> dict:
+        """Commands that disagree about a parameter, not merely repeat one.
+
+        The redundancy report answers "what was sent twice"; this answers "what
+        was sent twice with different intent", which is the one that shows up as
+        a wrong device state rather than as wasted airtime.
+        """
+        require_user(request)
+        seconds = max(60, min(seconds, MAX_QUERY_WINDOW_SECONDS))
+        window = max(0.05, min(window, 30.0))
+        engine.flush_rollups()
+        return attribution_queries.conflicts(db, seconds, window)
+
     @app.get("/api/ledger")
     def ledger_get(request: Request, seconds: int = 86400) -> dict:
         require_user(request)

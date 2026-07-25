@@ -432,6 +432,21 @@ pretend to precision it cannot have:
 The residual is deliberate under-reporting during a stall, which is the correct
 direction for a number that changes get judged against.
 
+**Conflicts, as distinct from duplicates.** A duplicate wastes airtime; a
+**conflict** decides a device's state by arrival order instead of by intent, and
+is the failure a redundancy report structurally cannot see. Reduced to one
+whole-payload digest, "two owners disagreed about brightness" and "one owner
+wrote brightness, then colour, then a config byte" are the same observation:
+different payloads to the same target. So each chain also stores `payload_keys`,
+a `key:digest` pair per top-level key (digests, not values: bounded, and the
+values never leave the device). `GET /api/attribution/conflicts` pairs commands
+on one target inside a window and reports only those setting the **same key to
+different values**, splitting `same_commander` (a read-then-write race inside one
+automation) from cross-commander (two owners fighting over a parameter), because
+those call for different fixes. Disjoint-key sequences are ignored by
+construction. The pairing is skew-aware on the same terms as the redundancy test,
+and reports how many pairs it dropped for skew rather than hiding them.
+
 ## §10 Capacity & airtime model
 
 **Per-frame airtime** (802.15.4, 2.4 GHz O-QPSK, 250 kbps → 32 µs/byte):
