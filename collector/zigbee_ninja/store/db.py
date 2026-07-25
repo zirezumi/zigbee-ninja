@@ -216,6 +216,9 @@ _MIGRATIONS = [
     ALTER TABLE ledger_daily ADD COLUMN pricing_version INTEGER NOT NULL DEFAULT 1;
     ALTER TABLE ledger_device_daily ADD COLUMN pricing_version INTEGER NOT NULL DEFAULT 1;
     """,
+    """
+    ALTER TABLE chains ADD COLUMN clock_skew_ms REAL NOT NULL DEFAULT 0;
+    """,
 ]
 
 

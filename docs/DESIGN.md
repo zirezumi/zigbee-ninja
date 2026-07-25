@@ -409,6 +409,29 @@ every bucket stays independently visible. A **redundant-command detector**
 cross-referenced by commander) ships as a first-class report: near-duplicate
 commands are the cheapest utilization win an automation author can act on.
 
+**Chain timestamps are processing time, and say so.** MQTT carries no broker-side
+timestamp and ingest runs inline on the event loop, so `chains.opened_at` is stamped
+when the collector gets to the message, not when it reached the broker. Inside a
+single process that gap is unrecoverable: a pause holds the GIL, so no thread can
+observe the true arrival either. The design therefore does two things rather than
+pretend to precision it cannot have:
+
+* **Shrink the gap.** Storage flushes already run off-loop (`asyncio.to_thread`);
+  full garbage collections, which hold the GIL and so pause the loop from any
+  thread, are cut at startup by `gc.freeze()` plus a raised gen-2 threshold
+  (`_quiet_full_collections`). Measured before this: gen2 max 10,769 ms.
+* **Publish the residue.** Every chain carries `clock_skew_ms`, the loop lag in
+  flight when it was stamped: the width of the bracket around `opened_at`, not a
+  correction to it. The redundancy test adds that skew to the observed gap and
+  requires even the worst case to fall inside the window, so a stall can never
+  manufacture a duplicate out of a drained backlog; HA context correlation widens
+  its tolerance by the same quantity, so a stall no longer permanently loses a
+  commander name. Consumers correlating chains against any other clock must widen
+  by `clock_skew_ms` or drop the row.
+
+The residual is deliberate under-reporting during a stall, which is the correct
+direction for a number that changes get judged against.
+
 ## §10 Capacity & airtime model
 
 **Per-frame airtime** (802.15.4, 2.4 GHz O-QPSK, 250 kbps → 32 µs/byte):

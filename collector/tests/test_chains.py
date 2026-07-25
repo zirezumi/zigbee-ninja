@@ -85,6 +85,51 @@ def test_redundant_outside_window_not_flagged():
     assert later.redundant is False
 
 
+def test_chain_records_the_loop_skew_it_was_stamped_under():
+    clock = FakeClock()
+    skew = [0.0]
+    tracker = ChainTracker(clock=clock, loop_skew_ms=lambda: skew[0])
+    quiet = tracker.on_command("z2m-test", "lamp", "set", b"a")
+    assert quiet.clock_skew_ms == 0.0
+
+    skew[0] = 4200.0
+    stalled = tracker.on_command("z2m-test", "other", "set", b"a")
+    assert stalled.clock_skew_ms == 4200.0
+
+
+def test_loop_stall_does_not_manufacture_a_duplicate():
+    """Two identical commands drained together after a stall are not a duplicate.
+
+    `opened_at` is processing time, so a stall collapses the observed gap: the
+    pair looks simultaneous even when it really arrived seconds apart. The gap
+    has to clear the window with the skew added on before redundancy is claimed.
+    """
+    clock = FakeClock()
+    skew = [0.0]
+    tracker = ChainTracker(clock=clock, loop_skew_ms=lambda: skew[0])
+    tracker.on_command("z2m-test", "lamp", "set", b"same")
+
+    # The loop stalls for 6 s; the backlog drains with no observable gap.
+    skew[0] = 6000.0
+    clock.now += 0.01
+    drained = tracker.on_command("z2m-test", "lamp", "set", b"same")
+    assert drained.redundant is False
+
+
+def test_healthy_loop_leaves_the_redundancy_test_unchanged():
+    """Sub-millisecond lag must not shift the old behaviour either way."""
+    clock = FakeClock()
+    tracker = ChainTracker(clock=clock, loop_skew_ms=lambda: 0.5)
+    tracker.on_command("z2m-test", "lamp", "set", b"same")
+    clock.now += 2.0
+    inside = tracker.on_command("z2m-test", "lamp", "set", b"same")
+    assert inside.redundant is True
+
+    clock.now += 30.0
+    outside = tracker.on_command("z2m-test", "lamp", "set", b"same")
+    assert outside.redundant is False
+
+
 def test_client_backfill_attribution():
     clock = FakeClock()
     tracker = ChainTracker(clock=clock)

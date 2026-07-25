@@ -51,8 +51,16 @@ class HaConfig:
 class HaAttribution:
     """Context-id → automation/script name resolution + topic correlation."""
 
-    def __init__(self, clock: Callable[[], float] = time.time):
+    def __init__(
+        self,
+        clock: Callable[[], float] = time.time,
+        loop_skew_ms: Callable[[], float] | None = None,
+    ):
         self._clock = clock
+        # Both the remembered publish and the command it should name are
+        # stamped on the event loop, so a stall delays them unequally and can
+        # push a genuine pair outside a fixed tolerance. See name_for.
+        self._loop_skew_ms = loop_skew_ms or (lambda: 0.0)
         self._context_names: dict[str, tuple[float, str]] = {}
         self._recent: deque[tuple[float, str, str]] = deque(maxlen=2048)
         self.counters = {"events": 0, "publishes": 0, "named": 0}
@@ -103,10 +111,20 @@ class HaAttribution:
         return None
 
     def name_for(self, topic: str) -> str | None:
-        """Most recent HA-side publisher of `topic` within the tolerance window."""
+        """Most recent HA-side publisher of `topic` within the tolerance window.
+
+        The window widens by the loop lag in flight. Both sides of the
+        correlation are stamped on the event loop, so a stall stretches the
+        apparent distance between a publish and the command it explains; with a
+        fixed 3 s bound, any stall longer than that permanently dropped the
+        commander name and the publish fell to "(unattributed)" forever. The
+        extra slack only ever admits an older candidate for the SAME topic, and
+        a healthy loop (sub-millisecond lag) leaves the bound untouched.
+        """
         now = self._clock()
+        tolerance = CORRELATION_TOLERANCE_SECONDS + max(self._loop_skew_ms(), 0.0) / 1000.0
         for ts, seen_topic, name in reversed(self._recent):
-            if now - ts > CORRELATION_TOLERANCE_SECONDS:
+            if now - ts > tolerance:
                 break
             if seen_topic == topic:
                 return name

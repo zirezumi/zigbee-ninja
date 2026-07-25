@@ -75,6 +75,26 @@ def test_correlation_window_expires():
     assert attribution.name_for("z2m-1/lamp/set") is None
 
 
+def test_correlation_window_widens_by_the_loop_stall():
+    """A stall must not permanently lose the commander name.
+
+    Both the remembered publish and the command it explains are stamped on the
+    event loop; a stall longer than the fixed tolerance pushed a genuine pair
+    apart and dropped the row to "(unattributed)" for good.
+    """
+    clock = FakeClock()
+    skew = [0.0]
+    attribution = HaAttribution(clock=clock, loop_skew_ms=lambda: skew[0])
+    attribution.handle_event(automation_event("A", "c1"))
+    attribution.handle_event(publish_event("z2m-1/lamp/set", {"id": "c1"}))
+
+    clock.now += 8.0
+    assert attribution.name_for("z2m-1/lamp/set") is None  # fixed 3 s bound
+
+    skew[0] = 7000.0
+    assert attribution.name_for("z2m-1/lamp/set") == "automation: A"
+
+
 def test_context_ttl_prunes():
     clock = FakeClock()
     attribution = HaAttribution(clock=clock)

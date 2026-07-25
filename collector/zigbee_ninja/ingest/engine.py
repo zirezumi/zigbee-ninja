@@ -190,6 +190,37 @@ class LoopActivityLog:
             }
 
 
+def _quiet_full_collections() -> None:
+    """Stop generation-2 collection from pausing the event loop for seconds.
+
+    A full collection walks every live container object and holds the GIL for
+    the duration, so it stalls the loop from any thread. This process is the
+    bad case for it: a large, long-lived object graph (registry, open chains,
+    rollup buffers) that a full pass rescans from scratch every time and almost
+    never reclaims anything from. Measured here before this call existed:
+    gen2 max 10,769 ms, 44 of 96 passes over the 100 ms slow bar, which is what
+    made chain timestamps untrustworthy (see ChainTracker.on_command).
+
+    Two changes, both standard for long-lived services:
+      * `gc.freeze()` moves everything alive right now (imports, module
+        globals, the object graph built during startup) into a permanent
+        generation that collection never rescans. Startup is exactly when that
+        set is at its most static, which is why the call belongs here and not
+        at import time.
+      * a larger gen2 threshold makes full passes rarer.
+
+    Reference cycles created after this point are still collected normally;
+    frozen objects are not, which is correct for objects that live as long as
+    the process. This is a pause-time fix, not a leak: if a future refactor
+    makes startup allocate something genuinely short-lived, unfreeze rather
+    than working around the retention.
+    """
+    gc.collect()
+    gc.freeze()
+    gen0, gen1, _gen2 = gc.get_threshold()
+    gc.set_threshold(gen0, gen1, 100)
+
+
 class Engine:
     def __init__(
         self, db: Database, config: ConfigStore, secrets: SecretBox, events: RawEventLog
@@ -203,7 +234,14 @@ class Engine:
         self.rates = RateTracker()
         self.class_rates = RateTracker()
         self.brokerlog = BrokerLogCorrelator()
-        self.chains = ChainTracker(resolve_members=self._resolve_members)
+        self.chains = ChainTracker(
+            resolve_members=self._resolve_members,
+            # Chains are stamped on the loop, so they inherit its lag. Handing
+            # the tracker the lag reading lets a chain carry the width of its
+            # own timestamp bracket instead of pretending to precision it does
+            # not have.
+            loop_skew_ms=lambda: self.loop_lag.max_window_ms(),
+        )
         self.fusion = FusionTracker()
         self.probes = ProbeIngest(
             resolve_members=self._resolve_members,
@@ -242,7 +280,7 @@ class Engine:
             registry=self.registry,
             pricing=self.tap.pricing_params,
         )
-        self.ha_attr = HaAttribution()
+        self.ha_attr = HaAttribution(loop_skew_ms=lambda: self.loop_lag.max_window_ms())
         self.alerts = AlertManager(db, config, provider=self._alert_metrics)
         self.recommendations = RecommendationEngine(
             db,
@@ -396,6 +434,7 @@ class Engine:
         if self._config.get("ledger_since") is None:
             self._config.set("ledger_since", time.time())
         self.loop_activity.install_gc()
+        _quiet_full_collections()
         self._flush_task = asyncio.create_task(self._flush_loop())
         self._discovery_task = asyncio.create_task(self._discovery_loop())
         self._loop_lag_task = asyncio.create_task(self._loop_lag_loop())
@@ -880,8 +919,9 @@ class Engine:
         if finalized:
             conn.executemany(
                 "INSERT INTO chains (instance, target, verb, opened_at, client, "
-                "payload_size, echo_count, first_echo_ms, redundant, payload_digest) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "payload_size, echo_count, first_echo_ms, redundant, payload_digest, "
+                "clock_skew_ms) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     (
                         chain.instance,
@@ -894,6 +934,7 @@ class Engine:
                         chain.first_echo_ms,
                         int(chain.redundant),
                         chain.payload_digest,
+                        chain.clock_skew_ms,
                     )
                     for chain in finalized
                 ],

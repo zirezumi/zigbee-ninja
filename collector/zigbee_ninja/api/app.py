@@ -863,7 +863,11 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
             raise HTTPException(status_code=400, detail="Invalid window")
         engine.flush_rollups()
         rows = db.connect().execute(
-            "SELECT target, verb, opened_at, client, echo_count, first_echo_ms, redundant "
+            # clock_skew_ms is the width of the bracket around opened_at (see
+            # ChainTracker.on_command): a consumer correlating these timestamps
+            # against anything else must widen by it, or drop the row.
+            "SELECT target, verb, opened_at, client, echo_count, first_echo_ms, redundant, "
+            "clock_skew_ms "
             "FROM chains WHERE instance = ? AND opened_at >= ? AND opened_at < ? "
             "ORDER BY opened_at LIMIT 500",
             (instance, start, end),

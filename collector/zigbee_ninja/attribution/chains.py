@@ -47,6 +47,12 @@ class Chain:
     echoes: int = 0
     first_echo_ms: float | None = None
     finalized: bool = False
+    # How far behind the event loop was running when this chain was opened.
+    # `opened_at` is stamped at PROCESSING time, so this is the width of the
+    # bracket around it, not a correction to it: a consumer comparing chain
+    # timestamps to anything else must treat a chain with a large skew as
+    # having an unknown position inside that bracket. See on_command.
+    clock_skew_ms: float = 0.0
 
     def window(self) -> float:
         return CHAIN_WINDOWS.get(self.verb, CHAIN_WINDOWS["set"])
@@ -66,8 +72,13 @@ class ChainTracker:
         self,
         resolve_members: Callable[[str, str], list[str]] | None = None,
         clock: Callable[[], float] = time.time,
+        loop_skew_ms: Callable[[], float] | None = None,
     ):
         self._clock = clock
+        # Reports how far behind the event loop is running right now. Ingest is
+        # inline on that loop, so this is the only handle we have on the gap
+        # between a command reaching the broker and this code stamping it.
+        self._loop_skew_ms = loop_skew_ms or (lambda: 0.0)
         self._resolve_members = resolve_members or (lambda _instance, _target: [])
         # Ingest runs on the event loop while drain_finalized is called from
         # flush and API worker threads; the mutex keeps _expire's rebuilds
@@ -84,6 +95,7 @@ class ChainTracker:
         self, instance: str, target: str, verb: str, payload: bytes, client: str | None = None
     ) -> Chain:
         now = self._clock()
+        skew_ms = max(self._loop_skew_ms(), 0.0)
         digest = hashlib.sha1(payload).hexdigest()[:12]
         chain = Chain(
             instance=instance,
@@ -93,14 +105,26 @@ class ChainTracker:
             payload_size=len(payload),
             payload_digest=digest,
             client=client,
+            clock_skew_ms=skew_ms,
         )
         with self._mutex:
             if verb == "set":
                 key = (instance, target)
                 previous = self._recent_payloads.get(key)
                 if previous is not None:
-                    prev_ts, prev_digest, _prev_chain = previous
-                    if prev_digest == digest and now - prev_ts <= REDUNDANT_WINDOW:
+                    prev_ts, prev_digest, prev_chain = previous
+                    gap = now - prev_ts
+                    # `opened_at` is processing time and ingest is inline on the
+                    # event loop, so a loop stall collapses the observed gap: two
+                    # commands that really arrived seconds apart drain together and
+                    # look simultaneous. Widen the gap by the skew in flight and
+                    # require even that worst case to sit inside the window, so a
+                    # stall can never MANUFACTURE a duplicate. With a healthy loop
+                    # (sub-millisecond lag) this is the old test unchanged; the
+                    # cost is under-reporting during a stall, which is the right
+                    # direction for a measurement the fixes get judged against.
+                    doubt = max(skew_ms, prev_chain.clock_skew_ms) / 1000.0
+                    if prev_digest == digest and gap + doubt <= REDUNDANT_WINDOW:
                         chain.redundant = True
                 self._recent_payloads[key] = (now, digest, chain)
 
