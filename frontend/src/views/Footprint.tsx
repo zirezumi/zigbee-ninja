@@ -114,6 +114,11 @@ function HaCard() {
             <span className="hint">
               {" "}
               · {counters.publishes ?? 0} publishes seen, {counters.named ?? 0} named
+              {(counters.ambiguous ?? 0) > 0 && (
+                <span title="Commands where more than one automation could have sent those exact bytes to that device inside the correlation window, so no single one is credited.">
+                  , {counters.ambiguous} ambiguous
+                </span>
+              )}
             </span>
           )}{" "}
           <button className="ghost small" onClick={() => setEditing(true)}>

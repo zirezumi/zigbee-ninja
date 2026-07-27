@@ -432,6 +432,65 @@ pretend to precision it cannot have:
 The residual is deliberate under-reporting during a stall, which is the correct
 direction for a number that changes get judged against.
 
+**A topic does not identify a publisher.** Correlating an HA `mqtt.publish` to
+the command it explains by topic and timing alone is not sound, because two
+constructs routinely write different parameters to one device inside the
+correlation window. Returning the most recently recorded candidate then credits
+both commands to one of them. Measured on the reference installation: every
+room's `{Room} Silent Phantom Sync` was credited with LED-intensity writes it has
+no code path to publish, and every room's `Publish {Room} Switch LED State` with
+the indicator-timeout writes that were really the sync script's, 70
+provably-impossible `(client, target, key)` triples over 24 h. The tell was
+positional: the sync script writes the indicator timeout twice around a ~1 s
+sandwich, and its *last* write was named correctly while its *first* was not, a
+pattern only a lookup-time race explains.
+
+Correlation therefore keys on **topic plus a payload fingerprint**, the same
+`sha1(bytes)[:12]` a chain already stores as `payload_digest`, so the two sides
+join on the bytes rather than on proximity. Two properties matter:
+
+* **There are two entrances, and both need it.** The command usually reaches the
+  broker *before* the HA event describing it (measured: the wire wins ~80% of the
+  time, median 1 ms), so most commanders are not named by the wire-time lookup
+  (`HaAttribution.name_for`) at all but by the backfill that runs when the HA
+  event lands (`ChainTracker.attribute_client`). Both matched on topic alone and
+  both carried the same collision, in opposite directions. Fixing only the lookup
+  would have moved the majority of traffic from a confident wrong name to an
+  unnamed row handed to a still-colliding backfill.
+* **Reproducing the wire bytes is the whole mechanism.** A template rendering to
+  a mapping arrives at the service call as a native dict, not a string, and Home
+  Assistant serialises it with `json.dumps`' default separators; a string payload
+  is published verbatim. Compact separators do not reproduce the bytes. If that
+  fidelity ever breaks the failure is silent and one-directional: matches stop
+  landing and commands degrade to unattributed rather than being misnamed.
+
+When the payload cannot pick a single candidate the answer is **`(ambiguous)`**,
+not a guess. It is a distinct stored value from a NULL client, which renders as
+`(unattributed)`: "several might have sent this" and "nobody told us who did" are
+different failures wanting different fixes, and collapsing them is how a wrong
+name came to look authoritative in the first place. Consumers must not read it as
+a commander: it is excluded from `writer_diversity` and from the
+`novel_cross_commander_pairs` headline, and the pairs it removes are reported as
+`novel_pairs_with_ambiguous_commander` rather than dropped silently. Two
+constructs publishing byte-identical payloads to one device inside the window are
+genuinely indistinguishable by this method and always will be; on the reference
+fleet that case did not occur once in 368 same-topic collisions.
+
+**Scope of the correction: the `client` field only.** Nothing else in a chain was
+affected. The topic, the payload keys, the counts and the timings were all
+already right, and the entire packet-capture tier (airtime, capacity knees, wire
+latency, mesh health, topology, EZSP/ASH decode) never consults HA attribution at
+all. What moves is the Commanders panel, `top_clients`, the `client` column on
+`/api/burst/chains`, `writer_diversity`, the per-commander split in
+`/api/attribution/conflicts`, and the `redundant` grouping.
+
+**History is not repaired.** Existing `chains` rows keep the names they were
+given; the fix changes only what is written from the deploy onwards. Any
+before/after comparison must therefore be drawn from a window lying entirely
+after the deploy, and `retention_chains_hours` (default 48, clamped 1-720) has to
+cover it. This follows the precedent set by the `clock_skew_ms` fix, which also
+left old rows alone.
+
 **Conflicts, as distinct from duplicates.** A duplicate wastes airtime; a
 **conflict** decides a device's state by arrival order instead of by intent, and
 is the failure a redundancy report structurally cannot see. Reduced to one

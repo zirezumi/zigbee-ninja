@@ -2,11 +2,17 @@
 
 With a user-supplied long-lived token, a read-only WebSocket client subscribes
 to `automation_triggered`, `script_started`, and `call_service` events. An
-`mqtt.publish` service call carries its target topic; its context id (or parent
-context) resolves to the automation/script run that fired it. That upgrades a
-chain's commander from "(unattributed)" to the actual automation name: the
-broker-safe replacement for T0.5 on brokers whose topic log can't carry
-per-PUBLISH client lines.
+`mqtt.publish` service call carries its target topic and payload; its context id
+(or parent context) resolves to the automation/script run that fired it. That
+upgrades a chain's commander from "(unattributed)" to the actual automation
+name: the broker-safe replacement for T0.5 on brokers whose topic log can't
+carry per-PUBLISH client lines.
+
+Correlation is by topic AND payload fingerprint. Topic alone cannot separate two
+constructs writing different parameters to one device inside the window, and
+picking the most recent candidate silently credited the wrong one; see
+`name_for` and `ChainTracker.attribute_client`, the two places a command can be
+named depending on whether the wire or the HA event arrives first.
 
 HaAttribution is pure logic (fed event dicts; fully unit-testable); HaLink owns
 the connection loop with the same cancellation-driven lifecycle as MqttIngest.
@@ -23,10 +29,41 @@ from dataclasses import dataclass
 
 import websockets
 
+from ..attribution.chains import AMBIGUOUS_COMMANDER, command_digest
+
 CONTEXT_TTL_SECONDS = 600.0
 CORRELATION_TOLERANCE_SECONDS = 3.0
 MAX_BACKOFF_SECONDS = 30
 SUBSCRIBED_EVENTS = ("automation_triggered", "script_started", "call_service")
+
+
+def payload_fingerprint(payload: object) -> str | None:
+    """Digest of the bytes HA will put on the wire for this service_data payload.
+
+    Pinned against 1032 live publishes on a Zigbee2MQTT installation, where it
+    reproduced the wire bytes every time:
+
+    * A template rendering to a mapping arrives here as a native dict, because
+      Home Assistant un-stringifies a `| tojson` result rather than passing the
+      string through. Those are serialised with `json.dumps` DEFAULT separators.
+      Compact separators do NOT reproduce the wire bytes.
+    * A string payload is published verbatim.
+
+    None means the payload could not be rendered to bytes (absent, or a shape
+    this does not model). That degrades the command to ambiguous rather than
+    guessing, which is the safe direction: a confidently wrong commander is
+    worse than an honest unknown.
+    """
+    if payload is None:
+        return None
+    if isinstance(payload, bytes):
+        return command_digest(payload)
+    if isinstance(payload, str):
+        return command_digest(payload.encode("utf-8"))
+    try:
+        return command_digest(json.dumps(payload).encode("utf-8"))
+    except (TypeError, ValueError):
+        return None
 
 
 @dataclass
@@ -62,8 +99,16 @@ class HaAttribution:
         # push a genuine pair outside a fixed tolerance. See name_for.
         self._loop_skew_ms = loop_skew_ms or (lambda: 0.0)
         self._context_names: dict[str, tuple[float, str]] = {}
-        self._recent: deque[tuple[float, str, str]] = deque(maxlen=2048)
-        self.counters = {"events": 0, "publishes": 0, "named": 0}
+        # (stamped_at, topic, payload fingerprint or None, commander).
+        self._recent: deque[tuple[float, str, str | None, str]] = deque(maxlen=2048)
+        self.counters = {
+            "events": 0,
+            "publishes": 0,
+            "named": 0,
+            "ambiguous": 0,
+            "backfilled": 0,
+            "backfill_unmatched": 0,
+        }
 
     def _remember_context(self, context_id: str | None, name: str) -> None:
         if context_id:
@@ -78,8 +123,12 @@ class HaAttribution:
             return "user (UI/API)"
         return "ha (unresolved context)"
 
-    def handle_event(self, event: dict) -> tuple[str, str] | None:
-        """Feed one HA event dict; returns (topic, commander) for mqtt publishes."""
+    def handle_event(self, event: dict) -> tuple[str, str, str | None] | None:
+        """Feed one HA event dict.
+
+        Returns (topic, commander, payload fingerprint) for mqtt publishes, so
+        the caller can name the chain those exact bytes opened.
+        """
         self.counters["events"] += 1
         self._prune()
         event_type = event.get("event_type")
@@ -99,19 +148,29 @@ class HaAttribution:
             and data.get("domain") == "mqtt"
             and data.get("service") == "publish"
         ):
-            topic = (data.get("service_data") or {}).get("topic")
+            service_data = data.get("service_data") or {}
+            topic = service_data.get("topic")
             if not isinstance(topic, str):
                 return None
             self.counters["publishes"] += 1
             commander = self._resolve(context)
             if not commander.startswith("ha ("):
                 self.counters["named"] += 1
-            self._recent.append((self._clock(), topic, commander))
-            return topic, commander
+            fingerprint = payload_fingerprint(service_data.get("payload"))
+            self._recent.append((self._clock(), topic, fingerprint, commander))
+            return topic, commander, fingerprint
         return None
 
-    def name_for(self, topic: str) -> str | None:
-        """Most recent HA-side publisher of `topic` within the tolerance window.
+    def name_for(self, topic: str, digest: str | None = None) -> str | None:
+        """HA-side publisher of these exact bytes on `topic`, within the window.
+
+        Topic alone does not identify a publisher. Two scripts writing different
+        parameters to one device inside the window are both candidates, and
+        returning the most recent of them credited whichever HA publish happened
+        to be recorded last: on this installation that swapped a fill-bar
+        intensity write with an indicator-timeout write on every render. So a
+        candidate must match the payload as well, and when the payload cannot
+        pick a single one the answer is AMBIGUOUS_COMMANDER rather than a guess.
 
         The window widens by the loop lag in flight. Both sides of the
         correlation are stamped on the event loop, so a stall stretches the
@@ -123,12 +182,39 @@ class HaAttribution:
         """
         now = self._clock()
         tolerance = CORRELATION_TOLERANCE_SECONDS + max(self._loop_skew_ms(), 0.0) / 1000.0
-        for ts, seen_topic, name in reversed(self._recent):
+        exact: set[str] = set()
+        unverifiable = False
+        for ts, seen_topic, seen_digest, name in reversed(self._recent):
             if now - ts > tolerance:
                 break
-            if seen_topic == topic:
-                return name
+            if seen_topic != topic:
+                continue
+            if seen_digest is None:
+                # An HA publish to this topic whose bytes could not be rendered.
+                # It cannot be confirmed as this command, and it cannot be ruled
+                # out either, so it taints the window rather than being ignored.
+                unverifiable = True
+            elif digest is not None and seen_digest == digest:
+                exact.add(name)
+        if len(exact) == 1 and not unverifiable:
+            return next(iter(exact))
+        if exact or unverifiable:
+            self.counters["ambiguous"] += 1
+            return AMBIGUOUS_COMMANDER
         return None
+
+    def note_backfill(self, matched: bool) -> None:
+        """Record whether an HA publish found the chain its bytes opened.
+
+        The correlation depends on reproducing the wire bytes exactly, and if
+        that fidelity ever breaks the symptom is silent: nothing is misnamed,
+        matches simply stop landing. A persistently climbing `backfill_unmatched`
+        against a flat `backfilled` is what that looks like, and is worth more
+        than inspecting a build. Some misses are normal: the HA event can arrive
+        before the command reaches the broker, in which case `name_for` names it
+        at wire time instead.
+        """
+        self.counters["backfilled" if matched else "backfill_unmatched"] += 1
 
     def _prune(self) -> None:
         cutoff = self._clock() - CONTEXT_TTL_SECONDS
@@ -166,7 +252,7 @@ class HaLink:
         self,
         config: HaConfig,
         attribution: HaAttribution,
-        on_publish: Callable[[str, str], None],
+        on_publish: Callable[[str, str, str | None], None],
     ):
         self._config = config
         self._attribution = attribution

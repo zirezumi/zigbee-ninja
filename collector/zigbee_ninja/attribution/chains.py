@@ -26,6 +26,25 @@ REDUNDANT_WINDOW = 5.0
 MAX_PAYLOAD_KEYS = 24
 KEY_DIGEST_CHARS = 8
 
+# Stored as a chain's commander when an HA publish was seen for the command but
+# cannot be told apart from another candidate. Deliberately distinct from a NULL
+# client, which renders as "(unattributed)" and means no HA publish was seen at
+# all: "nobody told us" and "several might have" are different failures and want
+# different fixes. Consumers must not count this as a real commander.
+AMBIGUOUS_COMMANDER = "(ambiguous)"
+
+
+def command_digest(payload: bytes) -> str:
+    """Fingerprint of a command's bytes, shared by both attribution sides.
+
+    HA-side correlation digests the payload it is about to publish with this
+    same function, so a chain and the service call that opened it join on equal
+    bytes instead of on topic and timing alone. Two scripts writing different
+    parameters to one device inside the correlation window are indistinguishable
+    by topic, which is what made them swap names.
+    """
+    return hashlib.sha1(payload).hexdigest()[:12]
+
 
 def payload_key_digests(payload: bytes) -> str | None:
     """Per-key value fingerprints for a command payload, as `key:digest` pairs.
@@ -145,7 +164,7 @@ class ChainTracker:
     ) -> Chain:
         now = self._clock()
         skew_ms = max(self._loop_skew_ms(), 0.0)
-        digest = hashlib.sha1(payload).hexdigest()[:12]
+        digest = command_digest(payload)
         chain = Chain(
             instance=instance,
             target=target,
@@ -202,14 +221,36 @@ class ChainTracker:
                             return "provoked"
         return "autonomous"
 
-    def attribute_client(self, instance: str, target: str, client: str) -> bool:
-        """Backfill the client id onto the newest unattributed chain for a target."""
+    def attribute_client(
+        self, instance: str, target: str, client: str, digest: str | None = None
+    ) -> bool:
+        """Backfill the client id onto the chain this publisher actually opened.
+
+        Most commands reach the broker before the HA event explaining them does
+        (measured on this installation: the wire wins about 80% of the time, by
+        a median of 1 ms), so this backfill, not `HaAttribution.name_for`, is
+        where the majority of commanders get their name. Matching on target
+        alone therefore carried the same collision as the lookup side: with two
+        unattributed chains open on one device, the first name to arrive claimed
+        the newest chain regardless of which command it explained.
+
+        With a digest the chain is picked by the bytes it was opened with. The
+        oldest matching chain wins so that repeated identical payloads pair up
+        in arrival order. Callers with no payload in hand (the broker-log
+        correlator) pass none and keep the newest-chain behaviour.
+        """
         with self._mutex:
             chains = self._open.get((instance, target))
             if not chains:
                 return False
-            for chain in reversed(chains):
-                if chain.client is None:
+            if digest is None:
+                for chain in reversed(chains):
+                    if chain.client is None:
+                        chain.client = client
+                        return True
+                return False
+            for chain in chains:
+                if chain.client is None and chain.payload_digest == digest:
                     chain.client = client
                     return True
         return False

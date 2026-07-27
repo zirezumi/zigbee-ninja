@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 
 from ..store.db import Database
-from .chains import parse_key_digests
+from .chains import AMBIGUOUS_COMMANDER, parse_key_digests
 
 TOP_LIMIT = 15
 
@@ -158,7 +158,13 @@ def conflicts(db: Database, seconds: int, window: float = 2.0) -> dict:
                 continue
             ident = (row["instance"], row["target"], key)
             seen_values.setdefault(ident, set()).add(digest)
-            writers.setdefault(ident, set()).add(row["client"] or "(unattributed)")
+            writer = row["client"] or "(unattributed)"
+            # An ambiguous row is one command the collector could not pin on a
+            # single publisher. Counting it as its own writer would inflate the
+            # divided-ownership measure with the collector's own uncertainty,
+            # which is the failure this metric exists to be trusted about.
+            if writer != AMBIGUOUS_COMMANDER:
+                writers.setdefault(ident, set()).add(writer)
 
     found: dict[tuple, dict] = {}
     pairs_examined = 0
@@ -215,6 +221,11 @@ def conflicts(db: Database, seconds: int, window: float = 2.0) -> dict:
                             "first_client": a,
                             "second_client": b,
                             "same_commander": a == b,
+                            # "Two owners are fighting" is a claim about who,
+                            # and an ambiguous side cannot support it. Kept
+                            # visible rather than dropped, but excluded from the
+                            # cross-commander headline below.
+                            "ambiguous_commander": AMBIGUOUS_COMMANDER in (a, b),
                             "count": 0,
                             "min_gap_ms": None,
                             "distinct_values_seen": len(
@@ -261,7 +272,14 @@ def conflicts(db: Database, seconds: int, window: float = 2.0) -> dict:
         # what that trades away.
         "novel_pairs": sum(e["count"] for e in novel),
         "novel_cross_commander_pairs": sum(
-            e["count"] for e in novel if not e["same_commander"]
+            e["count"]
+            for e in novel
+            if not e["same_commander"] and not e["ambiguous_commander"]
+        ),
+        # Surfaced rather than silently folded away: these are pairs that look
+        # cross-commander but rest on a commander the collector could not pin.
+        "novel_pairs_with_ambiguous_commander": sum(
+            e["count"] for e in novel if e["ambiguous_commander"]
         ),
         "conflicts": novel[:TOP_LIMIT],
         "alternating_pairs": sum(
