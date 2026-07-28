@@ -12,7 +12,7 @@ from contextlib import contextmanager
 
 from .. import __version__
 from ..alerts import GLOBAL_INSTANCE, AlertManager
-from ..attribution.chains import Chain, ChainTracker, parse_command
+from ..attribution.chains import Chain, ChainTracker, command_digest, parse_command
 from ..calibration.benchmark import CalibrationManager
 from ..capacity import airtime, ledger
 from ..capacity import headroom as headroom_model
@@ -522,14 +522,21 @@ class Engine:
             return {"state": "unconfigured", "error": None, "connected_since": None}
         return {**self._ha_link.status, "counters": dict(self.ha_attr.counters)}
 
-    def _on_ha_publish(self, topic: str, commander: str) -> None:
-        """Backfill: HA told us who published `topic`; name any open chain."""
+    def _on_ha_publish(self, topic: str, commander: str, digest: str | None) -> None:
+        """Backfill: HA told us who published these bytes; name the chain they opened.
+
+        This is the majority path, not a fallback: the command usually reaches
+        the broker before the HA event describing it arrives, so the chain is
+        already open and unnamed by the time this runs.
+        """
         base = self.registry.base_for(topic)
         if base is None:
             return
         command = parse_command(topic[len(base) + 1 :])
         if command is not None:
-            self.chains.attribute_client(base, command[0], commander)
+            self.ha_attr.note_backfill(
+                self.chains.attribute_client(base, command[0], commander, digest=digest)
+            )
 
     # -- data path -----------------------------------------------------------
 
@@ -584,8 +591,14 @@ class Engine:
                     # The benchmark's own reads: publish() already accounted
                     # them as `self`; a chain would misattribute them (P4).
                     return
-                # HA attribution (automation name) beats broker client-id.
-                client = self.ha_attr.name_for(topic) or self.brokerlog.client_for(topic)
+                # HA attribution (automation name) beats broker client-id. The
+                # digest is what ties this command to the service call that sent
+                # it; the chain stores the same fingerprint, so the two sides of
+                # the correlation stay joinable.
+                digest = command_digest(payload)
+                client = self.ha_attr.name_for(topic, digest) or self.brokerlog.client_for(
+                    topic
+                )
                 self.chains.on_command(base, target, verb, payload, client=client)
                 self.class_rates.record(base, "commanded")
                 if self.calibration.active:

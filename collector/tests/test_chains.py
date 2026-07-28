@@ -1,4 +1,4 @@
-from zigbee_ninja.attribution.chains import ChainTracker, parse_command
+from zigbee_ninja.attribution.chains import ChainTracker, command_digest, parse_command
 
 
 class FakeClock:
@@ -139,6 +139,47 @@ def test_client_backfill_attribution():
     assert chain.client == "ha-core"
     # already attributed → no unattributed chain remains
     assert tracker.attribute_client("z2m-test", "lamp", "other") is False
+
+
+def test_client_backfill_picks_the_chain_with_matching_bytes():
+    """Two chains open on one target: the digest decides which one gets the name.
+
+    Newest-unattributed-wins credited whichever chain happened to be latest,
+    which swapped the two commanders whenever a room wrote two parameters to one
+    device inside the window.
+    """
+    clock = FakeClock()
+    tracker = ChainTracker(clock=clock)
+    first = tracker.on_command("z2m-test", "dimmer", "set", b'{"a": 1}')
+    clock.now += 0.01
+    second = tracker.on_command("z2m-test", "dimmer", "set", b'{"b": 2}')
+
+    assert (
+        tracker.attribute_client(
+            "z2m-test", "dimmer", "owner-of-a", digest=command_digest(b'{"a": 1}')
+        )
+        is True
+    )
+    assert first.client == "owner-of-a"
+    assert second.client is None
+
+
+def test_client_backfill_refuses_rather_than_naming_the_wrong_chain():
+    """No chain carries those bytes, so nothing is named.
+
+    Leaving the row unattributed is the intended trade: an honest unknown beats
+    a confident wrong commander, which is what this whole correlation is for.
+    """
+    clock = FakeClock()
+    tracker = ChainTracker(clock=clock)
+    chain = tracker.on_command("z2m-test", "dimmer", "set", b'{"a": 1}')
+    assert (
+        tracker.attribute_client(
+            "z2m-test", "dimmer", "someone", digest=command_digest(b'{"z": 9}')
+        )
+        is False
+    )
+    assert chain.client is None
 
 
 def test_finalized_drain_is_once():
