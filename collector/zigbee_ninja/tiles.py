@@ -64,23 +64,22 @@ class TileManager:
     # -- persistence -----------------------------------------------------------
 
     def _upsert(self, capability: str, target: str, **fields) -> None:
-        conn = self._db.connect()
-        row = conn.execute(
-            "SELECT status FROM tiles WHERE capability = ? AND target = ?",
-            (capability, target),
-        ).fetchone()
-        if row is None:
-            conn.execute(
-                "INSERT INTO tiles (capability, target, status) VALUES (?, ?, 'available')",
+        with self._db.write() as conn:
+            row = conn.execute(
+                "SELECT status FROM tiles WHERE capability = ? AND target = ?",
                 (capability, target),
-            )
-        if fields:
-            assignments = ", ".join(f"{column} = ?" for column in fields)
-            conn.execute(
-                f"UPDATE tiles SET {assignments} WHERE capability = ? AND target = ?",
-                (*fields.values(), capability, target),
-            )
-        conn.commit()
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    "INSERT INTO tiles (capability, target, status) VALUES (?, ?, 'available')",
+                    (capability, target),
+                )
+            if fields:
+                assignments = ", ".join(f"{column} = ?" for column in fields)
+                conn.execute(
+                    f"UPDATE tiles SET {assignments} WHERE capability = ? AND target = ?",
+                    (*fields.values(), capability, target),
+                )
 
     def _row(self, capability: str, target: str) -> dict | None:
         row = (

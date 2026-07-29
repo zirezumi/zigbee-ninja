@@ -475,26 +475,25 @@ class AlertManager:
         missing = [seed for seed in SEED_RULES if seed["builtin"] not in seeded]
         if not missing:
             return
-        conn = self._db.connect()
-        for seed in missing:
-            conn.execute(
-                "INSERT OR IGNORE INTO alert_rules (builtin, name, metric, instance, op, "
-                "threshold, clear_threshold, sustain_seconds, severity, enabled) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    seed["builtin"],
-                    seed["name"],
-                    seed["metric"],
-                    seed["instance"],
-                    seed["op"],
-                    seed["threshold"],
-                    seed["clear_threshold"],
-                    seed["sustain_seconds"],
-                    seed["severity"],
-                    seed["enabled"],
-                ),
-            )
-        conn.commit()
+        with self._db.write() as conn:
+            for seed in missing:
+                conn.execute(
+                    "INSERT OR IGNORE INTO alert_rules (builtin, name, metric, instance, op, "
+                    "threshold, clear_threshold, sustain_seconds, severity, enabled) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        seed["builtin"],
+                        seed["name"],
+                        seed["metric"],
+                        seed["instance"],
+                        seed["op"],
+                        seed["threshold"],
+                        seed["clear_threshold"],
+                        seed["sustain_seconds"],
+                        seed["severity"],
+                        seed["enabled"],
+                    ),
+                )
         self._config.set(
             "alert_rules_seeded",
             sorted(seeded | {seed["builtin"] for seed in SEED_RULES}),
@@ -512,14 +511,13 @@ class AlertManager:
 
     def create_rule(self, data: dict) -> dict:
         fields = _validate(data)
-        conn = self._db.connect()
-        cursor = conn.execute(
-            "INSERT INTO alert_rules (name, metric, instance, op, threshold, "
-            "clear_threshold, sustain_seconds, severity, enabled) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            tuple(fields[field] for field in _RULE_FIELDS),
-        )
-        conn.commit()
+        with self._db.write() as conn:
+            cursor = conn.execute(
+                "INSERT INTO alert_rules (name, metric, instance, op, threshold, "
+                "clear_threshold, sustain_seconds, severity, enabled) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                tuple(fields[field] for field in _RULE_FIELDS),
+            )
         self._refresh_rules()
         return {**self._rules_by_id[cursor.lastrowid], "enabled": bool(fields["enabled"])}
 
@@ -530,11 +528,11 @@ class AlertManager:
         if row is None:
             return None
         assignments = ", ".join(f"{field} = ?" for field in _RULE_FIELDS)
-        conn.execute(
-            f"UPDATE alert_rules SET {assignments} WHERE id = ?",
-            (*(fields[field] for field in _RULE_FIELDS), rule_id),
-        )
-        conn.commit()
+        with self._db.write() as conn:
+            conn.execute(
+                f"UPDATE alert_rules SET {assignments} WHERE id = ?",
+                (*(fields[field] for field in _RULE_FIELDS), rule_id),
+            )
         if not fields["enabled"]:
             self._close_rule_events(rule_id, "rule disabled")
         self._refresh_rules()
@@ -543,9 +541,8 @@ class AlertManager:
     def set_all_enabled(self, enabled: bool) -> list[dict]:
         """Flip every rule at once; disabling closes any open events the same
         way a per-rule disable does. Thresholds and rows are untouched."""
-        conn = self._db.connect()
-        conn.execute("UPDATE alert_rules SET enabled = ?", (1 if enabled else 0,))
-        conn.commit()
+        with self._db.write() as conn:
+            conn.execute("UPDATE alert_rules SET enabled = ?", (1 if enabled else 0,))
         if not enabled:
             for rule_id in list(self._rules_by_id):
                 self._close_rule_events(rule_id, "rule disabled")
@@ -553,9 +550,8 @@ class AlertManager:
         return self.rules()
 
     def delete_rule(self, rule_id: int) -> bool:
-        conn = self._db.connect()
-        cursor = conn.execute("DELETE FROM alert_rules WHERE id = ?", (rule_id,))
-        conn.commit()
+        with self._db.write() as conn:
+            cursor = conn.execute("DELETE FROM alert_rules WHERE id = ?", (rule_id,))
         if cursor.rowcount == 0:
             return False
         self._close_rule_events(rule_id, "rule deleted")
@@ -587,33 +583,30 @@ class AlertManager:
             "severity": rule["severity"],
             "value_at_open": value,
         }
-        conn = self._db.connect()
-        cursor = conn.execute(
-            "INSERT INTO alert_events (rule_id, instance, opened_at, peak_value, context) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (rule["id"], instance, now, value, json.dumps(context)),
-        )
-        conn.commit()
+        with self._db.write() as conn:
+            cursor = conn.execute(
+                "INSERT INTO alert_events (rule_id, instance, opened_at, peak_value, context) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (rule["id"], instance, now, value, json.dumps(context)),
+            )
         return cursor.lastrowid
 
     def _close_event(self, event_id: int, now: float, peak: float | None) -> None:
-        conn = self._db.connect()
-        conn.execute(
-            "UPDATE alert_events SET cleared_at = ?, peak_value = ? WHERE id = ?",
-            (now, peak, event_id),
-        )
-        conn.commit()
+        with self._db.write() as conn:
+            conn.execute(
+                "UPDATE alert_events SET cleared_at = ?, peak_value = ? WHERE id = ?",
+                (now, peak, event_id),
+            )
 
     def _close_rule_events(self, rule_id: int, reason: str) -> None:
         now = self._clock()
-        conn = self._db.connect()
-        conn.execute(
-            "UPDATE alert_events SET cleared_at = ?, "
-            "context = json_set(context, '$.closed', ?) "
-            "WHERE rule_id = ? AND cleared_at IS NULL",
-            (now, reason, rule_id),
-        )
-        conn.commit()
+        with self._db.write() as conn:
+            conn.execute(
+                "UPDATE alert_events SET cleared_at = ?, "
+                "context = json_set(context, '$.closed', ?) "
+                "WHERE rule_id = ? AND cleared_at IS NULL",
+                (now, reason, rule_id),
+            )
         for key, state in self._states.items():
             if key[0] == rule_id and state.event_id is not None:
                 self._states[key] = _PairState()
@@ -648,11 +641,11 @@ class AlertManager:
                 self._close_event(state.event_id, now, state.peak)
                 self._states[(rule_id, _instance)] = _PairState()
 
-        self._db.connect().execute(
-            "DELETE FROM alert_events WHERE cleared_at IS NOT NULL AND cleared_at < ?",
-            (now - EVENT_RETENTION_SECONDS,),
-        )
-        self._db.connect().commit()
+        with self._db.write() as conn:
+            conn.execute(
+                "DELETE FROM alert_events WHERE cleared_at IS NOT NULL AND cleared_at < ?",
+                (now - EVENT_RETENTION_SECONDS,),
+            )
 
     def _apply_kind(
         self, metric: str, per_instance: dict[str, float | None], now: float
@@ -706,11 +699,11 @@ class AlertManager:
         )
         if more_extreme:
             state.peak = value
-            self._db.connect().execute(
-                "UPDATE alert_events SET peak_value = ? WHERE id = ?",
-                (value, state.event_id),
-            )
-            self._db.connect().commit()
+            with self._db.write() as conn:
+                conn.execute(
+                    "UPDATE alert_events SET peak_value = ? WHERE id = ?",
+                    (value, state.event_id),
+                )
         if not ok:
             state.ok_since = None
             return

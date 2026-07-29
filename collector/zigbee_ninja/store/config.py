@@ -18,18 +18,16 @@ class ConfigStore:
         return json.loads(row["value"]) if row else default
 
     def set(self, key: str, value: Any) -> None:
-        conn = self._db.connect()
-        conn.execute(
-            "INSERT INTO settings (key, value) VALUES (?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            (key, json.dumps(value)),
-        )
-        conn.commit()
+        with self._db.write() as conn:
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, json.dumps(value)),
+            )
 
     def delete(self, key: str) -> None:
-        conn = self._db.connect()
-        conn.execute("DELETE FROM settings WHERE key = ?", (key,))
-        conn.commit()
+        with self._db.write() as conn:
+            conn.execute("DELETE FROM settings WHERE key = ?", (key,))
 
     def all(self) -> dict[str, Any]:
         conn = self._db.connect()

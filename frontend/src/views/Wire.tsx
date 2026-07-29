@@ -281,7 +281,7 @@ export default function Wire() {
               ? `${agents} capture daemon${agents > 1 ? "s" : ""} connected`
               : socketState === "open"
                 ? "no capture daemons connected"
-                : socketState}
+                : "no live feed to the collector"}
           </strong>
           {agents > 0 && (
             <span>

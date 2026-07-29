@@ -2,20 +2,31 @@
 
 The ingest task is cancellation-driven: the Engine cancels it on shutdown or
 broker reconfiguration, and the async context manager closes the client cleanly.
-Handler exceptions are swallowed (with a status note): a bug in a downstream
-consumer must never kill the firehose.
+Handler exceptions do not propagate: a bug in a downstream consumer must never
+kill the firehose. They are logged and counted, and the counters reach
+/api/health, because the alternative has already cost us. This handler swallowed
+every probe heartbeat write for 29 hours while `handler_errors` (then read by
+nothing at all) was the only evidence it was happening.
 """
 
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
 import aiomqtt
 
+logger = logging.getLogger(__name__)
+
 MAX_BACKOFF_SECONDS = 30
+
+# A downstream bug can fail on every message, so log the first one and then
+# thin out: a thousand identical tracebacks an hour bury the log without
+# adding anything the counter does not already say.
+_HANDLER_ERROR_LOG_EVERY = 500
 
 # Z2M discovery/registry topics, subscribed BEFORE the "#" firehose. On a broker
 # with a large retained set (a Home Assistant broker holds hundreds of retained
@@ -82,6 +93,7 @@ class MqttIngest:
         self._client: aiomqtt.Client | None = None
         self.status: dict = {"state": "disconnected", "error": None, "connected_since": None}
         self.handler_errors = 0
+        self.last_handler_error: dict | None = None
 
     async def publish(self, topic: str, payload: str, retain: bool = False) -> None:
         client = self._client
@@ -116,8 +128,22 @@ class MqttIngest:
                     async for message in client.messages:
                         try:
                             self._on_message(str(message.topic), bytes(message.payload or b""))
-                        except Exception:
+                        except Exception as exc:
                             self.handler_errors += 1
+                            self.last_handler_error = {
+                                "at": time.time(),
+                                "topic": str(message.topic),
+                                "error": f"{exc.__class__.__name__}: {exc}",
+                            }
+                            if (
+                                self.handler_errors == 1
+                                or self.handler_errors % _HANDLER_ERROR_LOG_EVERY == 0
+                            ):
+                                logger.exception(
+                                    "message handler failed on %s (%d so far)",
+                                    message.topic,
+                                    self.handler_errors,
+                                )
             except aiomqtt.MqttError as exc:
                 self._set_status("error", str(exc) or exc.__class__.__name__)
             except OSError as exc:

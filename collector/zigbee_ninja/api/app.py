@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
+import sqlite3
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -12,6 +14,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.concurrency import run_in_threadpool
 
 from .. import __version__
 from .. import alerts as alerts_module
@@ -34,6 +37,8 @@ from ..store.db import Database
 from ..store.events import RawEventLog
 from ..store.secrets import SecretBox
 from . import auth
+
+logger = logging.getLogger(__name__)
 
 MAX_QUERY_WINDOW_SECONDS = 14 * 24 * 3600
 
@@ -202,16 +207,35 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
             raise HTTPException(status_code=401, detail="Not authenticated")
         return user
 
+    async def require_user_async(request: Request) -> dict:
+        """The same gate for `async def` endpoints, resolved off the loop.
+
+        A blocking sqlite read does not belong on the event loop either way, but
+        the reason this is mandatory rather than tidy: auth is the gate on every
+        endpoint, so running it on the loop thread couples the health of ALL
+        async routes to that one thread's database connection. When that
+        connection went bad, /api/ws/fleet and every async endpoint returned 500
+        together while the threadpool routes served fine, which read as a
+        service-wide outage and pointed the diagnosis at the broker.
+        """
+        return await run_in_threadpool(require_user, request)
+
     # -- health & auth ---------------------------------------------------------
 
     @app.get("/api/health")
     def health() -> dict:
+        # Counts only, no topics or exception text: this endpoint is
+        # unauthenticated. The detail lives on /api/broker and the fleet socket.
+        # Both of these are here because during the 29-hour wedge health was the
+        # one thing still answering and it said "ok" the entire time.
         return {
             "status": "ok",
             "version": __version__,
             "setup_complete": auth.user_count(db) > 0,
             "loop_lag": engine.loop_lag.stats(),
             "loop_activity": engine.loop_activity.stats(),
+            "storage": {"write_failures": db.write_failures},
+            "ingest": {"handler_errors": engine.ingest_status().get("handler_errors", 0)},
         }
 
     @app.post("/api/setup", status_code=201)
@@ -231,6 +255,14 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
         if user is None:
             raise HTTPException(status_code=401, detail="Invalid username or password")
         _set_session_cookie(response, auth.create_session(db, user["id"]))
+        # Housekeeping, and login is the only moment new rows appear, so it
+        # bounds the table exactly. It must never fail the login: expiry is
+        # enforced by resolve_session's predicate, so an unpruned row is dead
+        # weight and nothing more.
+        try:
+            auth.prune_expired_sessions(db)
+        except sqlite3.Error:
+            logger.warning("could not prune expired sessions", exc_info=True)
         return {"username": user["username"]}
 
     @app.post("/api/auth/logout")
@@ -262,7 +294,7 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
 
     @app.post("/api/broker")
     async def broker_set(request: Request, settings: BrokerSettings) -> dict:
-        require_user(request)
+        await require_user_async(request)
         candidate = BrokerConfig(
             host=settings.host,
             port=settings.port,
@@ -288,7 +320,7 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
 
     @app.post("/api/tiles/deploy")
     async def tiles_deploy(request: Request, action: TileAction) -> dict:
-        require_user(request)
+        await require_user_async(request)
         if action.capability == "z2m_extension":
             try:
                 return await engine.tiles.deploy_extension(action.target)
@@ -300,7 +332,7 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
 
     @app.post("/api/tiles/revoke")
     async def tiles_revoke(request: Request, action: TileAction) -> dict:
-        require_user(request)
+        await require_user_async(request)
         if action.capability == "z2m_extension":
             try:
                 return await engine.tiles.revoke_extension(action.target)
@@ -318,7 +350,7 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
 
     @app.post("/api/tiles/revoke_all")
     async def tiles_revoke_all(request: Request) -> dict:
-        require_user(request)
+        await require_user_async(request)
         try:
             revoked = await engine.tiles.revoke_all()
         except RuntimeError as exc:
@@ -415,7 +447,7 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
     @app.post("/api/recommendations/run", status_code=202)
     async def recommendations_run(request: Request) -> dict:
         """Run every detector now instead of waiting for the hourly pass."""
-        require_user(request)
+        await require_user_async(request)
         return await asyncio.to_thread(engine.recommendations.run)
 
     @app.post("/api/recommendations/{rec_id}/state")
@@ -655,7 +687,7 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
 
     @app.post("/api/topology/pull")
     async def topology_pull(request: Request, action: TileAction) -> dict:
-        require_user(request)
+        await require_user_async(request)
         if action.capability != tiles_module.CAPABILITY_TOPOLOGY:
             raise HTTPException(status_code=400, detail="Unknown capability")
         try:
@@ -719,7 +751,7 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
 
     @app.post("/api/calibration/run", status_code=202)
     async def calibration_run(request: Request, settings: CalibrationRunRequest) -> dict:
-        require_user(request)
+        await require_user_async(request)
         try:
             return await engine.calibration.start(
                 settings.instance, settings.target or "", settings.authorization
@@ -745,7 +777,7 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
     async def calibration_bulk_run(
         request: Request, settings: CalibrationBulkRunRequest
     ) -> dict:
-        require_user(request)
+        await require_user_async(request)
         try:
             return await engine.calibration.start_bulk(settings.authorization)
         except CalibrationRejected as exc:
@@ -772,7 +804,7 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
     async def calibration_replay_run(
         request: Request, settings: ReplayRunRequest
     ) -> dict:
-        require_user(request)
+        await require_user_async(request)
         try:
             return await engine.calibration.start_replay(
                 settings.instance, settings.authorization
@@ -901,7 +933,7 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
 
     @app.post("/api/ha")
     async def ha_set(request: Request, settings: HaSettings) -> dict:
-        require_user(request)
+        await require_user_async(request)
         candidate = HaConfig(url=settings.url.rstrip("/"), token=settings.token)
         error = await test_ha(candidate)
         if error is not None:
@@ -961,7 +993,7 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
     @app.websocket("/api/ws/fleet")
     async def ws_fleet(websocket: WebSocket) -> None:
         token = websocket.cookies.get(SESSION_COOKIE)
-        user = auth.resolve_session(db, token) if token else None
+        user = await run_in_threadpool(auth.resolve_session, db, token) if token else None
         if user is None:
             await websocket.close(code=4401)
             return

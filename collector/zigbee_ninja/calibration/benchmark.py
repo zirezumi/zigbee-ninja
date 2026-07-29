@@ -1363,13 +1363,12 @@ class CalibrationManager:
             "bridge_errors": 0,
             "environment": plan.get("environment", {}),
         }
-        conn = self._db.connect()
-        conn.execute(
-            "INSERT INTO calibrations (instance, target, started_at, finished_at, "
-            "status, knee_eps, detail) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (plan["instance"], plan["target"], now, now, "skipped", None, json.dumps(detail)),
-        )
-        conn.commit()
+        with self._db.write() as conn:
+            conn.execute(
+                "INSERT INTO calibrations (instance, target, started_at, finished_at, "
+                "status, knee_eps, detail) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (plan["instance"], plan["target"], now, now, "skipped", None, json.dumps(detail)),
+            )
 
     def _record(self, run: _ActiveRun, status: str) -> None:
         replay = run.plan.get("mode") == "replay"
@@ -1420,21 +1419,20 @@ class CalibrationManager:
             "bridge_errors": run.bridge_errors,
             "environment": run.plan.get("environment", {}),
         }
-        conn = self._db.connect()
-        conn.execute(
-            "INSERT INTO calibrations (instance, target, started_at, finished_at, "
-            "status, knee_eps, detail) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                run.plan["instance"],
-                run.plan["target"],
-                run.started_at,
-                self._clock(),
-                status,
-                knee_eps,
-                json.dumps(detail),
-            ),
-        )
-        conn.commit()
+        with self._db.write() as conn:
+            conn.execute(
+                "INSERT INTO calibrations (instance, target, started_at, finished_at, "
+                "status, knee_eps, detail) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    run.plan["instance"],
+                    run.plan["target"],
+                    run.started_at,
+                    self._clock(),
+                    status,
+                    knee_eps,
+                    json.dumps(detail),
+                ),
+            )
 
     def _replay_result(self, run: _ActiveRun, verdict: str | None) -> dict:
         """The replay's outcome beside its request: the achieved shape, the
