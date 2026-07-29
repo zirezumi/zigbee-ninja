@@ -226,26 +226,25 @@ class TopologyPuller:
         value = (response.get("data") or {}).get("value") or {}
         summary = summarize(value)
         pulled_at = self._clock()
-        conn = self._db.connect()
-        conn.execute(
-            "INSERT INTO topology_snapshots (instance, pulled_at, node_count, link_count, "
-            "summary, raw) VALUES (?, ?, ?, ?, ?, ?)",
-            (
-                base,
-                pulled_at,
-                summary["node_count"],
-                summary["link_count"],
-                json.dumps(summary),
-                json.dumps(value),
-            ),
-        )
-        conn.execute(
-            "DELETE FROM topology_snapshots WHERE instance = ? AND id NOT IN "
-            "(SELECT id FROM topology_snapshots WHERE instance = ? "
-            "ORDER BY pulled_at DESC LIMIT ?)",
-            (base, base, max(1, int(self._snapshots_kept()))),
-        )
-        conn.commit()
+        with self._db.write() as conn:
+            conn.execute(
+                "INSERT INTO topology_snapshots (instance, pulled_at, node_count, link_count, "
+                "summary, raw) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    base,
+                    pulled_at,
+                    summary["node_count"],
+                    summary["link_count"],
+                    json.dumps(summary),
+                    json.dumps(value),
+                ),
+            )
+            conn.execute(
+                "DELETE FROM topology_snapshots WHERE instance = ? AND id NOT IN "
+                "(SELECT id FROM topology_snapshots WHERE instance = ? "
+                "ORDER BY pulled_at DESC LIMIT ?)",
+                (base, base, max(1, int(self._snapshots_kept()))),
+            )
         return {"instance": base, "pulled_at": pulled_at, **summary}
 
     # -- read side -----------------------------------------------------------------

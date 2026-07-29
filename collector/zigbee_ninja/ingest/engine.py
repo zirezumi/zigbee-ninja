@@ -632,7 +632,11 @@ class Engine:
     def ingest_status(self) -> dict:
         if self._ingest is None:
             return {"state": "unconfigured", "error": None, "connected_since": None}
-        return dict(self._ingest.status)
+        return {
+            **self._ingest.status,
+            "handler_errors": self._ingest.handler_errors,
+            "last_handler_error": self._ingest.last_handler_error,
+        }
 
     # -- runtime settings (DESIGN.md §12) ------------------------------------------
 
@@ -877,7 +881,9 @@ class Engine:
     # -- rollups & persistence -------------------------------------------------
 
     def flush_rollups(self) -> int:
-        conn = self._db.connect()
+        # One transaction PER BATCH, deliberately, not one around the whole
+        # pass: this is the longest writer in the process and every other
+        # writer waits behind it on a busy_timeout it can exhaust.
         now = int(time.time())
         written = 0
         settings = self.runtime_settings()
@@ -886,95 +892,95 @@ class Engine:
 
         rows = self.rates.drain_completed_windows()
         if rows:
-            conn.executemany(
-                "INSERT OR REPLACE INTO series_10s (ts, instance, kind, count) "
-                "VALUES (?, ?, ?, ?)",
-                rows,
-            )
-            conn.execute("DELETE FROM series_10s WHERE ts < ?", (rollup_cutoff,))
+            with self._db.write() as conn:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO series_10s (ts, instance, kind, count) "
+                    "VALUES (?, ?, ?, ?)",
+                    rows,
+                )
+                conn.execute("DELETE FROM series_10s WHERE ts < ?", (rollup_cutoff,))
             written += len(rows)
-            conn.commit()
 
         class_rows = self.class_rates.drain_completed_windows()
         if class_rows:
-            conn.executemany(
-                "INSERT OR REPLACE INTO attribution_10s (ts, instance, klass, count) "
-                "VALUES (?, ?, ?, ?)",
-                class_rows,
-            )
-            conn.execute("DELETE FROM attribution_10s WHERE ts < ?", (rollup_cutoff,))
+            with self._db.write() as conn:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO attribution_10s (ts, instance, klass, count) "
+                    "VALUES (?, ?, ?, ?)",
+                    class_rows,
+                )
+                conn.execute("DELETE FROM attribution_10s WHERE ts < ?", (rollup_cutoff,))
             written += len(class_rows)
-            conn.commit()
 
         airtime_rows = self.tap.airtime.drain_completed_windows()
         if airtime_rows:
-            conn.executemany(
-                "INSERT OR REPLACE INTO airtime_10s (ts, instance, bucket, airtime_us, frames) "
-                "VALUES (?, ?, ?, ?, ?)",
-                airtime_rows,
-            )
-            conn.execute("DELETE FROM airtime_10s WHERE ts < ?", (rollup_cutoff,))
+            with self._db.write() as conn:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO airtime_10s (ts, instance, bucket, airtime_us, frames) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    airtime_rows,
+                )
+                conn.execute("DELETE FROM airtime_10s WHERE ts < ?", (rollup_cutoff,))
             written += len(airtime_rows)
-            conn.commit()
 
         latency_rows = self.tap.latency.drain_completed_windows()
         if latency_rows:
-            conn.executemany(
-                "INSERT OR REPLACE INTO latency_10s (ts, instance, count, p50_ms, p95_ms, max_ms) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                latency_rows,
-            )
-            conn.execute("DELETE FROM latency_10s WHERE ts < ?", (rollup_cutoff,))
+            with self._db.write() as conn:
+                conn.executemany(
+                    "INSERT OR REPLACE INTO latency_10s "
+                    "(ts, instance, count, p50_ms, p95_ms, max_ms) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    latency_rows,
+                )
+                conn.execute("DELETE FROM latency_10s WHERE ts < ?", (rollup_cutoff,))
             written += len(latency_rows)
-            conn.commit()
 
         finalized = self.chains.drain_finalized()
         if finalized:
-            conn.executemany(
-                "INSERT INTO chains (instance, target, verb, opened_at, client, "
-                "payload_size, echo_count, first_echo_ms, redundant, payload_digest, "
-                "clock_skew_ms, payload_keys) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [
-                    (
-                        chain.instance,
-                        chain.target,
-                        chain.verb,
-                        chain.opened_at,
-                        chain.client,
-                        chain.payload_size,
-                        chain.echoes,
-                        chain.first_echo_ms,
-                        int(chain.redundant),
-                        chain.payload_digest,
-                        chain.clock_skew_ms,
-                        chain.payload_keys,
-                    )
-                    for chain in finalized
-                ],
-            )
-            conn.execute("DELETE FROM chains WHERE opened_at < ?", (chain_cutoff,))
+            with self._db.write() as conn:
+                conn.executemany(
+                    "INSERT INTO chains (instance, target, verb, opened_at, client, "
+                    "payload_size, echo_count, first_echo_ms, redundant, payload_digest, "
+                    "clock_skew_ms, payload_keys) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    [
+                        (
+                            chain.instance,
+                            chain.target,
+                            chain.verb,
+                            chain.opened_at,
+                            chain.client,
+                            chain.payload_size,
+                            chain.echoes,
+                            chain.first_echo_ms,
+                            int(chain.redundant),
+                            chain.payload_digest,
+                            chain.clock_skew_ms,
+                            chain.payload_keys,
+                        )
+                        for chain in finalized
+                    ],
+                )
+                conn.execute("DELETE FROM chains WHERE opened_at < ?", (chain_cutoff,))
             written += len(finalized)
-            conn.commit()
 
-        written += self._flush_ledger(conn, finalized)
-        conn.commit()
+        with self._db.write() as conn:
+            written += self._flush_ledger(conn, finalized)
 
         journal_pending, self._journal_pending = self._journal_pending, []
         if journal_pending:
-            conn.executemany(
-                "INSERT INTO journal (ts, instance, kind, subject, detail) "
-                "VALUES (?, ?, ?, ?, ?)",
-                journal_pending,
-            )
-            conn.execute(
-                "DELETE FROM journal WHERE ts < ?",
-                (time.time() - JOURNAL_RETENTION_DAYS * 86400,),
-            )
+            with self._db.write() as conn:
+                conn.executemany(
+                    "INSERT INTO journal (ts, instance, kind, subject, detail) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    journal_pending,
+                )
+                conn.execute(
+                    "DELETE FROM journal WHERE ts < ?",
+                    (time.time() - JOURNAL_RETENTION_DAYS * 86400,),
+                )
             written += len(journal_pending)
 
-        if written:
-            conn.commit()
         return written
 
     def _flush_ledger(self, conn, finalized: list[Chain]) -> int:

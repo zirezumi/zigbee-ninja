@@ -504,6 +504,15 @@ Roadmap: README.md.
   capability permission-gated and revocable via the footprint model; zigbee-ninja's
   own traffic self-attributed; every metric provenance-tagged
   (measured/modeled/inferred); single-image architecture: no sidecar services.
+- **Every database write goes through `Database.write()`; `commit()` belongs
+  nowhere outside `store/db.py`.** Enforced by `tests/test_write_discipline.py`,
+  because the call site that breaks it looks completely ordinary. Python's
+  sqlite3 opens the transaction and never rolls it back, so a write that raises
+  leaves the connection holding a stale snapshot, and SQLite then refuses every
+  later write on it instantly and permanently: `busy_timeout` cannot help, and
+  only that one thread's connection is affected. It cost 29 hours of silently
+  dropped writes and a dead GUI once (DESIGN §12). Related: never print a
+  socket's state as a subsystem's state in a view (DESIGN §13).
 - **GUI principle (owner mandate, 2026-07-16):** every view must be
   understandable to someone with a cursory grasp of network engineering: all
   granular data available, cogently presented; plain-language labels with

@@ -810,6 +810,38 @@ Core entities: `Instance`, `Device`, `Group`, `Probe/Tile`, `FrameRecord`,
 `Chain`, `TopologySnapshot`, `Calibration`, `SeriesPoint`,
 `AlertRule/AlertEvent`: each carrying provenance (source tiers) and confidence.
 
+**Write discipline (non-negotiable, and enforced by
+`tests/test_write_discipline.py`):** every write goes through
+`Database.write()`, and `commit()` appears nowhere outside `store/db.py`.
+Connections are thread-local, and Python's sqlite3 issues the `BEGIN` before a
+DML statement while leaving the rollback to nobody, so a statement that raises
+returns with its transaction still open. That connection is then holding a read
+snapshot older than every subsequent commit, and SQLite does not wait on a stale
+snapshot: it refuses the upgrade immediately, so `busy_timeout` is irrelevant and
+raising it fixes nothing. The connection is finished for the life of the process,
+and only that one connection, which is what makes the symptom so confusing.
+
+Measured live on 2026-07-28/29: a single timed-out write (the flush holds its
+transaction longer than the 5 s budget under load) wedged the event-loop thread's
+connection for **29 hours**. Probe heartbeat writes were dropped the entire time
+with no log line, because `MqttIngest` counted handler failures into a field that
+nothing read; `/api/ws/fleet` and every `async def` endpoint returned 500 while
+the threadpool endpoints served normally; and the WAL could not checkpoint past
+the pinned snapshot, reaching 2.0 GB against a 260 MB database.
+
+Three consequences are load-bearing and should not be quietly undone:
+
+- `write()` rolls back an inherited transaction on entry as well as cleaning up
+  its own failure, so a leak from anywhere self-heals at the next write. This is
+  safe only while no `write()` block nests inside another, which the second guard
+  in that test file enforces.
+- Session resolution is **read only** and enforces expiry with a SQL predicate
+  (§15). Making it read-only alone would not have been enough: a read on a stale
+  snapshot returns stale rows, so a valid new session would read as absent.
+- `journal_size_limit` bounds the WAL, and failure counts (`storage.write_failures`,
+  `ingest.handler_errors`) are on `/api/health`. During the outage health
+  answered `ok` throughout, because nothing it reported could express this.
+
 ## §13 API & GUI
 
 **Backend:** Python 3.12, FastAPI; REST for configuration/queries, WebSocket for
@@ -819,7 +851,17 @@ time series, d3 for structural views (attribution breakdowns, topology graph).
 Static bundle served by the collector; views are addressed by URL hash so
 refresh and the browser's back button preserve navigation. **Auth:** single
 admin account (argon2) standalone; HA ingress trust in add-on mode
-(fast-follow). Default port `8686`.
+(fast-follow). Default port `8686`. Session cookies resolve read-only, with
+expiry enforced by the query rather than by the housekeeping prune (§12);
+`async def` endpoints and the WebSocket routes resolve theirs in the threadpool,
+so the gate on every route does not depend on the event-loop thread's database
+connection.
+
+**A live view must never report the socket's state as the subsystem's state.**
+The Fleet banner printed `broker?.state ?? socketState`, so a WebSocket that
+could not open rendered as `Broker: closed` next to a Reconfigure button, while
+the broker was in fact connected and the collector was the thing at fault. When
+the feed is down the views now say so and label the broker's state unknown.
 
 **Terminology note:** the GUI presents the calibrated knee (§10, §11) as the
 **capacity limit**: "knee" remains the engineering term throughout this

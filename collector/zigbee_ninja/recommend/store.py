@@ -151,97 +151,96 @@ class RecommendationStore:
         must not delete the open rows its last good run produced.
         """
         now = self._clock()
-        conn = self._db.connect()
-        existing = {
-            row["id"]: dict(row)
-            for row in conn.execute(
-                "SELECT * FROM recommendations WHERE detector = ?", (detector,)
-            )
-        }
-        counts = {"inserted": 0, "updated": 0, "reopened": 0, "deleted": 0, "held": 0}
-        seen: set[str] = set()
-        for item in findings:
-            rec_id = item.id
-            seen.add(rec_id)
-            row = existing.get(rec_id)
-            payload = (
-                item.finding,
-                json.dumps(item.action),
-                json.dumps(item.saving),
-                item.confidence,
-                json.dumps(item.evidence),
-                json.dumps(item.fingerprint),
-                json.dumps(item.significance),
-                json.dumps(item.cost),
-                now,
-            )
-            if row is None:
-                conn.execute(
-                    "INSERT INTO recommendations (id, detector, instance, subject, "
-                    "finding, action, saving, confidence, evidence, state, "
-                    "fingerprint, significance, cost, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)",
-                    (
-                        rec_id,
-                        item.detector,
-                        item.instance,
-                        item.subject,
-                        item.finding,
-                        json.dumps(item.action),
-                        json.dumps(item.saving),
-                        item.confidence,
-                        json.dumps(item.evidence),
-                        json.dumps(item.fingerprint),
-                        json.dumps(item.significance),
-                        json.dumps(item.cost),
-                        now,
-                        now,
-                    ),
+        with self._db.write() as conn:
+            existing = {
+                row["id"]: dict(row)
+                for row in conn.execute(
+                    "SELECT * FROM recommendations WHERE detector = ?", (detector,)
                 )
-                counts["inserted"] += 1
-            elif row["state"] == "open":
-                conn.execute(
-                    "UPDATE recommendations SET finding = ?, action = ?, saving = ?, "
-                    "confidence = ?, evidence = ?, fingerprint = ?, significance = ?, "
-                    "cost = ?, updated_at = ? "
-                    "WHERE id = ?",
-                    (*payload, rec_id),
+            }
+            counts = {"inserted": 0, "updated": 0, "reopened": 0, "deleted": 0, "held": 0}
+            seen: set[str] = set()
+            for item in findings:
+                rec_id = item.id
+                seen.add(rec_id)
+                row = existing.get(rec_id)
+                payload = (
+                    item.finding,
+                    json.dumps(item.action),
+                    json.dumps(item.saving),
+                    item.confidence,
+                    json.dumps(item.evidence),
+                    json.dumps(item.fingerprint),
+                    json.dumps(item.significance),
+                    json.dumps(item.cost),
+                    now,
                 )
-                counts["updated"] += 1
-            elif row["state"] == "dismissed":
-                old_fingerprint = json.loads(row["fingerprint"] or "{}")
-                if materially_changed(old_fingerprint, item.fingerprint):
+                if row is None:
+                    conn.execute(
+                        "INSERT INTO recommendations (id, detector, instance, subject, "
+                        "finding, action, saving, confidence, evidence, state, "
+                        "fingerprint, significance, cost, created_at, updated_at) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)",
+                        (
+                            rec_id,
+                            item.detector,
+                            item.instance,
+                            item.subject,
+                            item.finding,
+                            json.dumps(item.action),
+                            json.dumps(item.saving),
+                            item.confidence,
+                            json.dumps(item.evidence),
+                            json.dumps(item.fingerprint),
+                            json.dumps(item.significance),
+                            json.dumps(item.cost),
+                            now,
+                            now,
+                        ),
+                    )
+                    counts["inserted"] += 1
+                elif row["state"] == "open":
                     conn.execute(
                         "UPDATE recommendations SET finding = ?, action = ?, saving = ?, "
                         "confidence = ?, evidence = ?, fingerprint = ?, significance = ?, "
-                        "cost = ?, updated_at = ?, "
-                        "state = 'open', state_changed_at = ?, state_note = ? "
+                        "cost = ?, updated_at = ? "
                         "WHERE id = ?",
-                        (
-                            *payload,
-                            now,
-                            "reopened: inputs changed materially since dismissal",
-                            rec_id,
-                        ),
+                        (*payload, rec_id),
                     )
-                    counts["reopened"] += 1
+                    counts["updated"] += 1
+                elif row["state"] == "dismissed":
+                    old_fingerprint = json.loads(row["fingerprint"] or "{}")
+                    if materially_changed(old_fingerprint, item.fingerprint):
+                        conn.execute(
+                            "UPDATE recommendations SET finding = ?, action = ?, saving = ?, "
+                            "confidence = ?, evidence = ?, fingerprint = ?, significance = ?, "
+                            "cost = ?, updated_at = ?, "
+                            "state = 'open', state_changed_at = ?, state_note = ? "
+                            "WHERE id = ?",
+                            (
+                                *payload,
+                                now,
+                                "reopened: inputs changed materially since dismissal",
+                                rec_id,
+                            ),
+                        )
+                        counts["reopened"] += 1
+                    else:
+                        counts["held"] += 1
                 else:
+                    # applied / verified / regressed: verification territory.
                     counts["held"] += 1
-            else:
-                # applied / verified / regressed: verification territory.
-                counts["held"] += 1
-        stale_open = [
-            rec_id
-            for rec_id, row in existing.items()
-            if row["state"] == "open" and rec_id not in seen
-        ]
-        if stale_open:
-            conn.executemany(
-                "DELETE FROM recommendations WHERE id = ?",
-                [(rec_id,) for rec_id in stale_open],
-            )
-            counts["deleted"] = len(stale_open)
-        conn.commit()
+            stale_open = [
+                rec_id
+                for rec_id, row in existing.items()
+                if row["state"] == "open" and rec_id not in seen
+            ]
+            if stale_open:
+                conn.executemany(
+                    "DELETE FROM recommendations WHERE id = ?",
+                    [(rec_id,) for rec_id in stale_open],
+                )
+                counts["deleted"] = len(stale_open)
         return counts
 
     # -- lifecycle -------------------------------------------------------------------
@@ -263,12 +262,12 @@ class RecommendationStore:
         if (row["state"], state) not in ALLOWED_TRANSITIONS:
             raise ValueError(f"Cannot move a {row['state']} recommendation to {state}")
         now = self._clock()
-        conn.execute(
-            "UPDATE recommendations SET state = ?, state_changed_at = ?, state_note = ? "
-            "WHERE id = ?",
-            (state, now, note, rec_id),
-        )
-        conn.commit()
+        with self._db.write() as conn:
+            conn.execute(
+                "UPDATE recommendations SET state = ?, state_changed_at = ?, state_note = ? "
+                "WHERE id = ?",
+                (state, now, note, rec_id),
+            )
         return self.get(rec_id)
 
     # -- verification (V2_PROPOSAL.md §V2-6) -----------------------------------------
@@ -296,34 +295,31 @@ class RecommendationStore:
     def mark_applied_auto(self, rec_id: str, boundary: float, note: str) -> None:
         """Journal-detected application: the boundary is when the registry
         actually saw the change, not when the pass noticed it."""
-        conn = self._db.connect()
-        conn.execute(
-            "UPDATE recommendations SET state = 'applied', state_changed_at = ?, "
-            "state_note = ? WHERE id = ? AND state = 'open'",
-            (boundary, note, rec_id),
-        )
-        conn.commit()
+        with self._db.write() as conn:
+            conn.execute(
+                "UPDATE recommendations SET state = 'applied', state_changed_at = ?, "
+                "state_note = ? WHERE id = ? AND state = 'open'",
+                (boundary, note, rec_id),
+            )
 
     def record_verification(self, rec_id: str, receipts: dict) -> None:
         """Attach in-progress verification receipts without a state change."""
-        conn = self._db.connect()
-        conn.execute(
-            "UPDATE recommendations SET verification = ? WHERE id = ?",
-            (json.dumps(receipts), rec_id),
-        )
-        conn.commit()
+        with self._db.write() as conn:
+            conn.execute(
+                "UPDATE recommendations SET verification = ? WHERE id = ?",
+                (json.dumps(receipts), rec_id),
+            )
 
     def set_verdict(self, rec_id: str, verdict_state: str, note: str, receipts: dict) -> None:
         """Verification's own transition: applied to verified or regressed."""
         if verdict_state not in ("verified", "regressed"):
             raise ValueError(f"Not a verification verdict: {verdict_state}")
-        conn = self._db.connect()
-        conn.execute(
-            "UPDATE recommendations SET state = ?, state_changed_at = ?, "
-            "state_note = ?, verification = ? WHERE id = ? AND state = 'applied'",
-            (verdict_state, self._clock(), note, json.dumps(receipts), rec_id),
-        )
-        conn.commit()
+        with self._db.write() as conn:
+            conn.execute(
+                "UPDATE recommendations SET state = ?, state_changed_at = ?, "
+                "state_note = ?, verification = ? WHERE id = ? AND state = 'applied'",
+                (verdict_state, self._clock(), note, json.dumps(receipts), rec_id),
+            )
 
     # -- read side --------------------------------------------------------------------
 

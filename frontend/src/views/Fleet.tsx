@@ -570,17 +570,31 @@ export default function Fleet({ onReconfigure, brokerInfo }: FleetProps) {
 
   return (
     <>
-      <div className={`banner ${broker?.state === "connected" ? "ok" : "warn"}`}>
+      <div className={`banner ${broker && broker.state === "connected" ? "ok" : "warn"}`}>
         <span>
-          Broker: <strong>{broker?.state ?? socketState}</strong>
-          {brokerAddress ? ` (${brokerAddress})` : ""}
-          {broker?.error ? `: ${broker.error}` : ""}
-          {broker?.state === "connected" ? (
-            <span title="Total message rate across every topic on this broker: Zigbee2MQTT traffic and everything else sharing it">
-              {` · ${globalRate} msg/s`}
-            </span>
+          {broker ? (
+            <>
+              Broker: <strong>{broker.state}</strong>
+              {brokerAddress ? ` (${brokerAddress})` : ""}
+              {broker.error ? `: ${broker.error}` : ""}
+              {broker.state === "connected" ? (
+                <span title="Total message rate across every topic on this broker: Zigbee2MQTT traffic and everything else sharing it">
+                  {` · ${globalRate} msg/s`}
+                </span>
+              ) : (
+                ""
+              )}
+            </>
           ) : (
-            ""
+            // Never fall back to the socket's state in a field labelled
+            // "Broker". They are different things, and printing one as the
+            // other sent a real diagnosis to the wrong subsystem: the broker
+            // was connected the whole time, the page just could not hear it.
+            <span title="This page gets its live data over a WebSocket to the collector, and that connection is not up, so nothing here reflects the broker's real state. Check the collector, not the broker.">
+              Live feed to collector:{" "}
+              <strong>{socketState === "closed" ? "not connected" : socketState}</strong>
+              {brokerAddress ? ` · broker at ${brokerAddress}, state unknown` : ""}
+            </span>
           )}
         </span>
         <button className="ghost small" onClick={onReconfigure}>
@@ -602,7 +616,16 @@ export default function Fleet({ onReconfigure, brokerInfo }: FleetProps) {
         </div>
       )}
 
-      {instances.length === 0 ? (
+      {instances.length === 0 && !broker ? (
+        <div className="panel">
+          <p className="panel-kicker">No live feed</p>
+          <p className="hint">
+            This list is empty because the page has no connection to the collector, not because
+            discovery found nothing. Whatever the coordinators are doing right now, this view cannot
+            see it. Check that the collector is running and that you are still signed in.
+          </p>
+        </div>
+      ) : instances.length === 0 ? (
         <div className="panel">
           <p className="panel-kicker">Waiting for discovery</p>
           <p className="hint">

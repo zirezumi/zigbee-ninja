@@ -2,9 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+# A checkpoint returns the WAL to this size. Without it the file keeps its
+# high-water mark forever: one oversized transaction (or a stretch where
+# checkpointing was blocked) leaves a WAL that never shrinks again. Observed
+# live at 2.0 GB against a 260 MB database.
+_WAL_SIZE_LIMIT_BYTES = 128 * 1024 * 1024
 
 # Append-only list; each entry is one migration script. The applied count is
 # tracked in schema_version, so editing an already-shipped entry is forbidden.
@@ -231,6 +242,7 @@ class Database:
         data_dir.mkdir(parents=True, exist_ok=True)
         self.path = data_dir / "zigbee-ninja.db"
         self._local = threading.local()
+        self.write_failures = 0
         self._migrate()
 
     def connect(self) -> sqlite3.Connection:
@@ -240,12 +252,90 @@ class Database:
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA foreign_keys=ON")
-            # Writers run on the flush worker, API threads, and the detector
-            # thread; WAL allows one at a time, so brief collisions wait
-            # instead of raising SQLITE_BUSY.
+            conn.execute(f"PRAGMA journal_size_limit={_WAL_SIZE_LIMIT_BYTES}")
+            # Writers run on the flush worker, API threads, the event loop and
+            # the detector thread; WAL admits one at a time, so a collision
+            # waits here rather than raising immediately. It is a bounded wait,
+            # NOT a guarantee: the events/rollup flush has been measured holding
+            # its transaction past this budget, and the writer that gives up
+            # raises SQLITE_BUSY. Every write therefore has to go through
+            # write() below, which is what keeps a timed-out writer from
+            # poisoning the connection it timed out on.
             conn.execute("PRAGMA busy_timeout=5000")
             self._local.conn = conn
         return conn
+
+    @contextmanager
+    def write(self) -> Iterator[sqlite3.Connection]:
+        """Run a write, committing on success and leaving NO transaction open on
+        failure.
+
+        This exists because of how Python's sqlite3 legacy mode fails. It issues
+        the BEGIN itself before a DML statement, but rolling back is nobody's
+        job, so a statement that raises (SQLITE_BUSY against a slow flush, say)
+        returns with the transaction still OPEN. That connection now holds a read
+        snapshot older than every later commit, and SQLite will not upgrade a
+        stale snapshot: it refuses instantly, so busy_timeout cannot help and
+        never will, because waiting cannot make the snapshot current. The
+        connection is wedged for the life of the process.
+
+        Live consequence, 2026-07-28/29: one such timeout wedged the event-loop
+        thread's connection for 29 hours. Probe heartbeat writes were lost the
+        whole time (silently: see MqttIngest.handler_errors) and every async
+        endpoint, including /api/ws/fleet, returned 500 while the threadpool
+        connections stayed perfectly healthy. It also pinned the WAL, which
+        cannot checkpoint past the oldest live snapshot.
+        """
+        conn = self.connect()
+        if conn.in_transaction:
+            # Same reasoning as fresh_read, and the reason this is checked on the
+            # way IN as well as cleaned up on the way out: no write() block nests
+            # inside another (tests/test_write_discipline.py keeps it that way),
+            # so a transaction already open here was leaked by something that
+            # failed earlier, and a leaked transaction is precisely what wedges
+            # the connection for good.
+            logger.warning("rolling back a leaked transaction before a write")
+            conn.rollback()
+        try:
+            yield conn
+            conn.commit()
+        except BaseException:
+            self.write_failures += 1
+            try:
+                conn.rollback()
+            except sqlite3.Error:
+                # A connection too sick to roll back is not reusable.
+                self.discard_connection()
+            raise
+
+    def fresh_read(self) -> sqlite3.Connection:
+        """A connection that will not serve the next read from a stale snapshot.
+
+        Leaf reads only. Ending the transaction is safe here precisely because
+        there is no caller further out holding uncommitted work on this thread;
+        calling it mid-transaction would discard that work.
+        """
+        conn = self.connect()
+        if conn.in_transaction:
+            # Nothing legitimate left this open, so it is a leaked transaction
+            # from an earlier failure. Reads on it are stale, which is worse
+            # than loud: a stale read of `sessions` cannot see a session that
+            # was created after the snapshot, so a valid cookie reads as
+            # expired.
+            logger.warning("discarding a leaked transaction before a read")
+            conn.rollback()
+        return conn
+
+    def discard_connection(self) -> None:
+        """Drop this thread's connection so the next caller reconnects clean."""
+        conn: sqlite3.Connection | None = getattr(self._local, "conn", None)
+        if conn is None:
+            return
+        self._local.conn = None
+        try:
+            conn.close()
+        except sqlite3.Error:
+            pass
 
     def _migrate(self) -> None:
         conn = self.connect()
