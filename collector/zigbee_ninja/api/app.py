@@ -1012,7 +1012,16 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
                         "fusion": engine.fusion_view(),
                         "alerts": engine.alerts.active_brief(),
                     }
-                await websocket.send_json(snapshot)
+                try:
+                    await websocket.send_json(snapshot)
+                except RuntimeError:
+                    # A client that goes away without a close frame (abrupt TCP
+                    # drop, killed tab, a probe that just hangs up) leaves the
+                    # transport closed underneath us, and the send raises here
+                    # instead of arriving as WebSocketDisconnect. Scoped to the
+                    # send alone on purpose: a RuntimeError from building the
+                    # snapshot above is a real bug and must still propagate.
+                    break
                 await asyncio.sleep(1)
         except WebSocketDisconnect:
             pass
