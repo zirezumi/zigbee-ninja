@@ -234,6 +234,10 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
             "setup_complete": auth.user_count(db) > 0,
             "loop_lag": engine.loop_lag.stats(),
             "loop_activity": engine.loop_activity.stats(),
+            # Scheduled full collections, so a pause in loop_lag can be told
+            # apart from one nobody asked for: gc_gen2 in loop_activity should
+            # trend to zero while gc_maintenance carries the disclosed cost.
+            "gc_maintenance": engine.gc_maintenance.stats(),
             "storage": {"write_failures": db.write_failures},
             "ingest": {"handler_errors": engine.ingest_status().get("handler_errors", 0)},
         }

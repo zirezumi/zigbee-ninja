@@ -10,6 +10,14 @@ def test_health_reports_version_and_setup_state(client):
     assert body["setup_complete"] is False
     assert "recent_stalls" in body["loop_lag"]
     assert set(body["loop_activity"]) == {"totals", "recent_slow"}
+    # Scheduled full collections are disclosed here so a loop stall can be
+    # attributed rather than merely counted.
+    assert set(body["gc_maintenance"]) == {
+        "interval_seconds",
+        "runs",
+        "next_due_in_s",
+        "recent_windows",
+    }
 
 
 def test_health_setup_complete_after_setup(client):

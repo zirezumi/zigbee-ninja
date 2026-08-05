@@ -1,16 +1,21 @@
 """The collector must never let its own runtime distort what it reports:
 loop-lag telemetry, thread-safe chain draining, and the self-health seed."""
 
+import gc
 import threading
 
 from zigbee_ninja import alerts
 from zigbee_ninja.attribution.chains import ChainTracker
 from zigbee_ninja.ingest.engine import (
     ACTIVITY_ENTRIES_KEPT,
+    GC_GEN2_THRESHOLD,
+    GC_MAINTENANCE_WINDOWS_KEPT,
     LOOP_LAG_STALLS_KEPT,
     LOOP_LAG_WINDOW_SECONDS,
+    GcMaintenance,
     LoopActivityLog,
     LoopLagMonitor,
+    _quiet_full_collections,
 )
 
 
@@ -87,6 +92,117 @@ def test_activity_log_times_gc_pauses():
     # records nothing rather than a garbage duration.
     log._on_gc("stop", {"generation": 1})
     assert "gc_gen1" not in log.stats()["totals"]
+
+
+def test_gc_maintenance_skips_the_startup_interval_then_comes_due():
+    now = {"t": 1000.0}
+    keeper = GcMaintenance(
+        interval_seconds=100.0, clock=lambda: now["t"], collect=lambda: 0
+    )
+    # Startup has just collected and frozen, so the first check must arm the
+    # clock rather than fire a second pause for nothing to reclaim.
+    assert keeper.due() is False
+    now["t"] += 99.0
+    assert keeper.due() is False
+    now["t"] += 2.0
+    assert keeper.due() is True
+
+
+def test_gc_maintenance_records_bounded_wall_clock_windows():
+    now = {"mono": 1000.0, "wall": 1_700_000_000.0}
+    keeper = GcMaintenance(
+        interval_seconds=10.0,
+        clock=lambda: now["mono"],
+        wall=lambda: now["wall"],
+        collect=lambda: (now.__setitem__("mono", now["mono"] + 1.25), 42)[1],
+    )
+    window = keeper.run()
+    assert window == {
+        "at": 1_700_000_000.0,
+        "until": 1_700_000_001.25,
+        "ms": 1250.0,
+        "freed": 42,
+    }
+    # Running resets the interval, so a cycle cannot re-fire immediately.
+    assert keeper.due() is False
+
+    for _ in range(GC_MAINTENANCE_WINDOWS_KEPT + 5):
+        keeper.run()
+    stats = keeper.stats()
+    assert len(stats["recent_windows"]) == GC_MAINTENANCE_WINDOWS_KEPT
+    assert stats["runs"] == GC_MAINTENANCE_WINDOWS_KEPT + 6
+    assert stats["next_due_in_s"] == 10.0
+
+
+def test_gc_maintenance_books_its_pause_apart_from_unscheduled_ones():
+    """The whole point of the schedule is that gc_gen2 becomes a number that
+    means 'pauses nobody asked for'. If the scheduled pass landed in the same
+    bucket it would mask exactly what it is meant to remove."""
+    now = {"mono": 10.0, "wall": 1_700_000_000.0}
+    log = LoopActivityLog(clock=lambda: now["mono"], wall=lambda: now["wall"])
+
+    def fake_collect() -> int:
+        log._on_gc("start", {"generation": 2})
+        now["mono"] += 2.0
+        log._on_gc("stop", {"generation": 2})
+        return 7
+
+    keeper = GcMaintenance(clock=lambda: now["mono"], wall=lambda: now["wall"],
+                           collect=fake_collect)
+    keeper.run(log)
+
+    totals = log.stats()["totals"]
+    assert totals["gc_maintenance"]["max_ms"] == 2000.0
+    assert "gc_gen2" not in totals
+
+    # Outside the window the generation label is back.
+    log._on_gc("start", {"generation": 2})
+    now["mono"] += 0.4
+    log._on_gc("stop", {"generation": 2})
+    assert log.stats()["totals"]["gc_gen2"]["max_ms"] == 400.0
+
+
+def test_gc_relabel_does_not_capture_another_thread_s_collection():
+    """A collection another thread trips during the window is still an
+    unscheduled event; stealing its label would undercount them."""
+    log = LoopActivityLog()
+    seen: list[str] = []
+
+    def other_thread():
+        log._on_gc("start", {"generation": 2})
+        log._on_gc("stop", {"generation": 2})
+        seen.extend(log.stats()["totals"])
+
+    with log.relabel_gc("gc_maintenance"):
+        worker = threading.Thread(target=other_thread)
+        worker.start()
+        worker.join()
+
+    assert "gc_gen2" in seen
+    assert "gc_maintenance" not in seen
+
+
+def test_gc_maintenance_real_cycle_leaves_the_graph_frozen():
+    """Exercises the actual unfreeze/collect/freeze against CPython rather
+    than a stub: the freeze must be re-established, or the next interval runs
+    against an unfrozen graph and the startup fix is silently undone."""
+    gc.freeze()
+    before = gc.get_freeze_count()
+    assert before > 0
+    keeper = GcMaintenance()
+    window = keeper.run()
+    assert isinstance(window["freed"], int)
+    assert gc.get_freeze_count() > 0
+
+
+def test_startup_quieting_hands_full_passes_to_the_schedule():
+    original = gc.get_threshold()
+    try:
+        _quiet_full_collections()
+        assert gc.get_threshold()[2] == GC_GEN2_THRESHOLD
+    finally:
+        gc.set_threshold(*original)
+        gc.unfreeze()
 
 
 def test_loop_lag_metric_and_seed_rule_registered():
