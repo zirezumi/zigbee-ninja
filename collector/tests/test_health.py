@@ -17,6 +17,7 @@ def test_health_reports_version_and_setup_state(client):
         "runs",
         "next_due_in_s",
         "recent_windows",
+        "last_error",
     }
 
 

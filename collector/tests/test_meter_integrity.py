@@ -182,6 +182,16 @@ def test_gc_relabel_does_not_capture_another_thread_s_collection():
     assert "gc_maintenance" not in seen
 
 
+def test_gc_maintenance_surfaces_a_failed_cycle():
+    """A schedule that stopped running looks exactly like one that is not due
+    yet, and the symptom only reappears after days of uptime, so a raised
+    cycle has to leave a mark somewhere a reader will see."""
+    keeper = GcMaintenance()
+    assert keeper.stats()["last_error"] is None
+    keeper.note_error(RuntimeError("cannot unfreeze"))
+    assert keeper.stats()["last_error"] == "RuntimeError: cannot unfreeze"
+
+
 def test_gc_maintenance_real_cycle_leaves_the_graph_frozen():
     """Exercises the actual unfreeze/collect/freeze against CPython rather
     than a stub: the freeze must be re-established, or the next interval runs
