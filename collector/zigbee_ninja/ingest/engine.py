@@ -54,6 +54,19 @@ LOOP_LAG_STALLS_KEPT = 32
 ACTIVITY_SLOW_MS = 100.0
 ACTIVITY_ENTRIES_KEPT = 64
 
+# Full collections are taken on a schedule instead of whenever the allocator
+# happens to trip a threshold (see GcMaintenance). Six hours is short enough
+# that frozen garbage cannot accumulate for a day, long enough that the pause
+# is a rare, nameable event rather than something a consumer trips over.
+GC_MAINTENANCE_INTERVAL_SECONDS = 6 * 3600.0
+GC_MAINTENANCE_WINDOWS_KEPT = 16
+# Gen-2's threshold counts gen-1 collections, so a large value means automatic
+# full passes effectively never fire between maintenance windows. Deliberately
+# not gc.disable(): gen0/gen1 stay on and keep reclaiming ordinary cycles
+# cheaply; it is only the full rescan of the long-lived graph we are taking
+# ownership of.
+GC_GEN2_THRESHOLD = 1_000_000
+
 
 class LoopLagMonitor:
     """Event-loop scheduling lag: how late a short sleep wakes up.
@@ -134,6 +147,25 @@ class LoopActivityLog:
         self._totals: dict[str, dict] = {}
         self._slow: list[dict] = []
         self._gc_started: dict[int, float] = {}
+        self._gc_label: str | None = None
+        self._gc_label_thread: int | None = None
+
+    @contextmanager
+    def relabel_gc(self, label: str):
+        """Book collections triggered inside this block under `label`.
+
+        A scheduled full pass and a full pass nobody asked for cost the same
+        milliseconds, so mixing them in one `gc_gen2` total would hide exactly
+        the number this schedule exists to drive down. Scoped to the calling
+        thread: a collection another thread trips concurrently is still its
+        own unscheduled event and keeps the generation label."""
+        self._gc_label = label
+        self._gc_label_thread = threading.get_ident()
+        try:
+            yield
+        finally:
+            self._gc_label = None
+            self._gc_label_thread = None
 
     @contextmanager
     def span(self, label: str):
@@ -173,7 +205,13 @@ class LoopActivityLog:
         elif phase == "stop":
             started = self._gc_started.pop(generation, None)
             if started is not None:
-                self.note(f"gc_gen{generation}", (self._clock() - started) * 1000.0)
+                label = f"gc_gen{generation}"
+                if (
+                    self._gc_label is not None
+                    and self._gc_label_thread == threading.get_ident()
+                ):
+                    label = self._gc_label
+                self.note(label, (self._clock() - started) * 1000.0)
 
     def stats(self) -> dict:
         with self._lock:
@@ -214,11 +252,124 @@ def _quiet_full_collections() -> None:
     the process. This is a pause-time fix, not a leak: if a future refactor
     makes startup allocate something genuinely short-lived, unfreeze rather
     than working around the retention.
+
+    **This call alone was measured PARTIAL and its residual grows with
+    uptime.** `gc.freeze()` only covers the graph that exists right now, and
+    this process keeps building long-lived structure afterwards (the registry
+    from `bridge/devices`, open chains and their payload keys, rollup and raw
+    event buffers). Gen-2 rescans exactly that younger set, so the worst pause
+    grew 2,405 ms at one day of uptime to 14,074 ms at 5.6 days on the
+    reference deployment. GcMaintenance below is the other half: it takes the
+    full pass on a schedule and re-freezes the settled graph, so the set this
+    call froze at startup is no longer the only frozen set.
     """
     gc.collect()
     gc.freeze()
     gen0, gen1, _gen2 = gc.get_threshold()
-    gc.set_threshold(gen0, gen1, 100)
+    gc.set_threshold(gen0, gen1, GC_GEN2_THRESHOLD)
+
+
+class GcMaintenance:
+    """Takes generation-2 collection on a schedule instead of at random.
+
+    A full collection walks the whole live graph holding the GIL, so it pauses
+    the event loop from any thread. The pause cannot be removed: the honest
+    move is to decide *when* it happens and say so, which is what turns a
+    stall into a maintenance window. `_quiet_full_collections` sets the gen-2
+    threshold high enough that automatic passes effectively never fire, so
+    this is the only thing taking them.
+
+    Each cycle is unfreeze, collect, freeze:
+
+      * `gc.unfreeze()` returns the permanent generation to gen-2 so this pass
+        can actually see it. Without it the pass repeats the same partial work
+        the startup freeze already scoped.
+      * `gc.collect()` is the pause, timed and booked under `gc_maintenance`
+        rather than `gc_gen2`, so the generation totals on /api/health keep
+        meaning "pauses nobody scheduled" and should trend to zero.
+      * `gc.freeze()` re-freezes what survived. The graph is at its most
+        settled right after a full pass, which is the same reason the startup
+        call sits where it does.
+
+    Retention is strictly better than freezing once at startup, not worse:
+    frozen garbage is unreachable until something unfreezes, and before this
+    nothing ever did. The interval is therefore also the retention bound.
+
+    Runs on the event loop deliberately. Handing it to a thread would move
+    nothing (the GIL pause is global) and would only cost the ability to say
+    which loop stall was this."""
+
+    def __init__(
+        self,
+        interval_seconds: float = GC_MAINTENANCE_INTERVAL_SECONDS,
+        clock=time.monotonic,
+        wall=time.time,
+        collect=None,
+    ):
+        self._interval = interval_seconds
+        self._clock = clock
+        self._wall = wall
+        # Injectable so tests can drive the cycle without a real collection;
+        # the default is the real three-step cycle.
+        self._collect = collect if collect is not None else self._cycle
+        self._last_at: float | None = None
+        self._runs = 0
+        self._windows: list[dict] = []
+
+    @staticmethod
+    def _cycle() -> int:
+        gc.unfreeze()
+        freed = gc.collect()
+        gc.freeze()
+        return freed
+
+    def due(self) -> bool:
+        if self._last_at is None:
+            # Not at startup: _quiet_full_collections has just collected and
+            # frozen, so an immediate second pass would be pure pause for no
+            # reclaim. Start the clock and let the first real cycle land one
+            # interval in.
+            self._last_at = self._clock()
+            return False
+        return (self._clock() - self._last_at) >= self._interval
+
+    def run(self, activity: LoopActivityLog | None = None) -> dict:
+        started_wall = self._wall()
+        started = self._clock()
+        if activity is not None:
+            with activity.relabel_gc("gc_maintenance"):
+                freed = self._collect()
+        else:
+            freed = self._collect()
+        duration_ms = (self._clock() - started) * 1000.0
+        self._last_at = self._clock()
+        self._runs += 1
+        window = {
+            "at": started_wall,
+            "until": started_wall + duration_ms / 1000.0,
+            "ms": round(duration_ms, 1),
+            "freed": freed,
+        }
+        self._windows.append(window)
+        del self._windows[:-GC_MAINTENANCE_WINDOWS_KEPT]
+        return window
+
+    def stats(self) -> dict:
+        """Recent windows are wall-clock stamped so an analysis pass can drop
+        samples that overlap one, the way headroom drops calibration ramps
+        (§11.5). Per-chain `clock_skew_ms` remains the precise per-row signal;
+        these windows are the coarse, human-readable version."""
+        next_due_in = None
+        if self._last_at is not None:
+            next_due_in = round(
+                max(self._interval - (self._clock() - self._last_at), 0.0), 1
+            )
+        return {
+            "interval_seconds": self._interval,
+            "runs": self._runs,
+            "next_due_in_s": next_due_in,
+            "recent_windows": list(self._windows),
+        }
 
 
 class Engine:
@@ -234,6 +385,7 @@ class Engine:
         self.rates = RateTracker()
         self.class_rates = RateTracker()
         self.brokerlog = BrokerLogCorrelator()
+        self.gc_maintenance = GcMaintenance()
         self.chains = ChainTracker(
             resolve_members=self._resolve_members,
             # Chains are stamped on the loop, so they inherit its lag. Handing
@@ -1209,6 +1361,15 @@ class Engine:
                 # indistinguishable from a healthy quiet fleet. Record it where
                 # /api/recommendations status already surfaces the last result.
                 self.recommendations.note_run_error(exc)
+            try:
+                # On the loop on purpose (see GcMaintenance): a GIL pause is
+                # global, so a thread would hide the cause without shortening
+                # it. Deferred while a calibration run is active for the same
+                # reason the detector pass is: the pacer needs the loop.
+                if self.gc_maintenance.due() and not self.calibration.active:
+                    self.gc_maintenance.run(self.loop_activity)
+            except Exception:
+                pass
 
     async def _loop_lag_loop(self) -> None:
         while True:

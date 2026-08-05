@@ -416,10 +416,28 @@ single process that gap is unrecoverable: a pause holds the GIL, so no thread ca
 observe the true arrival either. The design therefore does two things rather than
 pretend to precision it cannot have:
 
-* **Shrink the gap.** Storage flushes already run off-loop (`asyncio.to_thread`);
-  full garbage collections, which hold the GIL and so pause the loop from any
-  thread, are cut at startup by `gc.freeze()` plus a raised gen-2 threshold
-  (`_quiet_full_collections`). Measured before this: gen2 max 10,769 ms.
+* **Shrink the gap, then schedule what is left.** Storage flushes already run
+  off-loop (`asyncio.to_thread`); full garbage collections, which hold the GIL and
+  so pause the loop from any thread, are cut at startup by `gc.freeze()` plus a
+  raised gen-2 threshold (`_quiet_full_collections`). Measured before this: gen2
+  max 10,769 ms. **That call alone is partial and its residual grows with uptime**,
+  because `gc.freeze()` covers only the graph alive at startup while this process
+  keeps building long-lived structure afterwards (registry, open chains and their
+  payload keys, rollup and raw-event buffers), and gen-2 rescans exactly that
+  younger set: measured 2,405 ms at one day of uptime and 14,074 ms at 5.6 days.
+  The threshold is therefore set high enough that automatic full passes
+  effectively never fire, and `GcMaintenance` takes them **on a schedule**
+  (default 6 h): `gc.unfreeze()` → `gc.collect()` → `gc.freeze()`, on the event
+  loop deliberately, since a GIL pause is global and a worker thread would hide
+  the cause without shortening it. The pause is booked under `gc_maintenance`
+  rather than `gc_gen2`, so the generation totals keep meaning "pauses nobody
+  scheduled" and should trend to zero; recent windows are wall-clock stamped on
+  `/api/health` so an analysis pass can drop overlapping samples the way headroom
+  drops calibration ramps (§11.5). Retention is strictly better than freezing once:
+  frozen garbage is unreachable until something unfreezes, and before this nothing
+  ever did, so the interval is also the retention bound. `gc.disable()` is
+  deliberately not used: gen-0/gen-1 stay on and keep reclaiming ordinary cycles
+  cheaply.
 * **Publish the residue.** Every chain carries `clock_skew_ms`, the loop lag in
   flight when it was stamped: the width of the bracket around `opened_at`, not a
   correction to it. The redundancy test adds that skew to the observed gap and
