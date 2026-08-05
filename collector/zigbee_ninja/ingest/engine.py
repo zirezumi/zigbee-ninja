@@ -315,6 +315,15 @@ class GcMaintenance:
         self._last_at: float | None = None
         self._runs = 0
         self._windows: list[dict] = []
+        self._last_error: str | None = None
+
+    def note_error(self, exc: BaseException) -> None:
+        """A cycle that raises must not vanish into a bare `except`. Nothing
+        else would notice: a schedule that silently stopped running looks
+        exactly like a schedule that is simply not due yet, and the symptom
+        (pauses creeping back) takes days to show. Same failure shape the
+        recommendation pass already had to fix."""
+        self._last_error = f"{type(exc).__name__}: {exc}"
 
     @staticmethod
     def _cycle() -> int:
@@ -369,6 +378,7 @@ class GcMaintenance:
             "runs": self._runs,
             "next_due_in_s": next_due_in,
             "recent_windows": list(self._windows),
+            "last_error": self._last_error,
         }
 
 
@@ -1368,8 +1378,11 @@ class Engine:
                 # reason the detector pass is: the pacer needs the loop.
                 if self.gc_maintenance.due() and not self.calibration.active:
                     self.gc_maintenance.run(self.loop_activity)
-            except Exception:
-                pass
+            except Exception as exc:
+                # Recorded, not swallowed: a schedule that quietly stopped
+                # running is indistinguishable from one that is not due yet,
+                # and the symptom takes days of uptime to reappear.
+                self.gc_maintenance.note_error(exc)
 
     async def _loop_lag_loop(self) -> None:
         while True:
