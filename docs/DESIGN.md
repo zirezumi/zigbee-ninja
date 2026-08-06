@@ -409,6 +409,52 @@ every bucket stays independently visible. A **redundant-command detector**
 cross-referenced by commander) ships as a first-class report: near-duplicate
 commands are the cheapest utilization win an automation author can act on.
 
+**A duplicate test cannot see a publish that changes nothing.** The redundancy
+detector above answers "did these bytes reach this target twice inside five
+seconds". A command that is unique on the wire and still asks the device for the
+value it already holds is invisible to it at any window, because there is nothing
+to duplicate. That class is reported separately as **no-ops**
+(`attribution/noop.py`, `GET /api/attribution/noops`), with three verdicts stamped
+on each `set` chain: `changing`, `noop`, `unknown`.
+
+The question is asked **at command time against prior reported state**, and that
+choice is what makes it affordable and sound. An echo-based verdict would have to
+wait for the state publish that settles a command, which loses on this fleet:
+42.9% of post-command state publishes arrive after the 1.5 s echo window and 30.1%
+after 3.5 s, so the settled value routinely outlives the chain that would carry it.
+Comparing against state already known needs no settle window, no quiet period and
+no third-writer invalidation. The echo table (`EchoState`) is therefore maintained
+independently of chain lifetime.
+
+Three properties are load-bearing:
+
+* **`unknown` stays loud, and partial knowledge can never produce a `noop`.** One
+  differing key proves a command changes something, so a partially-known payload
+  may be called `changing`; but a payload with any unknown key is `unknown`, never
+  `noop`. This biases the no-op count DOWN, so a reader trying to establish an
+  absence cannot be flattered by missing data. `resolution_coverage` (resolved over
+  stamped) is mandatory in the report for the same reason: a small count under low
+  coverage means *no data*, not *no no-ops*.
+* **Groups are evaluated per member.** A group `/set` is a no-op only if every
+  member already holds the value; the group's own state topic is Zigbee2MQTT's
+  synthetic optimistic state, not an aggregate, so it cannot answer this. One
+  unseen member makes the command `unknown`.
+* **The state intake is gated twice before parsing**: the device must have been
+  commanded, and a tracked key must appear literally in the payload bytes.
+  Measured on a real 139-key, 5.1 KB dimmer dump, `json.loads` costs 15.1 µs and
+  the byte prefilter 0.4 µs on a miss; at the observed 7.11 state publishes/second,
+  parsing everything unconditionally would cost 0.011% of the event loop. The gate
+  is a cheap 35× saving on a loop with a stall history, **not** the thing that makes
+  this affordable — an earlier design note asserted the parse would overload the
+  loop, which was never measured and is wrong by orders of magnitude.
+
+Equality is exact after numeric normalization (Z2M round-trips ints through JSON;
+strings are never coerced, so a mode key cannot compare equal to a number). Device
+clamping and quantization are real, but no per-key tolerance has been measured, so
+`NUMERIC_TOLERANCE` ships empty and a `near` counter records how often a tolerance
+would have changed the answer. That measurement, not a guess, should decide the
+table's contents.
+
 **Chain timestamps are processing time, and say so.** MQTT carries no broker-side
 timestamp and ingest runs inline on the event loop, so `chains.opened_at` is stamped
 when the collector gets to the message, not when it reached the broker. Inside a

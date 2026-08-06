@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from .. import __version__
 from ..alerts import GLOBAL_INSTANCE, AlertManager
 from ..attribution.chains import Chain, ChainTracker, command_digest, parse_command
+from ..attribution.noop import NoopDetector
 from ..calibration.benchmark import CalibrationManager
 from ..capacity import airtime, ledger
 from ..capacity import headroom as headroom_model
@@ -396,6 +397,11 @@ class Engine:
         self.class_rates = RateTracker()
         self.brokerlog = BrokerLogCorrelator()
         self.gc_maintenance = GcMaintenance()
+        # Shares the registry's group expansion with ChainTracker: a group
+        # command is a no-op only if every MEMBER already holds the value, and
+        # the group's own state topic is Z2M's synthetic optimistic state
+        # rather than an aggregate, so it cannot answer that.
+        self.noops = NoopDetector(resolve_members=self._resolve_members)
         self.chains = ChainTracker(
             resolve_members=self._resolve_members,
             # Chains are stamped on the loop, so they inherit its lag. Handing
@@ -761,7 +767,21 @@ class Engine:
                 client = self.ha_attr.name_for(topic, digest) or self.brokerlog.client_for(
                     topic
                 )
-                self.chains.on_command(base, target, verb, payload, client=client)
+                # Judged against state known BEFORE this command, so the
+                # verdict needs no settle window and cannot be invalidated by
+                # a later writer. `get` is excluded: a read asks for nothing.
+                verdict = (
+                    self.noops.classify(base, target, payload) if verb == "set" else None
+                )
+                self.chains.on_command(
+                    base,
+                    target,
+                    verb,
+                    payload,
+                    client=client,
+                    noop_verdict=verdict.verdict if verdict else None,
+                    noop_basis=verdict.basis() if verdict else None,
+                )
                 self.class_rates.record(base, "commanded")
                 if self.calibration.active:
                     self.calibration.note_ambient(base, "command")
@@ -770,6 +790,10 @@ class Engine:
                 self.class_rates.record(base, "self")  # reply to a benchmark read
                 return
             klass = self.chains.on_state(base, suffix)
+            # Doubly gated before it parses anything (see EchoState): the
+            # device must have been commanded, and a tracked key must appear
+            # in the bytes. This is the only place an echoed VALUE is stored.
+            self.noops.note_state(base, suffix, payload)
             self.class_rates.record(base, klass)
             if self.calibration.active:
                 self.calibration.note_ambient(base, "state")
@@ -1103,8 +1127,8 @@ class Engine:
                 conn.executemany(
                     "INSERT INTO chains (instance, target, verb, opened_at, client, "
                     "payload_size, echo_count, first_echo_ms, redundant, payload_digest, "
-                    "clock_skew_ms, payload_keys) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "clock_skew_ms, payload_keys, noop_verdict, noop_basis) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     [
                         (
                             chain.instance,
@@ -1119,6 +1143,8 @@ class Engine:
                             chain.payload_digest,
                             chain.clock_skew_ms,
                             chain.payload_keys,
+                            chain.noop_verdict,
+                            chain.noop_basis,
                         )
                         for chain in finalized
                     ],
