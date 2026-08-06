@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import threading
+import traceback
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -247,7 +248,40 @@ class Database:
         self.path = data_dir / "zigbee-ninja.db"
         self._local = threading.local()
         self.write_failures = 0
+        # Loop-thread write discipline. WAL admits one writer at a time and
+        # busy_timeout is 5 s, so a write issued ON the event loop blocks the
+        # loop for as long as another writer holds the lock. That is not a
+        # theoretical cost: probe-heartbeat writes ran here and were measured
+        # stalling the loop for 5,011.9 ms, which is the timeout plus overhead,
+        # with a matching `database is locked` failure at the same call site.
+        #
+        # Checked at RUNTIME rather than by static analysis on purpose. Writers
+        # reach this from the flush worker, API threadpool threads, the
+        # detector thread and constructor-injected callbacks; the callback
+        # indirection is exactly what a call-graph guard cannot see, and it is
+        # exactly where the defect was. A thread-identity check has no false
+        # positives and no blind spots.
+        self.loop_thread_id: int | None = None
+        self.loop_thread_writes = 0
+        self.last_loop_thread_write: str | None = None
         self._migrate()
+
+    def mark_loop_thread(self) -> None:
+        """Record which thread is the event loop, so write() can recognise it.
+
+        Called from Engine.start(). Until it is called the check is inert,
+        which keeps tests and one-off scripts that never run a loop honest
+        rather than noisy."""
+        self.loop_thread_id = threading.get_ident()
+
+    def _note_loop_thread_write(self) -> None:
+        self.loop_thread_writes += 1
+        # The caller is only walked when the invariant is already broken, so
+        # the healthy path pays nothing for this.
+        stack = traceback.extract_stack(limit=6)[:-2]
+        self.last_loop_thread_write = " <- ".join(
+            f"{Path(f.filename).name}:{f.lineno}" for f in reversed(stack)
+        )
 
     def connect(self) -> sqlite3.Connection:
         conn: sqlite3.Connection | None = getattr(self._local, "conn", None)
@@ -290,6 +324,8 @@ class Database:
         connections stayed perfectly healthy. It also pinned the WAL, which
         cannot checkpoint past the oldest live snapshot.
         """
+        if self.loop_thread_id is not None and threading.get_ident() == self.loop_thread_id:
+            self._note_loop_thread_write()
         conn = self.connect()
         if conn.in_transaction:
             # Same reasoning as fresh_read, and the reason this is checked on the

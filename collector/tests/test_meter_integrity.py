@@ -76,7 +76,28 @@ def test_activity_log_records_totals_and_slow_entries():
 
     for _ in range(ACTIVITY_ENTRIES_KEPT + 10):
         log.note("tile_heartbeat_write", 200.0)
-    assert len(log.stats()["recent_slow"]) == ACTIVITY_ENTRIES_KEPT
+    recent = log.stats()["recent_slow"]
+    assert len(recent) <= ACTIVITY_ENTRIES_KEPT
+    # The ring is bounded PER LABEL, so a flood cannot evict the quiet label's
+    # only entry. That eviction is what made 27 of 30 recorded stalls look
+    # like they had no in-process cause on 2026-08-06.
+    assert any(item["label"] == "mqtt_message" for item in recent)
+
+
+def test_slow_ring_keeps_a_quiet_label_alive_under_a_flood():
+    """The ring exists to attribute a stall to the span that covers it. A
+    single global cap lets the noisiest label evict every other one, which
+    destroys exactly the evidence the ring is for."""
+    log = LoopActivityLog()
+    log.note("tile_heartbeat_write", 5000.0)  # the rare, interesting one
+    for _ in range(500):  # the flood
+        log.note("worker_events_flush", 150.0)
+
+    labels = [item["label"] for item in log.stats()["recent_slow"]]
+    assert "tile_heartbeat_write" in labels
+    assert len(labels) <= ACTIVITY_ENTRIES_KEPT
+    # Totals are unbounded counters and must stay exact regardless of the ring.
+    assert log.stats()["totals"]["worker_events_flush"]["slow"] == 500
 
 
 def test_activity_log_times_gc_pauses():

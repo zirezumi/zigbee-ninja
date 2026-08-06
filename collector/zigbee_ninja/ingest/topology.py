@@ -226,6 +226,17 @@ class TopologyPuller:
         value = (response.get("data") or {}).get("value") or {}
         summary = summarize(value)
         pulled_at = self._clock()
+        # `pull` is awaited from an async endpoint, i.e. ON the event loop, and
+        # this write serializes a whole network map. A write on the loop waits
+        # on the WAL lock with a 5 s busy_timeout and stalls everything behind
+        # it, so it goes to a thread. Rare (15-min rate limit, grant-gated) but
+        # the same defect that made probe heartbeats the top loop-stall source.
+        await asyncio.to_thread(
+            self._store_snapshot, base, pulled_at, summary, value
+        )
+        return {"instance": base, "pulled_at": pulled_at, **summary}
+
+    def _store_snapshot(self, base: str, pulled_at: float, summary: dict, value: dict) -> None:
         with self._db.write() as conn:
             conn.execute(
                 "INSERT INTO topology_snapshots (instance, pulled_at, node_count, link_count, "
@@ -245,7 +256,6 @@ class TopologyPuller:
                 "ORDER BY pulled_at DESC LIMIT ?)",
                 (base, base, max(1, int(self._snapshots_kept()))),
             )
-        return {"instance": base, "pulled_at": pulled_at, **summary}
 
     # -- read side -----------------------------------------------------------------
 

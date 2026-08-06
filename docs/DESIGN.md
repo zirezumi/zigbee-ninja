@@ -462,6 +462,33 @@ single process that gap is unrecoverable: a pause holds the GIL, so no thread ca
 observe the true arrival either. The design therefore does two things rather than
 pretend to precision it cannot have:
 
+* **Nothing writes to SQLite on the event loop.** WAL admits one writer and
+  `busy_timeout` is 5 s, so a write issued on the loop blocks the loop for as long
+  as any other writer holds the lock. Measured 2026-08-06: probe-heartbeat writes
+  ran inline on the loop (five probes at a 15 s heartbeat, a write about every
+  3 s) and stalled it for **5,011.9 ms**, the timeout plus overhead, with a
+  matching `database is locked` failure at the same call site. That, not garbage
+  collection, was the dominant loop-stall source; raising the GC threshold left
+  the stall rate flat (~183/day against a 189/day baseline) because GC was never
+  what held it. Heartbeats are now buffered on the loop and applied by the flush
+  worker, coalesced per instance with the RECEIPT time carried through so
+  batching cannot make a probe look fresher than it was; the topology snapshot
+  write moved to `asyncio.to_thread` for the same reason.
+
+  The rule is enforced at **runtime**, not by static analysis: `Database` records
+  the loop's thread id at `Engine.start()` and counts any write issued from it,
+  reporting `storage.loop_thread_writes` (which must stay 0) and the offending
+  call site on `/api/health`. Static analysis was considered and rejected because
+  writers reach the database from the flush worker, API threadpool threads, the
+  detector thread and constructor-injected callbacks, and the callback
+  indirection is both invisible to a call graph and exactly where the defect was.
+
+  **Reading note that cost real time:** two spans showing the same maximum to the
+  millisecond is not proof of a global pause. `mqtt_message` and
+  `tile_heartbeat_write` matched to 0.1 ms with identical slow counts because the
+  second is NESTED inside the first, so the inner span *was* the work. Check
+  enclosure before concluding "one pause, two spans".
+
 * **Shrink the gap, then schedule what is left.** Storage flushes already run
   off-loop (`asyncio.to_thread`); full garbage collections, which hold the GIL and
   so pause the loop from any thread, are cut at startup by `gc.freeze()` plus a
