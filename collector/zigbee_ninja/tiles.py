@@ -273,11 +273,18 @@ class TileManager:
             results.append(self.revoke_grant(capability, target))
         return results
 
-    def on_heartbeat(self, base: str, heartbeat: dict) -> None:
+    def on_heartbeat(self, base: str, heartbeat: dict, at: float | None = None) -> None:
+        """`at` is the RECEIPT time, passed in when the write is deferred.
+
+        The write is batched onto the flush worker (see
+        `Engine._on_probe_heartbeat`), so stamping `last_health_at` at apply
+        time would report a probe as fresher than it actually was, by up to a
+        flush interval. Small against the 90 s stale threshold, and free to get
+        right."""
         row = self._row(CAPABILITY_Z2M_EXTENSION, base)
         if row is None or row["status"] not in ("deployed", "error", "deploying"):
             return
-        fields = {"last_health_at": self._clock()}
+        fields = {"last_health_at": at if at is not None else self._clock()}
         if heartbeat.get("version"):
             fields["version"] = heartbeat["version"]
         # A live heartbeat proves the probe is running regardless of what the

@@ -238,7 +238,14 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
             # apart from one nobody asked for: gc_gen2 in loop_activity should
             # trend to zero while gc_maintenance carries the disclosed cost.
             "gc_maintenance": engine.gc_maintenance.stats(),
-            "storage": {"write_failures": db.write_failures},
+            "storage": {
+                "write_failures": db.write_failures,
+                # Must stay 0. A write issued on the event loop waits on the
+                # WAL lock with a 5 s busy_timeout and stalls the loop behind
+                # it; that was the top loop-stall source until 2026-08-06.
+                "loop_thread_writes": db.loop_thread_writes,
+                "last_loop_thread_write": db.last_loop_thread_write,
+            },
             "ingest": {"handler_errors": engine.ingest_status().get("handler_errors", 0)},
         }
 

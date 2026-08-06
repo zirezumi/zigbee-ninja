@@ -187,7 +187,30 @@ class LoopActivityLog:
                 self._slow.append(
                     {"label": label, "at": self._wall(), "ms": round(duration_ms, 1)}
                 )
-                del self._slow[:-ACTIVITY_ENTRIES_KEPT]
+                self._trim_slow()
+
+    def _trim_slow(self) -> None:
+        """Bound the ring per LABEL, not just globally.
+
+        A single global cap lets the noisiest label evict every other one, and
+        the entries it evicts are exactly the ones a stall needs to be
+        attributed. Observed 2026-08-06: `worker_events_flush` contributed 575
+        slow entries against a 64-entry ring, so all 23 `tile_heartbeat_write`
+        entries were gone and 27 of 30 recorded stalls looked like they had no
+        in-process cause at all. They had one; the evidence had been pushed
+        out. Same failure as a saturated trace buffer: the loudest producer
+        starves the diagnostic.
+        """
+        per_label = max(1, ACTIVITY_ENTRIES_KEPT // max(1, len(self._totals)))
+        seen: dict[str, int] = {}
+        kept: list[dict] = []
+        for item in reversed(self._slow):
+            count = seen.get(item["label"], 0)
+            if count < per_label:
+                seen[item["label"]] = count + 1
+                kept.append(item)
+        kept.reverse()
+        self._slow = kept[-ACTIVITY_ENTRIES_KEPT:]
 
     # GC callbacks run on whichever thread triggered the collection, but a
     # collection pause holds the GIL, so the loop pauses with it either way.
@@ -397,6 +420,10 @@ class Engine:
         self.class_rates = RateTracker()
         self.brokerlog = BrokerLogCorrelator()
         self.gc_maintenance = GcMaintenance()
+        # Probe heartbeats land on the loop and are applied by the flush
+        # worker; see _on_probe_heartbeat for why they are not written inline.
+        self._heartbeat_lock = threading.Lock()
+        self._pending_heartbeats: dict[str, tuple[float, dict]] = {}
         # Shares the registry's group expansion with ChainTracker: a group
         # command is a no-op only if every MEMBER already holds the value, and
         # the group's own state topic is Z2M's synthetic optimistic state
@@ -532,10 +559,24 @@ class Engine:
         self._journal_pending.append((now, instance, kind, subject, json.dumps(detail)))
 
     def _on_probe_heartbeat(self, base: str, heartbeat: dict) -> None:
-        # A sqlite write on the loop thread: it can wait on the flush
-        # worker's transaction, so the activity log times it.
-        with self.loop_activity.span("tile_heartbeat_write"):
-            self.tiles.on_heartbeat(base, heartbeat)
+        """Buffer the heartbeat; the flush worker writes it.
+
+        This used to write to SQLite inline, on the event loop. WAL admits one
+        writer and `busy_timeout` is 5 s, so whenever the flush worker held the
+        lock this blocked the loop for as long as the flush ran: measured at
+        **5,011.9 ms**, the timeout plus overhead, with a matching
+        `database is locked` failure at the same call site. Five probes at a
+        15 s heartbeat put a write here roughly every 3 s, which is why it
+        dominated the loop-stall count and why raising the GC threshold did
+        nothing for it.
+
+        Coalescing per instance is correct rather than merely convenient: a
+        heartbeat is a liveness stamp, so only the newest one in a flush window
+        carries information. The receipt time is captured HERE and passed
+        through, so batching cannot make a probe look fresher than it was.
+        """
+        with self._heartbeat_lock:
+            self._pending_heartbeats[base] = (time.time(), heartbeat)
 
     def _on_probe_device_seq(
         self, base: str, name: str, zcl_seq: int, probe_ts: float
@@ -601,6 +642,9 @@ class Engine:
         # divide by recorded time, not by days the ledger never saw.
         if self._config.get("ledger_since") is None:
             self._config.set("ledger_since", time.time())
+        # start() runs on the event loop, so this is the loop's thread id.
+        # Everything after this point can recognise a write issued here.
+        self._db.mark_loop_thread()
         self.loop_activity.install_gc()
         _quiet_full_collections()
         self._flush_task = asyncio.create_task(self._flush_loop())
@@ -743,8 +787,11 @@ class Engine:
                 self.tiles.on_bridge_response(base, action, payload)
             return
         if kind == "bridge" and suffix == "bridge/response/networkmap":
-            # Stores the raw network map: a large sqlite write on the loop.
-            with self.loop_activity.span("topology_store_write"):
+            # Hands the map to the waiting pull(); the storage write happens
+            # there, on a worker thread. (This span was previously commented as
+            # "a large sqlite write on the loop", which was never true of this
+            # call site: on_response only resolves a future.)
+            with self.loop_activity.span("topology_response"):
                 self.topology.on_response(base, payload)
             return
         if kind == "bridge" and suffix == "bridge/logging":
@@ -1347,6 +1394,19 @@ class Engine:
             conn.execute("DELETE FROM ledger_device_daily WHERE day < ?", (cutoff_day,))
         return written
 
+    def _flush_heartbeats(self) -> None:
+        """Apply buffered probe heartbeats. Runs on the flush worker only."""
+        with self._heartbeat_lock:
+            pending = self._pending_heartbeats
+            self._pending_heartbeats = {}
+        for base, (at, heartbeat) in pending.items():
+            try:
+                self.tiles.on_heartbeat(base, heartbeat, at=at)
+            except Exception:
+                # One bad instance must not cost the others their liveness
+                # stamp; the next heartbeat is 15 s away either way.
+                pass
+
     def _flush_and_tick(self) -> None:
         """The 10 s storage pass, run on one worker thread: the flush and the
         alert tick share that thread so they can never collide on the write
@@ -1361,6 +1421,13 @@ class Engine:
                 self.flush_rollups()
         except Exception:
             # Never let a storage hiccup kill the pass; next tick retries.
+            pass
+        try:
+            # Off the loop, beside the other storage work, so the write lock is
+            # contended only by threads that can afford to wait on it.
+            with self.loop_activity.span("worker_heartbeat_write"):
+                self._flush_heartbeats()
+        except Exception:
             pass
         try:
             self.alerts.tick()

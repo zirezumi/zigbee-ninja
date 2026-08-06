@@ -74,3 +74,61 @@ def test_no_write_block_nests_inside_another():
                         f"{name}:{inner.lineno} inside the block at line {node.lineno}"
                     )
     assert not offenders, "nested write() blocks at " + ", ".join(offenders)
+
+
+# -- loop-thread write discipline ---------------------------------------------
+#
+# Checked at RUNTIME, not by AST, and the reason matters. Writers reach the
+# database from the flush worker, API threadpool threads, the detector thread
+# and constructor-injected callbacks. That last one is invisible to any call
+# graph, and it is precisely where the defect was: probe heartbeats reached
+# Database.write() through a callback the Engine handed to ProbeIngest, so no
+# static rule following `Engine._handle_message` would ever have seen it.
+# A thread-identity check has no blind spots and no false positives.
+
+
+def test_ingest_path_issues_no_writes_on_the_loop_thread(client):
+    """A write on the event loop waits on the WAL lock with a 5 s busy_timeout
+    and stalls the loop behind it. Measured 5,011.9 ms on probe heartbeats,
+    which made them the top loop-stall source: the timeout plus overhead.
+    Nothing on the ingest path may write inline."""
+    import json
+
+    engine = client.app.state.engine
+    db = client.app.state.db
+    # start() normally does this; the test client's lifespan already ran it,
+    # but pin it to THIS thread so the assertion is about the code under test
+    # rather than about which thread pytest happens to use.
+    db.mark_loop_thread()
+    db.loop_thread_writes = 0
+
+    info = {"version": "2.3.0", "network": {"channel": 15}, "config": {}}
+    engine.on_message("z2m-test/bridge/info", json.dumps(info).encode())
+    engine.on_message(
+        "z2m-test/bridge/devices",
+        json.dumps([{"ieee_address": "0x1", "friendly_name": "lamp", "type": "Router"}]).encode(),
+    )
+    # The regression case: a probe heartbeat. Before the fix this wrote inline.
+    engine.on_message(
+        "z2m-test/zigbee-ninja/probe/heartbeat",
+        json.dumps({"version": "0.4", "hooks": [], "seq": 1}).encode(),
+    )
+    engine.on_message("z2m-test/lamp/set", b'{"state":"ON"}')
+    engine.on_message("z2m-test/lamp", b'{"state":"ON","brightness":10}')
+
+    assert db.loop_thread_writes == 0, (
+        f"ingest wrote to sqlite on the event loop: {db.last_loop_thread_write}"
+    )
+
+
+def test_the_loop_thread_guard_actually_fires(client):
+    """A guard nobody has seen fail is a guard nobody knows works. This pins
+    that the check catches a real inline write rather than passing because
+    loop_thread_id was never set."""
+    db = client.app.state.db
+    db.mark_loop_thread()
+    db.loop_thread_writes = 0
+    with db.write() as conn:
+        conn.execute("CREATE TABLE IF NOT EXISTS _guard_probe (x INTEGER)")
+    assert db.loop_thread_writes == 1
+    assert db.last_loop_thread_write and "test_write_discipline.py" in db.last_loop_thread_write
