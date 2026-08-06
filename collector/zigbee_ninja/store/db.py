@@ -233,6 +233,10 @@ _MIGRATIONS = [
     """
     ALTER TABLE chains ADD COLUMN payload_keys TEXT;
     """,
+    """
+    ALTER TABLE chains ADD COLUMN noop_verdict TEXT;
+    ALTER TABLE chains ADD COLUMN noop_basis TEXT;
+    """,
 ]
 
 

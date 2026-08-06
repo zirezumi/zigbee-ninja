@@ -17,6 +17,90 @@ TOP_LIMIT = 15
 MODIFIER_KEYS = frozenset({"transition"})
 
 
+def noops(db: Database, seconds: int) -> dict:
+    """No-op publishes: commands asking for state the device already held.
+
+    Complements `redundant`, which is a duplicate test (same bytes, same
+    target, inside 5 s) and therefore blind to a command that is unique on the
+    wire and still changes nothing. Verdicts are stamped at command time by
+    `attribution/noop.py`; this only aggregates them.
+
+    **Read `resolution_coverage` before `counts`.** Coverage is resolved rows
+    over rows seen. A low no-op count under low coverage is not an absence of
+    no-ops, it is an absence of data, and the two want opposite responses.
+    Anyone using this to assert "zero no-ops" has to clear the coverage bar
+    first; the verdict logic deliberately refuses to call a partially-known
+    payload a no-op, so the count is biased DOWN and cannot flatter the claim.
+    """
+    conn = db.connect()
+    since = time.time() - seconds
+
+    counts: dict[str, int] = {}
+    for row in conn.execute(
+        "SELECT noop_verdict AS verdict, COUNT(*) AS n FROM chains "
+        "WHERE opened_at >= ? AND verb = 'set' GROUP BY noop_verdict",
+        (since,),
+    ):
+        # NULL means the row predates the detector: distinct from 'unknown',
+        # which means the detector ran and could not tell.
+        counts[row["verdict"] or "unstamped"] = row["n"]
+
+    stamped = sum(n for verdict, n in counts.items() if verdict != "unstamped")
+    resolved = counts.get("noop", 0) + counts.get("changing", 0)
+
+    by_target = [
+        {
+            "instance": row["instance"],
+            "target": row["target"],
+            "noops": row["n"],
+            "client": row["client"] or "(unattributed)",
+        }
+        for row in conn.execute(
+            "SELECT instance, target, client, COUNT(*) AS n FROM chains "
+            "WHERE opened_at >= ? AND noop_verdict = 'noop' "
+            "GROUP BY instance, target, client ORDER BY n DESC LIMIT ?",
+            (since, TOP_LIMIT),
+        )
+    ]
+
+    # Which keys drive the no-ops, from the value-free basis string. This is
+    # the actionable output: a key that is almost always already-held is a
+    # publish site to gate.
+    key_counts: dict[str, int] = {}
+    reasons: dict[str, int] = {}
+    for row in conn.execute(
+        "SELECT noop_verdict AS verdict, noop_basis AS basis FROM chains "
+        "WHERE opened_at >= ? AND noop_basis IS NOT NULL",
+        (since,),
+    ):
+        for token in row["basis"].split(","):
+            if token.startswith("~"):
+                reasons[token[1:]] = reasons.get(token[1:], 0) + 1
+            elif token.startswith("=") and row["verdict"] == "noop":
+                key_counts[token[1:]] = key_counts.get(token[1:], 0) + 1
+
+    return {
+        "window_seconds": seconds,
+        "counts": counts,
+        "resolution_coverage": round(resolved / stamped, 4) if stamped else None,
+        "coverage_note": (
+            "resolved / stamped. A low noop count under low coverage means no "
+            "data, not no no-ops. 'unstamped' rows predate the detector."
+        ),
+        "noop_keys": sorted(
+            ({"key": k, "noops": n} for k, n in key_counts.items()),
+            key=lambda row: -row["noops"],
+        )[:TOP_LIMIT],
+        "unresolved_reasons": reasons,
+        "top_noop_targets": by_target,
+        "commander_caveat": (
+            "client labels come from HA context ids and can cross-attribute "
+            "sibling scripts under one parent; verify a construct has a code "
+            "path to the key before acting on a per-commander count."
+        ),
+    }
+
+
 def summary(db: Database, seconds: int) -> dict:
     conn = db.connect()
     since = time.time() - seconds

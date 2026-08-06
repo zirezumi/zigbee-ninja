@@ -406,6 +406,26 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
         engine.flush_rollups()
         return attribution_queries.conflicts(db, seconds, window)
 
+    @app.get("/api/attribution/noops")
+    def attribution_noops(request: Request, seconds: int = 86400) -> dict:
+        """Commands that asked for state the device already held.
+
+        The redundancy report is a duplicate test and is blind to a publish
+        that is unique on the wire and still changes nothing. Read
+        `resolution_coverage` before `counts`: a low no-op count under low
+        coverage is missing data, not an absence of no-ops.
+        """
+        require_user(request)
+        seconds = max(60, min(seconds, MAX_QUERY_WINDOW_SECONDS))
+        engine.flush_rollups()
+        report = attribution_queries.noops(db, seconds)
+        _label_clients(report.get("top_noop_targets") or [])
+        # Live intake counters beside the stored verdicts: they show whether
+        # the echo table is actually being fed, which is the difference
+        # between "no no-ops" and "the detector saw nothing".
+        report["live"] = engine.noops.stats()
+        return report
+
     @app.get("/api/ledger")
     def ledger_get(request: Request, seconds: int = 86400) -> dict:
         require_user(request)

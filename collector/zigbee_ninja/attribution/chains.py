@@ -121,6 +121,14 @@ class Chain:
     # is not a JSON object. Lets a conflict (two writers disagreeing about ONE
     # parameter) be told apart from a normal multi-key write sequence.
     payload_keys: str | None = None
+    # Did this command ask for anything the device did not already hold?
+    # Decided at command time against PRIOR reported state (see
+    # attribution/noop.py), so unlike an echo-based verdict it does not depend
+    # on the chain outliving the settle: 'noop' | 'changing' | 'unknown', with
+    # a value-free record of which keys drove it. NULL on rows written before
+    # the detector existed, which is distinct from 'unknown'.
+    noop_verdict: str | None = None
+    noop_basis: str | None = None
 
     def window(self) -> float:
         return CHAIN_WINDOWS.get(self.verb, CHAIN_WINDOWS["set"])
@@ -160,7 +168,14 @@ class ChainTracker:
     # -- intake ---------------------------------------------------------------
 
     def on_command(
-        self, instance: str, target: str, verb: str, payload: bytes, client: str | None = None
+        self,
+        instance: str,
+        target: str,
+        verb: str,
+        payload: bytes,
+        client: str | None = None,
+        noop_verdict: str | None = None,
+        noop_basis: str | None = None,
     ) -> Chain:
         now = self._clock()
         skew_ms = max(self._loop_skew_ms(), 0.0)
@@ -175,6 +190,8 @@ class ChainTracker:
             client=client,
             clock_skew_ms=skew_ms,
             payload_keys=payload_key_digests(payload),
+            noop_verdict=noop_verdict,
+            noop_basis=noop_basis,
         )
         with self._mutex:
             if verb == "set":

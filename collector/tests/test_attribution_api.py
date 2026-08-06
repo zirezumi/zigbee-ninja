@@ -83,6 +83,64 @@ def test_attribution_endpoints_require_auth(client):
     assert client.get("/api/attribution/summary").status_code == 401
     assert client.get("/api/attribution/redundant").status_code == 401
     assert client.get("/api/attribution/conflicts").status_code == 401
+    assert client.get("/api/attribution/noops").status_code == 401
+
+
+def test_noop_verdict_is_stamped_end_to_end_through_ingest(client):
+    """The detector must survive the real path: discovery, a command that
+    cannot yet be judged, the device's own report, then the same command
+    again. A unit test cannot catch a wiring mistake between _handle_message
+    and the chains INSERT."""
+    client.post("/api/setup", json=SETUP)
+    engine = client.app.state.engine
+    clock = FakeClock(float(int(time.time() / 10) * 10))
+    engine.chains = ChainTracker(resolve_members=engine._resolve_members, clock=clock)
+    engine.on_message("z2m-test/bridge/info", json.dumps(INFO).encode())
+    engine.on_message("z2m-test/bridge/devices", json.dumps(DEVICES).encode())
+
+    engine.on_message("z2m-test/lamp/set", b'{"brightness": 100}')  # cold -> unknown
+    clock.now += 0.3
+    engine.on_message("z2m-test/lamp", b'{"brightness": 100, "state": "ON"}')
+    clock.now += 0.3
+    engine.on_message("z2m-test/lamp/set", b'{"brightness": 100}')  # -> noop
+    clock.now += 0.3
+    engine.on_message("z2m-test/lamp/set", b'{"brightness": 200}')  # -> changing
+
+    # Chains persist only once finalized (window + lateness), and _expire runs
+    # on intake, so advance past it and give the tracker one more message.
+    clock.now += 20
+    engine.on_message("z2m-test/other_sensor", b'{"temperature": 21}')
+
+    body = client.get("/api/attribution/noops?seconds=600").json()
+    assert body["counts"]["noop"] == 1
+    assert body["counts"]["changing"] == 1
+    assert body["counts"]["unknown"] == 1
+    assert body["resolution_coverage"] == round(2 / 3, 4)
+    assert body["noop_keys"][0] == {"key": "brightness", "noops": 1}
+    # The echo table was actually fed: distinguishes "no no-ops" from
+    # "the detector never saw anything".
+    assert body["live"]["echoes"]["parses"] == 1
+
+
+def test_noop_report_separates_unstamped_rows_from_undecidable_ones(client):
+    """A row written before the detector existed is NULL, not 'unknown'.
+    Folding them together would let old data dilute the coverage figure the
+    whole report is meant to be read through."""
+    client.post("/api/setup", json=SETUP)
+    now = time.time()
+    client.app.state.db.connect().execute(
+        "INSERT INTO chains (instance, target, verb, opened_at, client, payload_size, "
+        "echo_count, first_echo_ms, redundant, payload_digest, clock_skew_ms, payload_keys) "
+        "VALUES ('z2m-1', 'lamp', 'set', ?, 'x', 10, 0, NULL, 0, 'd', 0, NULL)",
+        (now,),
+    )
+    client.app.state.db.connect().commit()
+
+    body = client.get("/api/attribution/noops?seconds=600").json()
+    assert body["counts"] == {"unstamped": 1}
+    # No stamped rows at all, so there is no coverage to report: explicitly
+    # null rather than a misleading 0.0 or 1.0.
+    assert body["resolution_coverage"] is None
 
 
 def test_conflicts_endpoint_reports_a_disagreement(client):
