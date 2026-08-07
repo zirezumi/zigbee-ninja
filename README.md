@@ -17,8 +17,9 @@ accounting, the wire-tier latency SLI, the calibration wizard (single, spread,
 and fleet-batch modes), headroom dashboards, threshold alerting, HA entities
 via MQTT discovery, secrets-at-rest encryption, settings-backed retention, and
 the raw-event burst inspector (zoomable timeline over an embedded
-DuckDB/Parquet store) all work. Not yet generally usable: no signed release
-images yet.
+DuckDB/Parquet store) all work. Tagged releases publish cosign-signed,
+keylessly verifiable multi-arch images; see
+[docs/RELEASING.md](docs/RELEASING.md) to verify one.
 
 ## Principles
 
@@ -51,7 +52,7 @@ images yet.
 | M4 ◐ | Wire tap agent + ASH/EZSP decode live; T1/T2 fusion pending |
 | M5 ✓ | Airtime/capacity model + calibration wizard (single/spread/bulk) + headroom dashboards |
 | M6 ✓ | Alerting + MQTT-discovery entities + secrets-at-rest + settings + burst inspector → **V1** |
-| **← current** | Hardening toward first release: signed images, T1/T2 fusion, retry-factor model input |
+| **← current** | Hardening past the first signed release: T1/T2 fusion, retry-factor model input |
 | follow-ups | Home Assistant add-on packaging, ZHA support, what-if rebalancing advisor |
 
 ## Development
