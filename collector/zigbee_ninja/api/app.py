@@ -413,6 +413,28 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
         engine.flush_rollups()
         return attribution_queries.conflicts(db, seconds, window)
 
+    @app.get("/api/attribution/duplicates")
+    def attribution_duplicates(
+        request: Request, seconds: int = 86400, window: float = 2.0
+    ) -> dict:
+        """Two commands carrying the SAME values to one target, close together.
+
+        The gap between the other two detectors. `redundant` needs
+        byte-identical payloads and so misses a pair differing only in
+        `transition`; `noops` judges at command time and so stamps BOTH sides
+        `changing` when the first has not echoed yet. A live fleet measurement
+        found 62% of one real duplicate class invisible to both. Read
+        `invisible_to_noop_detector` alongside any no-op count before treating
+        a low no-op rate as low redundancy.
+        """
+        require_user(request)
+        seconds = max(60, min(seconds, MAX_QUERY_WINDOW_SECONDS))
+        window = max(0.05, min(window, 30.0))
+        engine.flush_rollups()
+        report = attribution_queries.duplicates(db, seconds, window)
+        _label_clients(report.get("duplicates") or [])
+        return report
+
     @app.get("/api/attribution/noops")
     def attribution_noops(request: Request, seconds: int = 86400) -> dict:
         """Commands that asked for state the device already held.

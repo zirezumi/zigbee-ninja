@@ -160,3 +160,79 @@ def test_conflicts_endpoint_reports_a_disagreement(client):
     assert body["novel_cross_commander_pairs"] == 1
     assert body["conflicts"][0]["key"] == "brightness"
     assert body["conflicts"][0]["kind"] == "novel"
+
+
+def test_duplicates_endpoint_catches_the_pair_the_noop_detector_cannot(client):
+    """Two commanders, same value, different transition, neither stamped noop.
+
+    This is the shape that was invisible on a live fleet: the redundancy test
+    misses it because the bytes differ (transition), and the no-op test misses
+    it because the first publish had not echoed when the second was judged, so
+    BOTH are stamped "changing". The pair must still be reported here, and
+    counted as invisible to the no-op detector.
+    """
+    client.post("/api/setup", json=SETUP)
+    now = time.time()
+    writers = (
+        (0.0, "automation: Lifecycle", b'{"brightness": 200, "transition": 3}'),
+        (0.2, "automation: Rendering", b'{"brightness": 200, "transition": 5}'),
+    )
+    conn = client.app.state.db.connect()
+    for offset, who, payload in writers:
+        conn.execute(
+            "INSERT INTO chains (instance, target, verb, opened_at, client, payload_size, "
+            "echo_count, first_echo_ms, redundant, payload_digest, clock_skew_ms, "
+            "payload_keys, noop_verdict) "
+            "VALUES ('z2m-1', 'lamp', 'set', ?, ?, 10, 0, NULL, 0, ?, 0, ?, 'changing')",
+            (now + offset, who, str(offset), payload_key_digests(payload)),
+        )
+    conn.commit()
+
+    body = client.get("/api/attribution/duplicates?seconds=600&window=2").json()
+    assert body["duplicate_pairs"] == 1
+    assert body["cross_commander_pairs"] == 1
+    assert body["same_commander_pairs"] == 0
+    # The point of the endpoint: neither side was stamped noop, so this pair is
+    # real redundancy that /api/attribution/noops cannot report.
+    assert body["invisible_to_noop_detector"] == 1
+    assert body["invisible_share"] == 1.0
+    assert body["duplicates"][0]["keys"] == ["brightness"]
+
+
+def test_duplicates_ignores_a_pair_that_disagrees_on_the_value(client):
+    client.post("/api/setup", json=SETUP)
+    now = time.time()
+    conn = client.app.state.db.connect()
+    for offset, who, bri in ((0.0, "a", 200), (0.2, "b", 120)):
+        conn.execute(
+            "INSERT INTO chains (instance, target, verb, opened_at, client, payload_size, "
+            "echo_count, first_echo_ms, redundant, payload_digest, clock_skew_ms, payload_keys) "
+            "VALUES ('z2m-1', 'lamp', 'set', ?, ?, 10, 0, NULL, 0, ?, 0, ?)",
+            (now + offset, who, str(offset), payload_key_digests(b'{"brightness": %d}' % bri)),
+        )
+    conn.commit()
+    body = client.get("/api/attribution/duplicates?seconds=600&window=2").json()
+    assert body["duplicate_pairs"] == 0
+
+
+def test_noop_report_surfaces_near_keys_for_tolerance_sizing(client):
+    client.post("/api/setup", json=SETUP)
+    now = time.time()
+    conn = client.app.state.db.connect()
+    # basis strings as Verdict.basis() emits them: a near key is also a differed key
+    for basis in ('!brightness,+brightness', '!brightness,+brightness', '!brightness'):
+        conn.execute(
+            "INSERT INTO chains (instance, target, verb, opened_at, client, payload_size, "
+            "echo_count, first_echo_ms, redundant, payload_digest, clock_skew_ms, "
+            "noop_verdict, noop_basis) "
+            "VALUES ('z2m-1', 'lamp', 'set', ?, 'a', 10, 0, NULL, 0, 'd', 0, 'changing', ?)",
+            (now, basis),
+        )
+    conn.commit()
+    body = client.get("/api/attribution/noops?seconds=600").json()
+    near = {row["key"]: row for row in body["near_keys"]}
+    assert near["brightness"]["near"] == 2
+    assert near["brightness"]["differed"] == 3
+    # 2 of 3 'changes' on this key would flip under a tolerance -- the signal
+    # that sizes NUMERIC_TOLERANCE instead of guessing it.
+    assert near["brightness"]["near_ratio"] == 0.6667

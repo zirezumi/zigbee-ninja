@@ -453,7 +453,31 @@ strings are never coerced, so a mode key cannot compare equal to a number). Devi
 clamping and quantization are real, but no per-key tolerance has been measured, so
 `NUMERIC_TOLERANCE` ships empty and a `near` counter records how often a tolerance
 would have changed the answer. That measurement, not a guess, should decide the
-table's contents.
+table's contents. **`near` is persisted, not just counted in memory**: a `+key`
+token in `noop_basis` beside the `!key` that produced the verdict, aggregated by
+the report as `near_keys` with a `near_ratio` per key. An in-process counter would
+reset on every deploy, which is precisely when someone goes looking.
+
+**The no-op verdict has a blind spot, and it is not small.** Because the verdict is
+taken at command time, two commanders publishing the *same* value to one target
+within a few hundred milliseconds are **both** stamped `changing`: neither has seen
+the other's echo yet. The redundancy detector cannot cover the gap either, since it
+needs byte-identical payloads and the two sides routinely differ in `transition`
+alone. Measured on a live fleet: 1,105 duplicate publishes in 24 h, of which only
+418 were ever stamped `noop` — **62% of a real class was invisible to both
+detectors**, and the pairs it hid were the tightly-raced ones that matter most.
+
+That gap is closed by a third report, **duplicates** (`GET
+/api/attribution/duplicates`): same target, identical per-key digests with
+`MODIFIER_KEYS` excluded, inside a skew-aware window. It is the mirror image of the
+conflict detector (same key, *different* value) and shares its machinery. Pairs
+split into `cross_commander` (divided ownership doing redundant work — fixable by
+giving one publisher the key) and `same_commander` (one publisher repeating itself,
+usually a restart-mode automation re-running before its own bookkeeping landed).
+`invisible_to_noop_detector` reports how many of the window's duplicates the no-op
+verdict could not see, so the undercount is quantified per query rather than
+asserted once here. **A low no-op count alone does not establish low redundancy**;
+both reports have to agree, and `noops` says so in an `undercount_caveat`.
 
 **Chain timestamps are processing time, and say so.** MQTT carries no broker-side
 timestamp and ingest runs inline on the event loop, so `chains.opened_at` is stamped
