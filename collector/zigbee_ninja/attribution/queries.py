@@ -68,6 +68,8 @@ def noops(db: Database, seconds: int) -> dict:
     # publish site to gate.
     key_counts: dict[str, int] = {}
     reasons: dict[str, int] = {}
+    near_counts: dict[str, int] = {}
+    differed_counts: dict[str, int] = {}
     for row in conn.execute(
         "SELECT noop_verdict AS verdict, noop_basis AS basis FROM chains "
         "WHERE opened_at >= ? AND noop_basis IS NOT NULL",
@@ -78,6 +80,30 @@ def noops(db: Database, seconds: int) -> dict:
                 reasons[token[1:]] = reasons.get(token[1:], 0) + 1
             elif token.startswith("=") and row["verdict"] == "noop":
                 key_counts[token[1:]] = key_counts.get(token[1:], 0) + 1
+            elif token.startswith("!"):
+                differed_counts[token[1:]] = differed_counts.get(token[1:], 0) + 1
+            elif token.startswith("+"):
+                near_counts[token[1:]] = near_counts.get(token[1:], 0) + 1
+
+    # How often a per-key tolerance would have changed the answer. NUMERIC_TOLERANCE
+    # ships empty on purpose, and this is the measurement that is supposed to fill
+    # it: a key with a high near_ratio is one whose "changes" are mostly device
+    # quantization, so exact comparison is overstating how much real work it does.
+    # A low ratio says the opposite, and says leave the key alone.
+    near_keys = sorted(
+        (
+            {
+                "key": key,
+                "near": n,
+                "differed": differed_counts.get(key, 0),
+                "near_ratio": round(n / differed_counts[key], 4)
+                if differed_counts.get(key)
+                else None,
+            }
+            for key, n in near_counts.items()
+        ),
+        key=lambda row: -row["near"],
+    )[:TOP_LIMIT]
 
     return {
         "window_seconds": seconds,
@@ -92,7 +118,22 @@ def noops(db: Database, seconds: int) -> dict:
             key=lambda row: -row["noops"],
         )[:TOP_LIMIT],
         "unresolved_reasons": reasons,
+        "near_keys": near_keys,
+        "near_note": (
+            "`near` counts keys that differed by less than NEAR_RELATIVE, i.e. "
+            "where a per-key tolerance would have flipped `changing` to `noop`. "
+            "NUMERIC_TOLERANCE ships empty; this is the measurement meant to "
+            "fill it. It never affects a verdict."
+        ),
         "top_noop_targets": by_target,
+        "undercount_caveat": (
+            "This metric CANNOT see a duplicate whose twin has not echoed yet: "
+            "the verdict is taken at command time against prior state, so two "
+            "commanders publishing the same value within a few hundred ms are "
+            "both stamped `changing`. Measured on a live fleet, that hid 62% of "
+            "one real duplicate class. Use /api/attribution/duplicates for that "
+            "question; a low noop count alone does not establish low redundancy."
+        ),
         "commander_caveat": (
             "client labels come from HA context ids and can cross-attribute "
             "sibling scripts under one parent; verify a construct has a code "
@@ -176,6 +217,152 @@ def redundant(db: Database, seconds: int) -> list[dict]:
             (since, TOP_LIMIT),
         )
     ]
+
+
+def duplicates(db: Database, seconds: int, window: float = 2.0) -> dict:
+    """Commands that set the same keys to the SAME values inside one window.
+
+    The mirror image of `conflicts` next door, and the gap between the two
+    existing detectors. `redundant` needs byte-identical payloads, so two
+    commanders sending one value with different transitions are invisible to
+    it. `noops` takes its verdict at command time against prior state, so when
+    the twin has not echoed yet BOTH commands are stamped `changing` and the
+    pair is invisible there too. A duplicate is therefore reliably counted only
+    when it is slow enough to be caught -- which selects against exactly the
+    tightly-raced pairs that matter most.
+
+    Measured on a live fleet before this existed: 1,105 duplicate publishes in
+    24 h, of which only 418 were ever stamped `noop`. **62% of a real class was
+    invisible to every metric the service offered.** That is the number this
+    query exists to stop anyone from missing again, and it is why a low no-op
+    count must not be read as low redundancy on its own.
+
+    Matching is on per-key digests with `MODIFIER_KEYS` excluded, for the same
+    reason `conflicts` does it: the two halves of a duplicate frequently differ
+    in `transition` alone, and whole-payload digest matching drops every one of
+    them. A pair counts when every assessable key is present on both sides with
+    the same digest.
+
+    `cross_commander` is the headline: two independent publishers arriving at
+    the same value for the same target is divided ownership doing redundant
+    work, and is fixable by giving one of them the key. `same_commander` pairs
+    are one publisher repeating itself -- usually a restart-mode automation
+    re-running before its own bookkeeping landed -- and want a different fix.
+
+    Skew-aware on the same terms as its neighbours: chain timestamps are
+    processing time, so a stall can pull unrelated commands into apparent
+    proximity, and a pair counts only when the gap plus the doubt still fits.
+    """
+    conn = db.connect()
+    since = time.time() - seconds
+    rows = conn.execute(
+        "SELECT instance, target, client, opened_at, clock_skew_ms, payload_keys, "
+        "noop_verdict FROM chains WHERE opened_at >= ? AND verb = 'set' "
+        "AND payload_keys IS NOT NULL ORDER BY instance, target, opened_at",
+        (since,),
+    ).fetchall()
+
+    by_target: dict[tuple[str, str], list[dict]] = {}
+    for row in rows:
+        by_target.setdefault((row["instance"], row["target"]), []).append(dict(row))
+
+    found: dict[tuple, dict] = {}
+    pairs_examined = 0
+    skew_skipped = 0
+    invisible_to_noop = 0
+    verdict_pairs: dict[str, int] = {}
+    for (instance, target), chains in by_target.items():
+        parsed = [
+            {
+                key: digest
+                for key, digest in parse_key_digests(c["payload_keys"]).items()
+                if key not in MODIFIER_KEYS
+            }
+            for c in chains
+        ]
+        for j, second in enumerate(chains):
+            second_keys = parsed[j]
+            if not second_keys:
+                continue
+            for i in range(j - 1, -1, -1):
+                first, first_keys = chains[i], parsed[i]
+                gap = second["opened_at"] - first["opened_at"]
+                if gap > window:
+                    break
+                if not first_keys:
+                    continue
+                pairs_examined += 1
+                doubt = max(
+                    first["clock_skew_ms"] or 0.0, second["clock_skew_ms"] or 0.0
+                ) / 1000.0
+                if gap + doubt > window:
+                    skew_skipped += 1
+                    continue
+                if first_keys != second_keys:
+                    continue
+                a = first["client"] or "(unattributed)"
+                b = second["client"] or "(unattributed)"
+                pair = f"{first['noop_verdict'] or 'unstamped'} -> " \
+                       f"{second['noop_verdict'] or 'unstamped'}"
+                verdict_pairs[pair] = verdict_pairs.get(pair, 0) + 1
+                # The whole point: the second publish added nothing, and the
+                # no-op detector did not say so because the first had not
+                # echoed yet.
+                if second["noop_verdict"] != "noop":
+                    invisible_to_noop += 1
+                entry = found.setdefault(
+                    (instance, target, a, b, ",".join(sorted(second_keys))),
+                    {
+                        "instance": instance,
+                        "target": target,
+                        "first_client": a,
+                        "second_client": b,
+                        "keys": sorted(second_keys),
+                        "same_commander": a == b,
+                        "ambiguous_commander": AMBIGUOUS_COMMANDER in (a, b),
+                        "count": 0,
+                        "min_gap_ms": None,
+                        "second_stamped_noop": 0,
+                    },
+                )
+                entry["count"] += 1
+                if second["noop_verdict"] == "noop":
+                    entry["second_stamped_noop"] += 1
+                gap_ms = round(gap * 1000.0, 1)
+                if entry["min_gap_ms"] is None or gap_ms < entry["min_gap_ms"]:
+                    entry["min_gap_ms"] = gap_ms
+                # One partner per arrival: a burst of three identical commands
+                # is two duplicates, not three.
+                break
+
+    ranked = sorted(found.values(), key=lambda e: -e["count"])
+    total = sum(e["count"] for e in ranked)
+    return {
+        "window_seconds": window,
+        "chains_considered": len(rows),
+        "pairs_examined": pairs_examined,
+        "pairs_skipped_for_clock_skew": skew_skipped,
+        "duplicate_pairs": total,
+        "cross_commander_pairs": sum(
+            e["count"]
+            for e in ranked
+            if not e["same_commander"] and not e["ambiguous_commander"]
+        ),
+        "same_commander_pairs": sum(e["count"] for e in ranked if e["same_commander"]),
+        "pairs_with_ambiguous_commander": sum(
+            e["count"] for e in ranked if e["ambiguous_commander"]
+        ),
+        # The headline caveat, quantified for this window rather than asserted.
+        "invisible_to_noop_detector": invisible_to_noop,
+        "invisible_share": round(invisible_to_noop / total, 4) if total else None,
+        "invisible_note": (
+            "duplicates whose SECOND publish was not stamped `noop`, because "
+            "the first had not echoed when the verdict was taken. These are "
+            "real redundancy that /api/attribution/noops cannot report."
+        ),
+        "verdict_pairs": verdict_pairs,
+        "duplicates": ranked[:TOP_LIMIT],
+    }
 
 
 def conflicts(db: Database, seconds: int, window: float = 2.0) -> dict:

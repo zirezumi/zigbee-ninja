@@ -117,6 +117,15 @@ class Verdict:
             ("=", self.matched),
             ("!", self.differed),
             ("?", self.unknown),
+            # `+` marks a key that differed but only just, by NEAR_RELATIVE. A
+            # near key is always also a differed key, so it appears twice on
+            # purpose: `!brightness,+brightness` reads as "this is what made the
+            # verdict `changing`, and a tolerance would have flipped it".
+            # Recorded here rather than only in memory so the tolerance table
+            # can be sized over a query window instead of over collector
+            # uptime -- an in-process counter resets on every deploy, which is
+            # exactly when someone is looking.
+            ("+", self.near),
         ):
             parts.extend(f"{label}{key}" for key in keys)
         if self.reason:
