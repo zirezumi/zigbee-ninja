@@ -427,20 +427,57 @@ class Registry:
 
     def is_group(self, base: str, target: str) -> bool:
         """Whether a command target names a group (Z2M accepts the friendly
-        name or the numeric group id in the topic)."""
+        name or the numeric group id in the topic).
+
+        Shares `_group_entry` with membership lookup deliberately: the two
+        answered the same question with different matching rules once, and a
+        target that is a group to one and not to the other is precisely the
+        state that sends a group command to be judged against its own
+        synthetic state topic.
+        """
+        return self._group_entry(base, target) is not None
+
+    def _group_entry(self, base: str, target: str) -> dict | None:
+        """The group a command target names, by friendly name or numeric id.
+
+        Z2M accepts either form in a topic and `is_group` already honours both,
+        so membership lookup has to agree with it. It did not: `group_members`
+        matched the friendly name alone, so a numeric-id topic fell through to
+        `[]`, which the no-op detector reads as "not a group" and then answers
+        by comparing against the group's own state topic -- Z2M's synthetic
+        composition of ONE member, which is the comparison group expansion
+        exists to avoid.
+        """
         for group in self._groups.get(base, []):
             if group.get("friendly_name") == target or str(group.get("id")) == target:
-                return True
-        return False
+                return group
+        return None
 
     def group_members(self, base: str, group_name: str) -> list[str]:
-        """Friendly names of a group's member devices; [] for non-group targets."""
+        """Friendly names of a group's member devices; [] for non-group targets.
+
+        Members whose IEEE is not in the device map are omitted. A caller that
+        cannot tolerate a partial roster wants `group_members_strict`.
+        """
+        members, _complete = self.group_members_strict(base, group_name)
+        return members
+
+    def group_members_strict(self, base: str, group_name: str) -> tuple[list[str], bool]:
+        """(members, complete). `complete` is False when the roster is not
+        fully trustworthy: an unresolvable member IEEE, or a group that
+        resolves to no members at all.
+
+        The distinction matters for one caller and is load-bearing there. A
+        silently-shortened member list is the one input that can manufacture a
+        false `noop`: drop the member that would have disagreed, and every
+        member that remains matches. The detector is required to fail toward
+        `unknown`, so it has to be able to tell "this group has three members"
+        from "this group has three members I could name".
+        """
+        group = self._group_entry(base, group_name)
+        if group is None:
+            return [], True  # genuinely not a group; caller uses the target itself
         ieee_map = self._ieee_to_name.get(base, {})
-        for group in self._groups.get(base, []):
-            if group.get("friendly_name") == group_name:
-                return [
-                    ieee_map[ieee]
-                    for ieee in group.get("member_ieee", [])
-                    if ieee in ieee_map
-                ]
-        return []
+        names = [ieee_map.get(ieee) for ieee in group.get("member_ieee", [])]
+        resolved = [name for name in names if name is not None]
+        return resolved, bool(resolved) and len(resolved) == len(names)
