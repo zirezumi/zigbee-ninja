@@ -439,6 +439,16 @@ Three properties are load-bearing:
   member already holds the value; the group's own state topic is Zigbee2MQTT's
   synthetic optimistic state, not an aggregate, so it cannot answer this. One
   unseen member makes the command `unknown`.
+* **An untrustworthy roster is `unknown`, not a fallback to the group topic.**
+  Membership resolution reports whether it is *complete*, and the detector
+  stamps `~group_unresolved` when it is not. Two paths used to fail silently
+  the other way, both toward a false `noop`: a numeric-id topic (Zigbee2MQTT
+  accepts `<base>/<group id>/set`, and membership lookup matched only the
+  friendly name) fell through to "not a group" and was judged against the
+  group's own synthetic state; and a member whose IEEE is absent from the
+  device map was dropped from the roster, so losing the one member that would
+  have disagreed left every survivor matching. `is_group` and membership
+  lookup now share one matcher so they cannot diverge again.
 * **The state intake is gated twice before parsing**: the device must have been
   commanded, and a tracked key must appear literally in the payload bytes.
   Measured on a real 139-key, 5.1 KB dimmer dump, `json.loads` costs 15.1 µs and

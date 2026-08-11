@@ -239,7 +239,10 @@ class NoopDetector:
 
     def __init__(self, resolve_members=None):
         self.echoes = EchoState()
-        self._resolve_members = resolve_members or (lambda _instance, _target: [])
+        # (members, complete). `complete` is False only when the target IS a
+        # group whose roster could not be fully resolved; a plain device target
+        # resolves to ([], True) and is assessed against itself.
+        self._resolve_members = resolve_members or (lambda _instance, _target: ([], True))
         self.counts: dict[str, int] = {
             VERDICT_NOOP: 0,
             VERDICT_CHANGING: 0,
@@ -270,7 +273,16 @@ class NoopDetector:
         # state, not an aggregate, so it cannot answer this. One unseen member
         # makes the whole command unknown rather than quietly assuming the
         # group is uniform.
-        members = self._resolve_members(instance, target) or [target]
+        members, complete = self._resolve_members(instance, target)
+        if not complete:
+            # The roster itself is untrustworthy, which is worse than an unseen
+            # member: falling back to `[target]` would compare against the
+            # group's synthetic one-member state, and a short roster can
+            # manufacture a `noop` outright by dropping the member that would
+            # have disagreed. Stamp unknown so it lands in the coverage figure
+            # instead of in the numerator.
+            return self._record(Verdict(VERDICT_UNKNOWN, reason="group_unresolved"))
+        members = members or [target]
 
         # Register interest AFTER reading, so this command's own keys start
         # being tracked for the next one without this command comparing

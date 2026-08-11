@@ -428,7 +428,7 @@ class Engine:
         # command is a no-op only if every MEMBER already holds the value, and
         # the group's own state topic is Z2M's synthetic optimistic state
         # rather than an aggregate, so it cannot answer that.
-        self.noops = NoopDetector(resolve_members=self._resolve_members)
+        self.noops = NoopDetector(resolve_members=self._resolve_members_strict)
         self.chains = ChainTracker(
             resolve_members=self._resolve_members,
             # Chains are stamped on the loop, so they inherit its lag. Handing
@@ -528,6 +528,16 @@ class Engine:
 
     def _resolve_members(self, instance: str, target: str) -> list[str]:
         return self.registry.group_members(instance, target)
+
+    def _resolve_members_strict(self, instance: str, target: str) -> tuple[list[str], bool]:
+        """Membership plus whether it is fully resolved, for the no-op detector.
+
+        Kept separate from `_resolve_members` because the chain tracker and the
+        probe ingest genuinely want a best-effort list: a partial roster there
+        costs a slightly incomplete fan-out, whereas in the detector it can turn
+        a real command into a false `noop`.
+        """
+        return self.registry.group_members_strict(instance, target)
 
     # Cross-instance moves complete within this window (remove from one
     # coordinator, rejoin on another is minutes to hours of user work).

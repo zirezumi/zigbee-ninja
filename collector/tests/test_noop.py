@@ -92,7 +92,7 @@ def test_group_command_needs_every_member_to_hold_the_value():
     aggregate, so uniformity has to be checked per member."""
     members = {"z2m-1": {"office_bulbs": ["bulb_a", "bulb_b"]}}
     d = NoopDetector(
-        resolve_members=lambda inst, target: members.get(inst, {}).get(target, [])
+        resolve_members=lambda inst, target: (members.get(inst, {}).get(target, []), True)
     )
     d.classify("z2m-1", "office_bulbs", _cmd(brightness=100))
     d.note_state("z2m-1", "bulb_a", _state(brightness=100))
@@ -110,13 +110,48 @@ def test_group_command_needs_every_member_to_hold_the_value():
 def test_group_with_an_unseen_member_is_unknown_not_a_noop():
     members = {"z2m-1": {"grp": ["bulb_a", "bulb_b"]}}
     d = NoopDetector(
-        resolve_members=lambda inst, target: members.get(inst, {}).get(target, [])
+        resolve_members=lambda inst, target: (members.get(inst, {}).get(target, []), True)
     )
     d.classify("z2m-1", "grp", _cmd(brightness=100))
     d.note_state("z2m-1", "bulb_a", _state(brightness=100))  # bulb_b never reports
     v = d.classify("z2m-1", "grp", _cmd(brightness=100))
     assert v.verdict == VERDICT_UNKNOWN
     assert v.unknown == ["brightness"]
+
+
+def test_unresolved_group_roster_is_unknown_not_a_noop():
+    """The false-`noop` case, and the reason `complete` exists.
+
+    A roster that silently loses the member which would have disagreed leaves
+    every remaining member matching, so the command reads as a no-op when it is
+    doing real work. Stamping `unknown` keeps it in the coverage figure instead
+    of in the numerator, which is the direction this detector is required to
+    fail in."""
+    d = NoopDetector(resolve_members=lambda inst, target: (["bulb_a"], False))
+    d.classify("z2m-1", "grp", _cmd(brightness=100))
+    d.note_state("z2m-1", "bulb_a", _state(brightness=100))
+    v = d.classify("z2m-1", "grp", _cmd(brightness=100))
+    assert v.verdict == VERDICT_UNKNOWN
+    assert v.reason == "group_unresolved"
+    assert v.basis() == "~group_unresolved"
+
+
+def test_group_resolving_to_no_members_is_unknown_not_self_assessed():
+    """An empty roster must not fall back to the group topic: that is Z2M's
+    synthetic one-member state, which cannot answer the question."""
+    d = NoopDetector(resolve_members=lambda inst, target: ([], False))
+    d.note_state("z2m-1", "grp", _state(brightness=100))
+    v = d.classify("z2m-1", "grp", _cmd(brightness=100))
+    assert v.verdict == VERDICT_UNKNOWN
+    assert v.reason == "group_unresolved"
+
+
+def test_plain_device_target_still_assesses_against_itself():
+    """Regression: a non-group resolves to ([], True) and must keep working."""
+    d = NoopDetector(resolve_members=lambda inst, target: ([], True))
+    d.classify("z2m-1", "dev", _cmd(brightness=100))
+    d.note_state("z2m-1", "dev", _state(brightness=100))
+    assert d.classify("z2m-1", "dev", _cmd(brightness=100)).verdict == VERDICT_NOOP
 
 
 def test_int_float_round_trip_does_not_look_like_a_change():
