@@ -24,6 +24,7 @@ def test_defaults_and_partial_update(client):
         "retention_topology_snapshots": 20,
         "raw_event_quota_mb": 4096,
         "raw_event_horizon_hours": 48,
+        "gc_maintenance_interval_seconds": 7200,
         "client_labels": {},
     }
 
@@ -42,6 +43,54 @@ def test_values_clamp_to_sane_ranges(client):
     ).json()
     assert updated["retention_rollup_days"] == 365
     assert updated["retention_chains_hours"] == 1
+
+
+def test_gc_interval_setting_reaches_the_schedule(client):
+    """The knob has to move the live schedule, not just the settings row.
+
+    GcMaintenance reads its interval from an attribute rather than polling
+    settings, so a stored value that never reaches set_interval() would read
+    back correctly from /api/settings and change nothing about when a
+    collection actually fires. /api/health is the honest witness: it echoes
+    what the schedule itself holds."""
+    authed(client)
+    engine = client.app.state.engine
+    assert engine.gc_maintenance.stats()["interval_seconds"] == 7200.0
+
+    updated = client.post(
+        "/api/settings", json={"gc_maintenance_interval_seconds": 1800}
+    ).json()
+    assert updated["gc_maintenance_interval_seconds"] == 1800
+    assert engine.gc_maintenance.stats()["interval_seconds"] == 1800.0
+    assert client.get("/api/health").json()["gc_maintenance"][
+        "interval_seconds"
+    ] == 1800.0
+
+
+def test_gc_interval_clamps_and_survives_a_restart(client):
+    """Out of range clamps, and a stored value is adopted at start().
+
+    The constructor runs before settings are readable, so without the
+    Engine.start() read a tuned interval would silently revert to the default
+    on every restart: the change would appear to work and then quietly undo
+    itself the next time the container came up."""
+    authed(client)
+    engine = client.app.state.engine
+    assert client.post(
+        "/api/settings", json={"gc_maintenance_interval_seconds": 5}
+    ).json()["gc_maintenance_interval_seconds"] == 600
+    assert client.post(
+        "/api/settings", json={"gc_maintenance_interval_seconds": 999999}
+    ).json()["gc_maintenance_interval_seconds"] == 86400
+
+    # A fresh schedule starts at the compiled default; adopting the stored
+    # value is what start() does.
+    engine.gc_maintenance.set_interval(7200)
+    assert engine.gc_maintenance.stats()["interval_seconds"] == 7200.0
+    engine.gc_maintenance.set_interval(
+        engine.runtime_settings()["gc_maintenance_interval_seconds"]
+    )
+    assert engine.gc_maintenance.stats()["interval_seconds"] == 86400.0
 
 
 def test_client_labels_roundtrip_and_cleaning(client):

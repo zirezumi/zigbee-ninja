@@ -25,6 +25,7 @@ import json
 import time
 from collections import deque
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 
 import websockets
@@ -253,10 +254,14 @@ class HaLink:
         config: HaConfig,
         attribution: HaAttribution,
         on_publish: Callable[[str, str, str | None], None],
+        activity=None,
     ):
         self._config = config
         self._attribution = attribution
         self._on_publish = on_publish
+        # Optional so this class stays constructible without an Engine. When
+        # absent the span is a nullcontext and nothing is measured.
+        self._activity = activity
         self.status: dict = {"state": "disconnected", "error": None, "connected_since": None}
 
     def _set_status(self, state: str, error: str | None = None) -> None:
@@ -304,12 +309,24 @@ class HaLink:
                             continue
                         if message.get("type") != "event":
                             continue
-                        result = self._attribution.handle_event(message.get("event") or {})
-                        if result is not None:
-                            try:
-                                self._on_publish(*result)
-                            except Exception:  # noqa: BLE001 - never kill the link
-                                pass
+                        # Every subscribed HA event runs handle_event on the
+                        # event loop, and a busy house fires them in bursts, so
+                        # this is on-loop work that used to be invisible: no
+                        # single event is slow enough to reach the slow ring,
+                        # but a burst of them still holds the loop.
+                        with (
+                            self._activity.span("ha_event")
+                            if self._activity
+                            else nullcontext()
+                        ):
+                            result = self._attribution.handle_event(
+                                message.get("event") or {}
+                            )
+                            if result is not None:
+                                try:
+                                    self._on_publish(*result)
+                                except Exception:  # noqa: BLE001 - never kill the link
+                                    pass
             except asyncio.CancelledError:
                 raise
             except Exception as exc:  # noqa: BLE001 - reconnect on any transport error

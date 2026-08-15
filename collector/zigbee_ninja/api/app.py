@@ -159,6 +159,7 @@ class SettingsBody(BaseModel):
     retention_topology_snapshots: int | None = None
     raw_event_quota_mb: int | None = None
     raw_event_horizon_hours: int | None = None
+    gc_maintenance_interval_seconds: int | None = None
     client_labels: dict[str, str] | None = None
 
 

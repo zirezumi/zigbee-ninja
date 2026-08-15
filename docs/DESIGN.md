@@ -523,6 +523,32 @@ pretend to precision it cannot have:
   second is NESTED inside the first, so the inner span *was* the work. Check
   enclosure before concluding "one pause, two spans".
 
+* **A slow-span ring cannot see a burst, so stalls also carry accumulated time.**
+  `ACTIVITY_SLOW_MS` is a per-span bar: 800 spans of 3 ms hold the loop for 2.4 s
+  while not one of them is recorded, so the stall reads as having no in-process
+  cause when it has an obvious one. Measured on the reference deployment
+  2026-08-15: 30 of 32 recorded stalls fell in seconds 0-3 of the minute while no
+  instrumented span did, and no 60-second task exists in this process to explain
+  it. Each lag sample therefore drains a per-label accumulator of on-loop span
+  time, and a stall entry carries `activity` (the top labels, with counts) plus
+  **`unaccounted_ms`**, the part of the lag no span explains. The residual is the
+  point: it distinguishes "the loop was busy doing X" from "the loop was held by
+  something nothing measures", and only the second is a reason to add
+  instrumentation. Two constraints hold it together. **Spans must wrap
+  synchronous work only**, since a span held open across an `await` charges the
+  label for time the loop spent elsewhere and would shrink that residual
+  dishonestly. And **only work that actually held the loop is accumulated**,
+  decided by thread identity rather than a roster of on-loop labels, so a
+  long-running worker flush cannot be billed to a loop stall: the same enclosure
+  mistake as the reading note above, one level up. Collections are the deliberate
+  exception, counted from whichever thread trips them, because the GIL pause is
+  global.
+
+  Stall timestamps are stamped at sampler wake-up, so the stall lies in
+  `[at - lag_ms - sample_interval, at]`. Anyone bucketing stalls by
+  second-of-minute to hunt a periodic cause has to subtract the lag first or the
+  cause is mis-phased by a whole minute.
+
 * **Shrink the gap, then schedule what is left.** Storage flushes already run
   off-loop (`asyncio.to_thread`); full garbage collections, which hold the GIL and
   so pause the loop from any thread, are cut at startup by `gc.freeze()` plus a
@@ -534,9 +560,17 @@ pretend to precision it cannot have:
   younger set: measured 2,405 ms at one day of uptime and 14,074 ms at 5.6 days.
   The threshold is therefore set high enough that automatic full passes
   effectively never fire, and `GcMaintenance` takes them **on a schedule**
-  (default 6 h): `gc.unfreeze()` → `gc.collect()` → `gc.freeze()`, on the event
+  (`gc_maintenance_interval_seconds`, default 2 h): `gc.unfreeze()` →
+  `gc.collect()` → `gc.freeze()`, on the event
   loop deliberately, since a GIL pause is global and a worker thread would hide
-  the cause without shortening it. The pause is booked under `gc_maintenance`
+  the cause without shortening it. The interval is a **runtime setting** rather
+  than a constant, because the right value is a property of one deployment's
+  object graph and pinning it in code made every retune cost a release. The
+  default fell from 6 h to 2 h on 2026-08-15: at six the reference deployment
+  reached a 12,751 ms pause with 15 of 16 windows over the slow bar, and the cost
+  was scan rather than reclaim (that pause freed 1,815 objects while a 421 ms one
+  freed 4,974). A full pass rescans whatever accumulated since the last freeze, so
+  the lever is how much accumulates, which is the interval. The pause is booked under `gc_maintenance`
   rather than `gc_gen2`, so the generation totals keep meaning "pauses nobody
   scheduled" and should trend to zero; recent windows are wall-clock stamped on
   `/api/health` so an analysis pass can drop overlapping samples the way headroom
