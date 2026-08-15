@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Awaitable, Callable
+from contextlib import nullcontext
 
 from .store.config import ConfigStore
 
@@ -86,6 +87,7 @@ class DiscoveryPublisher:
         discovery_prefix: Callable[[str], str | None],
         metrics: Callable[[str], dict],
         version: str,
+        activity=None,
     ):
         self._config = config
         self._publish = publish
@@ -93,9 +95,21 @@ class DiscoveryPublisher:
         self._discovery_prefix = discovery_prefix
         self._metrics = metrics
         self._version = version
+        # Optional so this class stays constructible without an Engine.
+        self._activity = activity
         # Config payloads republish once per boot per instance (and again on
         # payload change, e.g. a version bump): not every cycle.
         self._configs_published: dict[str, str] = {}
+
+    def _span(self, label: str):
+        """Time a SYNCHRONOUS stretch of this cycle, or nothing if unwired.
+
+        Synchronous is not a style note. The stall window these totals feed
+        subtracts them from the measured lag, so a span held open across an
+        `await` would bill the loop for time it spent elsewhere and shrink the
+        residual that says how much of a stall nothing is watching. Every span
+        in this process wraps sync work only; keep it that way."""
+        return self._activity.span(label) if self._activity else nullcontext()
 
     # -- topic/payload construction ---------------------------------------------
 
@@ -180,23 +194,31 @@ class DiscoveryPublisher:
     # -- publishing ---------------------------------------------------------------
 
     async def _publish_instance(self, base: str) -> None:
-        configs = self._config_payloads(base)
-        signature = json.dumps(configs, sort_keys=True)
-        recorded = self._config.get(self._topics_key(base)) or []
-        all_topics = self._all_topics(base)
-        if recorded != all_topics:
-            self._config.set(self._topics_key(base), all_topics)
+        with self._span("discovery_publish"):
+            configs = self._config_payloads(base)
+            signature = json.dumps(configs, sort_keys=True)
+            recorded = self._config.get(self._topics_key(base)) or []
+            all_topics = self._all_topics(base)
+            if recorded != all_topics:
+                self._config.set(self._topics_key(base), all_topics)
         if self._configs_published.get(base) != signature:
             for topic, payload in configs.items():
                 await self._publish(topic, payload, retain=True)
             self._configs_published[base] = signature
-        for topic, payload in self._state_payloads(base).items():
+        # Built inside its own span rather than hoisted into the one above:
+        # the payloads are assembled at this point in the cycle today, and
+        # moving that read earlier would change what they observe.
+        with self._span("discovery_publish"):
+            states = self._state_payloads(base)
+        for topic, payload in states.items():
             await self._publish(topic, payload, retain=True)
 
     async def cleanup_revoked(self) -> None:
         """Delete retained topics for every base that lost its grant."""
-        granted = set(self._granted_bases())
-        for key in list(self._config.all()):
+        with self._span("discovery_publish"):
+            granted = set(self._granted_bases())
+            recorded_keys = list(self._config.all())
+        for key in recorded_keys:
             if not key.startswith(_TOPICS_KEY_PREFIX):
                 continue
             base = key[len(_TOPICS_KEY_PREFIX) :]

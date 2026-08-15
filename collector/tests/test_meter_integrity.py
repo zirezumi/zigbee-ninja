@@ -19,6 +19,121 @@ from zigbee_ninja.ingest.engine import (
 )
 
 
+def test_a_burst_of_fast_spans_is_attributed_to_the_stall():
+    """The blind spot this exists to close.
+
+    ACTIVITY_SLOW_MS is a PER-SPAN bar, so 800 spans of 3 ms hold the loop for
+    2.4 s while not one of them reaches the slow ring. Measured live on the
+    reference deployment 2026-08-15: 30 of 32 recorded stalls landed in
+    seconds 0-3 of the minute while no instrumented span did, which read as
+    "no in-process cause" and was really "no single span was slow". Accumulated
+    time answers the question the ring cannot."""
+    now = {"mono": 0.0, "wall": 1_700_000_000.0}
+    log = LoopActivityLog(clock=lambda: now["mono"], wall=lambda: now["wall"])
+    log.mark_loop_thread()
+    for _ in range(800):
+        with log.span("mqtt_message"):
+            now["mono"] += 0.003
+    # Not one of them was individually slow, so the ring is empty.
+    assert log.stats()["recent_slow"] == []
+    assert log.stats()["totals"]["mqtt_message"]["slow"] == 0
+
+    monitor = LoopLagMonitor(clock=lambda: now["mono"], wall=lambda: now["wall"])
+    monitor.record(2.5, activity=log.drain_window())
+    stall = monitor.stats()["recent_stalls"][0]
+    assert stall["activity"] == {"mqtt_message": {"count": 800, "ms": 2400.0}}
+    assert stall["unaccounted_ms"] == 100.0
+
+
+def test_a_stall_nothing_measures_reads_as_unaccounted():
+    """The other direction, and the one that keeps this honest.
+
+    If the loop is held by work carrying no span, the residual must say so
+    rather than the breakdown quietly looking plausible. This is the reading
+    that sends the next person to instrument something new instead of
+    re-deriving the same dead end."""
+    now = {"mono": 0.0, "wall": 1_700_000_000.0}
+    log = LoopActivityLog(clock=lambda: now["mono"], wall=lambda: now["wall"])
+    log.mark_loop_thread()
+    with log.span("mqtt_message"):
+        now["mono"] += 0.040
+    monitor = LoopLagMonitor(clock=lambda: now["mono"], wall=lambda: now["wall"])
+    monitor.record(2.6, activity=log.drain_window())
+    stall = monitor.stats()["recent_stalls"][0]
+    assert stall["activity"] == {"mqtt_message": {"count": 1, "ms": 40.0}}
+    assert stall["unaccounted_ms"] == 2560.0
+
+
+def test_the_window_counts_loop_work_and_global_pauses_only():
+    """A worker-thread span must not be billed to a loop stall.
+
+    The flush worker can run long beside a perfectly clean loop, and counting
+    it would name the innocent and shrink the residual that matters. A GC pause
+    is the deliberate exception: it holds the GIL, so it stalls the loop from
+    whichever thread tripped it."""
+    now = {"mono": 0.0, "wall": 1_700_000_000.0}
+    log = LoopActivityLog(clock=lambda: now["mono"], wall=lambda: now["wall"])
+    log.mark_loop_thread()
+
+    def off_loop():
+        with log.span("worker_rollup_flush"):
+            now["mono"] += 0.500
+        # A collection tripped by another thread still pauses the loop.
+        log.note("gc_gen2", 300.0, global_pause=True)
+
+    worker = threading.Thread(target=off_loop)
+    worker.start()
+    worker.join()
+    with log.span("mqtt_message"):
+        now["mono"] += 0.020
+
+    window = log.drain_window()
+    assert "worker_rollup_flush" not in window
+    assert window["gc_gen2"] == {"count": 1, "ms": 300.0}
+    assert window["mqtt_message"]["count"] == 1
+    # Both totals still record everything: only the stall window filters.
+    assert "worker_rollup_flush" in log.stats()["totals"]
+
+
+def test_draining_the_window_resets_it():
+    """Drained every sample, so consecutive samples cannot double-count.
+
+    Draining only when a stall fires would hand that stall an accumulator of
+    unknown age and over-credit it with however long the loop had been quiet."""
+    log = LoopActivityLog()
+    log.mark_loop_thread()
+    log.note("mqtt_message", 5.0)
+    assert log.drain_window()["mqtt_message"]["ms"] == 5.0
+    assert log.drain_window() == {}
+
+
+def test_unaccounted_uses_every_label_not_just_the_named_ones():
+    """Trimming the display must not inflate what looks unexplained.
+
+    Only STALL_ACTIVITY_LABELS_KEPT labels are printed; if the residual were
+    computed from those alone, a stall spread across many small labels would
+    report unmeasured time that was in fact measured."""
+    log = LoopActivityLog()
+    log.mark_loop_thread()
+    for i in range(8):
+        log.note(f"label_{i}", 100.0)
+    monitor = LoopLagMonitor()
+    monitor.record(1.0, activity=log.drain_window())
+    stall = monitor.stats()["recent_stalls"][0]
+    assert len(stall["activity"]) == 5
+    assert stall["unaccounted_ms"] == 200.0  # 1000 - 8 * 100, not 1000 - 5 * 100
+
+
+def test_the_window_stays_empty_until_the_loop_thread_is_marked():
+    """Inert before Engine.start(), the way the Database guard is.
+
+    A log that guessed the loop thread would attribute a script's or a test's
+    work to a loop that never ran."""
+    log = LoopActivityLog()
+    log.note("mqtt_message", 5.0)
+    assert log.drain_window() == {}
+
+
 def test_loop_lag_monitor_tracks_window_max_and_stalls():
     now = {"t": 1000.0}
     monitor = LoopLagMonitor(clock=lambda: now["t"])
@@ -49,7 +164,17 @@ def test_loop_lag_monitor_keeps_recent_stall_timestamps():
     now["wall"] += 5
     monitor.record(3.1)
     stalls = monitor.stats()["recent_stalls"]
-    assert stalls == [{"at": 1_700_000_005.0, "lag_ms": 3100.0}]
+    # With no activity handed in, the whole stall is unaccounted rather than
+    # absent: an empty breakdown and a full residual are different claims from
+    # "we did not look", and only one of them is true here.
+    assert stalls == [
+        {
+            "at": 1_700_000_005.0,
+            "lag_ms": 3100.0,
+            "activity": {},
+            "unaccounted_ms": 3100.0,
+        }
+    ]
 
     for _ in range(LOOP_LAG_STALLS_KEPT + 10):
         now["wall"] += 1
@@ -113,6 +238,13 @@ def test_activity_log_times_gc_pauses():
     # records nothing rather than a garbage duration.
     log._on_gc("stop", {"generation": 1})
     assert "gc_gen1" not in log.stats()["totals"]
+
+    # The REAL callback path has to mark the pause global, not just note it.
+    # This log never had its loop thread marked, so the only way gc_gen2
+    # reaches the stall window is the global_pause flag _on_gc passes: assert
+    # it here rather than by calling note() directly, or a revert in _on_gc
+    # would leave every collection missing from every stall it caused.
+    assert log.drain_window()["gc_gen2"] == {"count": 1, "ms": 1500.0}
 
 
 def test_gc_maintenance_skips_the_startup_interval_then_comes_due():

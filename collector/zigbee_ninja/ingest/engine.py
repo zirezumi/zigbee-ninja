@@ -54,13 +54,29 @@ LOOP_LAG_STALL_MS = 250.0
 LOOP_LAG_STALLS_KEPT = 32
 ACTIVITY_SLOW_MS = 100.0
 ACTIVITY_ENTRIES_KEPT = 64
+# How many labels a stall entry names. The accounting behind `unaccounted_ms`
+# always uses every label; this only bounds what is printed.
+STALL_ACTIVITY_LABELS_KEPT = 5
 
 # Full collections are taken on a schedule instead of whenever the allocator
-# happens to trip a threshold (see GcMaintenance). Six hours is short enough
-# that frozen garbage cannot accumulate for a day, long enough that the pause
-# is a rare, nameable event rather than something a consumer trips over.
-GC_MAINTENANCE_INTERVAL_SECONDS = 6 * 3600.0
-GC_MAINTENANCE_WINDOWS_KEPT = 16
+# happens to trip a threshold (see GcMaintenance). This is the DEFAULT only:
+# `gc_maintenance_interval_seconds` is a runtime setting, because the right
+# value is an empirical property of one deployment's object graph and pinning
+# it in code made every retune cost a release.
+#
+# Lowered from six hours to two on 2026-08-15. At six, the reference
+# deployment reached a 12,751 ms pause with 15 of 16 windows over the slow bar,
+# and the cost was scan rather than reclaim: that pause freed 1,815 objects
+# while a 421 ms one freed 4,974. A full pass rescans whatever has accumulated
+# since the last freeze, so the lever is how much accumulates, which is the
+# interval. Retention improves too, since the interval is also the bound on how
+# long frozen garbage stays unreachable (see GcMaintenance).
+GC_MAINTENANCE_INTERVAL_SECONDS = 2 * 3600.0
+GC_MAINTENANCE_INTERVAL_BOUNDS = (600, 86400)
+# Sized against the interval, not chosen for its own sake: at the two-hour
+# default this is about four days of history, which is the span needed to tell
+# a trend from the noise this series has always had.
+GC_MAINTENANCE_WINDOWS_KEPT = 48
 # Gen-2's threshold counts gen-1 collections, so a large value means automatic
 # full passes effectively never fire between maintenance windows. Deliberately
 # not gc.disable(): gen0/gen1 stay on and keep reclaiming ordinary cycles
@@ -77,7 +93,13 @@ class LoopLagMonitor:
     calibration pacer and echo RTT stamps both live on this loop. The
     worst sample in the last minute feeds the alert evaluator; the last
     few stalls keep their wall-clock timestamps so they can be matched
-    against the activity log's record of what was running."""
+    against the activity log's record of what was running.
+
+    READING THE TIMESTAMPS. `at` is stamped at sampler WAKE-UP, so the stall
+    lies somewhere in [at - lag_ms - LOOP_LAG_SAMPLE_SECONDS, at]. A stall
+    stamped :01.4 with lag_ms 2600 began around :57.8 of the PREVIOUS minute.
+    Anyone bucketing these by second-of-minute to hunt a periodic cause has to
+    subtract the lag first, or the cause is mis-phased by a whole minute."""
 
     def __init__(self, clock=time.monotonic, wall=time.time):
         self._clock = clock
@@ -88,7 +110,7 @@ class LoopLagMonitor:
         self.stalls = 0
         self.recent_stalls: list[dict] = []
 
-    def record(self, lag_seconds: float) -> None:
+    def record(self, lag_seconds: float, activity: dict | None = None) -> None:
         now = self._clock()
         lag_ms = max(lag_seconds, 0.0) * 1000.0
         self.last_ms = lag_ms
@@ -97,15 +119,45 @@ class LoopLagMonitor:
         )
         if lag_ms >= LOOP_LAG_STALL_MS:
             self.stalls += 1
+            named, unaccounted_ms = self._attribute(lag_ms, activity)
             # Stamped at sampler wake-up: the stall itself lies somewhere in
             # the preceding sample interval plus the lag.
             self.recent_stalls.append(
-                {"at": self._wall(), "lag_ms": round(lag_ms, 1)}
+                {
+                    "at": self._wall(),
+                    "lag_ms": round(lag_ms, 1),
+                    "activity": named,
+                    "unaccounted_ms": unaccounted_ms,
+                }
             )
             del self.recent_stalls[:-LOOP_LAG_STALLS_KEPT]
         cutoff = now - LOOP_LAG_WINDOW_SECONDS
         self._samples = [(ts, lag) for ts, lag in self._samples if ts >= cutoff]
         self._samples.append((now, lag_ms))
+
+    @staticmethod
+    def _attribute(lag_ms: float, activity: dict | None) -> tuple[dict, float]:
+        """Split a stall into what the instrument saw and what it did not.
+
+        `unaccounted_ms` is the load-bearing half. The slow-entry ring answers
+        "was one span slow", which a BURST of fast spans never trips: 800 spans
+        of 3 ms hold the loop for 2.4 s while every one of them sits under
+        ACTIVITY_SLOW_MS, so the ring stays empty and the stall reads as having
+        no in-process cause. Accumulated time answers "what did the loop spend
+        the stall doing" instead, and the residual says how much of it happened
+        somewhere nothing is measuring, which is a finding rather than a gap.
+        """
+        if not activity:
+            return {}, round(lag_ms, 1)
+        ranked = sorted(activity.items(), key=lambda kv: kv[1]["ms"], reverse=True)
+        named = {
+            label: {"count": acc["count"], "ms": round(acc["ms"], 1)}
+            for label, acc in ranked[:STALL_ACTIVITY_LABELS_KEPT]
+        }
+        # Every label counts toward the residual, not just the printed ones,
+        # so trimming the display can never inflate what looks unexplained.
+        accounted = sum(acc["ms"] for acc in activity.values())
+        return named, round(max(lag_ms - accounted, 0.0), 1)
 
     def max_window_ms(self) -> float:
         return max((lag for _, lag in self._samples), default=0.0)
@@ -147,9 +199,24 @@ class LoopActivityLog:
         self._lock = threading.RLock()
         self._totals: dict[str, dict] = {}
         self._slow: list[dict] = []
+        self._window: dict[str, dict] = {}
+        self._loop_thread_id: int | None = None
         self._gc_started: dict[int, float] = {}
         self._gc_label: str | None = None
         self._gc_label_thread: int | None = None
+
+    def mark_loop_thread(self) -> None:
+        """Record which thread is the event loop, so the window can filter.
+
+        Called from Engine.start(), the same way Database.mark_loop_thread is.
+        Until it is called nothing accumulates, which keeps tests and one-off
+        scripts that never run a loop honest rather than inventing a window.
+
+        Thread identity is deliberate in place of a hardcoded roster of on-loop
+        labels: a roster is a second list to keep in step with the spans, and
+        this file already carries two lessons about exactly that. A span added
+        later classifies itself."""
+        self._loop_thread_id = threading.get_ident()
 
     @contextmanager
     def relabel_gc(self, label: str):
@@ -170,17 +237,41 @@ class LoopActivityLog:
 
     @contextmanager
     def span(self, label: str):
+        """Time a stretch of work under `label`.
+
+        WRAP SYNCHRONOUS WORK ONLY. This measures wall clock, so a span held
+        open across an `await` charges the label for time the loop spent
+        running something else entirely. That used to cost only an inflated
+        max_ms; since drain_window() feeds stall attribution it also subtracts
+        from `unaccounted_ms`, so an awaiting span would quietly explain away
+        the very residual that points at unmeasured work. Every existing call
+        site wraps a sync block (see `tap_feed`, which says so, and
+        `ws_fleet_snapshot`, which spans the snapshot build and not the send).
+        """
         started = self._clock()
         try:
             yield
         finally:
             self.note(label, (self._clock() - started) * 1000.0)
 
-    def note(self, label: str, duration_ms: float) -> None:
+    def note(
+        self, label: str, duration_ms: float, *, global_pause: bool = False
+    ) -> None:
         with self._lock:
             entry = self._totals.setdefault(label, {"count": 0, "max_ms": 0.0})
             entry["count"] += 1
             entry["max_ms"] = max(entry["max_ms"], duration_ms)
+            # Only work that actually held the loop belongs in the window a
+            # stall is attributed from. A worker-thread flush can run long
+            # beside a clean loop, and counting it would name the innocent:
+            # the same enclosure mistake DESIGN.md warns about, one level up.
+            # `global_pause` is the exception that is not an exception: a
+            # collection holds the GIL, so it pauses the loop no matter which
+            # thread tripped it.
+            if global_pause or threading.get_ident() == self._loop_thread_id:
+                window = self._window.setdefault(label, {"count": 0, "ms": 0.0})
+                window["count"] += 1
+                window["ms"] += duration_ms
             if duration_ms >= ACTIVITY_SLOW_MS:
                 entry["slow"] = entry.get("slow", 0) + 1
                 # Stamped at span end: the span covers [at - ms, at].
@@ -212,6 +303,19 @@ class LoopActivityLog:
         kept.reverse()
         self._slow = kept[-ACTIVITY_ENTRIES_KEPT:]
 
+    def drain_window(self) -> dict:
+        """Take the accumulated on-loop time and reset it.
+
+        Drained on EVERY lag sample, not only on stalls, so the window it
+        returns always covers exactly one sample interval. Draining only when
+        a stall fires would hand the stall an accumulator of unknown age, and
+        the attribution would then over-count by however long the loop had
+        been quiet beforehand."""
+        with self._lock:
+            window = self._window
+            self._window = {}
+            return window
+
     # GC callbacks run on whichever thread triggered the collection, but a
     # collection pause holds the GIL, so the loop pauses with it either way.
     def install_gc(self) -> None:
@@ -235,7 +339,9 @@ class LoopActivityLog:
                     and self._gc_label_thread == threading.get_ident()
                 ):
                     label = self._gc_label
-                self.note(label, (self._clock() - started) * 1000.0)
+                self.note(
+                    label, (self._clock() - started) * 1000.0, global_pause=True
+                )
 
     def stats(self) -> dict:
         with self._lock:
@@ -341,6 +447,16 @@ class GcMaintenance:
         self._windows: list[dict] = []
         self._last_error: str | None = None
 
+    def set_interval(self, interval_seconds: float) -> None:
+        """Adopt a new interval without disturbing the schedule in flight.
+
+        `_last_at` is deliberately untouched: due() measures from the end of
+        the last cycle, so a shortened interval can bring the next pass due
+        immediately, which is the intended effect of shortening it. Called
+        from Engine.start() and again whenever settings are applied, rather
+        than re-read every flush tick."""
+        self._interval = float(interval_seconds)
+
     def note_error(self, exc: BaseException) -> None:
         """A cycle that raises must not vanish into a bare `except`. Nothing
         else would notice: a schedule that silently stopped running looks
@@ -419,6 +535,11 @@ class Engine:
         self.rates = RateTracker()
         self.class_rates = RateTracker()
         self.brokerlog = BrokerLogCorrelator()
+        # The two meters are built first because the things built below take
+        # the activity log as a constructor argument to span their own work.
+        # Neither has dependencies of its own.
+        self.loop_lag = LoopLagMonitor()
+        self.loop_activity = LoopActivityLog()
         self.gc_maintenance = GcMaintenance()
         # Probe heartbeats land on the loop and are applied by the flush
         # worker; see _on_probe_heartbeat for why they are not written inline.
@@ -493,6 +614,7 @@ class Engine:
             discovery_prefix=self.registry.discovery_prefix_for,
             metrics=self._discovery_metrics,
             version=__version__,
+            activity=self.loop_activity,
         )
         self._knees_cache: tuple[float, dict[str, float]] | None = None
         self._cost_metrics_cache: tuple[float, dict] | None = None
@@ -508,8 +630,6 @@ class Engine:
         # recognized as a move between coordinators.
         self._journal_pending: list[tuple[float, str, str, str, str]] = []
         self._recent_removals: dict[str, tuple[float, str]] = {}
-        self.loop_lag = LoopLagMonitor()
-        self.loop_activity = LoopActivityLog()
         self._ha_link: HaLink | None = None
         self._ha_task: asyncio.Task | None = None
         self._ingest: MqttIngest | None = None
@@ -655,6 +775,12 @@ class Engine:
         # start() runs on the event loop, so this is the loop's thread id.
         # Everything after this point can recognise a write issued here.
         self._db.mark_loop_thread()
+        self.loop_activity.mark_loop_thread()
+        # A stored interval has to survive a restart, and the constructor runs
+        # before settings are readable, so the schedule adopts it here.
+        self.gc_maintenance.set_interval(
+            self.runtime_settings()["gc_maintenance_interval_seconds"]
+        )
         self.loop_activity.install_gc()
         _quiet_full_collections()
         self._flush_task = asyncio.create_task(self._flush_loop())
@@ -729,7 +855,9 @@ class Engine:
             self._ha_link = None
         config = self.ha_config()
         if config is not None:
-            self._ha_link = HaLink(config, self.ha_attr, self._on_ha_publish)
+            self._ha_link = HaLink(
+                config, self.ha_attr, self._on_ha_publish, self.loop_activity
+            )
             self._ha_task = asyncio.create_task(self._ha_link.run())
 
     async def apply_ha_config(self, data: dict) -> None:
@@ -905,6 +1033,11 @@ class Engine:
             "raw_event_horizon_hours": self._setting_int(
                 "raw_event_horizon_hours", 48, 1, 720
             ),
+            "gc_maintenance_interval_seconds": self._setting_int(
+                "gc_maintenance_interval_seconds",
+                int(GC_MAINTENANCE_INTERVAL_SECONDS),
+                *GC_MAINTENANCE_INTERVAL_BOUNDS,
+            ),
             "client_labels": dict(self._config.get("client_labels") or {}),
         }
 
@@ -915,12 +1048,19 @@ class Engine:
             "retention_topology_snapshots",
             "raw_event_quota_mb",
             "raw_event_horizon_hours",
+            "gc_maintenance_interval_seconds",
         ):
             if key in data and data[key] is not None:
                 try:
                     self._config.set(key, int(data[key]))
                 except (TypeError, ValueError) as exc:
                     raise ValueError(f"{key} must be an integer") from exc
+        # Pushed rather than polled: the schedule reads its interval from an
+        # attribute, so it has to be told. runtime_settings() clamps to the
+        # declared bounds first, so an out-of-range write cannot reach it.
+        self.gc_maintenance.set_interval(
+            self.runtime_settings()["gc_maintenance_interval_seconds"]
+        )
         if data.get("client_labels") is not None:
             labels = data["client_labels"]
             if not isinstance(labels, dict):
@@ -1440,7 +1580,12 @@ class Engine:
         except Exception:
             pass
         try:
-            self.alerts.tick()
+            # Spanned despite running off the loop: tick() holds two 60 s TTL
+            # caches whose refresh scans multi-day ledger tables, so it is a
+            # heavy job on a slow beat rather than the cheap poll it looks
+            # like, and it was the one unmeasured call in this pass.
+            with self.loop_activity.span("worker_alert_tick"):
+                self.alerts.tick()
         except Exception:
             pass
         try:
@@ -1491,6 +1636,9 @@ class Engine:
         while True:
             before = time.monotonic()
             await asyncio.sleep(LOOP_LAG_SAMPLE_SECONDS)
+            # Drained unconditionally so the window handed to record() always
+            # spans exactly this one sample. See drain_window().
             self.loop_lag.record(
-                time.monotonic() - before - LOOP_LAG_SAMPLE_SECONDS
+                time.monotonic() - before - LOOP_LAG_SAMPLE_SECONDS,
+                activity=self.loop_activity.drain_window(),
             )
