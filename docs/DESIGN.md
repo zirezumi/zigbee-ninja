@@ -988,7 +988,7 @@ nothing read; `/api/ws/fleet` and every `async def` endpoint returned 500 while
 the threadpool endpoints served normally; and the WAL could not checkpoint past
 the pinned snapshot, reaching 2.0 GB against a 260 MB database.
 
-Three consequences are load-bearing and should not be quietly undone:
+Four consequences are load-bearing and should not be quietly undone:
 
 - `write()` rolls back an inherited transaction on entry as well as cleaning up
   its own failure, so a leak from anywhere self-heals at the next write. This is
@@ -997,6 +997,20 @@ Three consequences are load-bearing and should not be quietly undone:
 - Session resolution is **read only** and enforces expiry with a SQL predicate
   (§15). Making it read-only alone would not have been enough: a read on a stale
   snapshot returns stale rows, so a valid new session would read as absent.
+- **Coroutines running as event-loop tasks mutate settings through
+  `asyncio.to_thread`, not inline.** The discovery publisher is the case that
+  makes the point: it is an event-loop task, and both of its config mutations
+  (recording a tile's retained-topic set, and dropping that record on revoke)
+  go through `Database.write()`. They fired inline until 2026-08-15 and nothing
+  noticed, because both are RARE: the set only when a tile's topic set actually
+  changes, the delete only on a revoke, so `loop_thread_writes` reads 0 on a
+  steady fleet whether the defect is present or not. **A counter at 0 is
+  evidence only if the path that would move it has actually been exercised**,
+  which is why the guard test drives a real grant and a real revoke and asserts
+  each write happened before asserting where it happened. Both calls stay
+  awaited, so the ordering the publisher depends on is unchanged: the topic
+  record lands before the configs go out, and the revoke record is dropped only
+  after the empty retained payloads are on the wire.
 - `journal_size_limit` bounds the WAL, and failure counts (`storage.write_failures`,
   `ingest.handler_errors`) are on `/api/health`. During the outage health
   answered `ok` throughout, because nothing it reported could express this.

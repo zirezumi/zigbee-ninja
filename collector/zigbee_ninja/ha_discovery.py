@@ -22,6 +22,7 @@ cleanup sweep, which deletes retained topics for any base that lost its grant.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from collections.abc import Awaitable, Callable
@@ -199,8 +200,19 @@ class DiscoveryPublisher:
             signature = json.dumps(configs, sort_keys=True)
             recorded = self._config.get(self._topics_key(base)) or []
             all_topics = self._all_topics(base)
-            if recorded != all_topics:
-                self._config.set(self._topics_key(base), all_topics)
+            topics_changed = recorded != all_topics
+        # Off the loop, and awaited so the ordering below is unchanged: this
+        # runs from _discovery_loop, an event-loop task, and ConfigStore.set
+        # goes through Database.write(). A write issued on the loop thread
+        # waits on the WAL lock behind a 5 s busy_timeout and, if it raises,
+        # leaves that one connection holding a stale snapshot for the life of
+        # the process (DESIGN.md §12, which cost 29 h of silently dropped
+        # writes). Rare is not safe: this fires on a grant, a revoke or a
+        # SENSORS change, which is exactly when nobody is watching.
+        if topics_changed:
+            await asyncio.to_thread(
+                self._config.set, self._topics_key(base), all_topics
+            )
         if self._configs_published.get(base) != signature:
             for topic, payload in configs.items():
                 await self._publish(topic, payload, retain=True)
@@ -231,7 +243,12 @@ class DiscoveryPublisher:
         topics = self._config.get(self._topics_key(base)) or []
         for topic in topics:
             await self._publish(topic, "", retain=True)
-        self._config.delete(self._topics_key(base))
+        # Off the loop for the same reason as the set in _publish_instance, and
+        # still last: the record of what this tile claimed is only safe to drop
+        # once the empty retained payloads are actually out. A publish that
+        # raises leaves the key in place, so the next cycle retries the whole
+        # cleanup rather than orphaning retained topics nothing remembers.
+        await asyncio.to_thread(self._config.delete, self._topics_key(base))
 
     async def publish_cycle(self) -> None:
         await self.cleanup_revoked()
