@@ -145,6 +145,77 @@ def test_context_ttl_prunes():
     assert result[1] == "ha (unresolved context)"
 
 
+def test_the_prune_walks_only_what_expired_not_the_whole_table():
+    """The per-event cost must not scale with the table size.
+
+    _prune runs on EVERY event, so a full scan is O(n) per event and O(n^2)
+    across a burst. That was the top loop-stall source on the reference
+    deployment: `ha_event` took 36,015 ms over 18,545 calls, 1.942 ms each,
+    every one of them under the 100 ms slow bar and so individually invisible
+    until the span landed (2026-08-16).
+
+    Asserted by counting entries examined rather than by timing, which would be
+    flaky and would not say why it passed. A revert to the full-scan version
+    examines all 5,000."""
+    clock = FakeClock()
+    attribution = HaAttribution(clock=clock)
+    for i in range(5000):
+        attribution.handle_event(automation_event(f"A{i}", f"live{i}"))
+
+    # Nothing has expired: the very first entry is live, so the scan stops there.
+    assert attribution._prune() == 1
+    assert attribution.context_count() == 5000
+
+    # Age everything out and prune DIRECTLY: handle_event would prune on the
+    # way in, so going through it here would drain the table before the
+    # assertion could see the work. A fully expired table ends by exhaustion,
+    # with no live entry to stop on.
+    clock.now += 700.0
+    assert attribution._prune() == 5000
+    assert attribution.context_count() == 0
+
+    # Steady state again: the table is large but the scan is not. This is the
+    # assertion a revert to the full-scan version fails, at 5000.
+    for i in range(5000):
+        attribution.handle_event(automation_event(f"B{i}", f"later{i}"))
+    assert attribution._prune() == 1
+    assert attribution.context_count() == 5000
+
+
+def test_refreshing_a_context_keeps_it_prunable_in_order():
+    """A refreshed entry must move to the END of the table.
+
+    _prune stops at the first live entry, which is only correct while insertion
+    order matches timestamp order. A plain re-assignment keeps a dict entry in
+    its ORIGINAL position, so a refreshed context would sit near the front with
+    a new timestamp, stop the prune immediately and strand every expired entry
+    behind it: the table would then grow without bound and the TTL would
+    silently stop being enforced.
+
+    Refreshes are real: a script called by an automation reports script_started
+    under the CALLER's context id."""
+    clock = FakeClock()
+    attribution = HaAttribution(clock=clock)
+    attribution.handle_event(automation_event("A", "shared"))
+    for i in range(10):
+        attribution.handle_event(automation_event(f"B{i}", f"other{i}"))
+
+    # The shared context is refreshed 400 s in, so it outlives the others.
+    clock.now += 400.0
+    attribution.handle_event(
+        {
+            "event_type": "script_started",
+            "data": {"name": "S"},
+            "context": {"id": "shared"},
+        }
+    )
+    clock.now += 300.0  # the ten are now stale; "shared" is at 300 s, still live
+    attribution._prune()
+    assert attribution.context_count() == 1, "the prune stopped early and stranded entries"
+    result = attribution.handle_event(publish_event("z2m-1/lamp/set", {"id": "shared"}))
+    assert result[1] == "script: S", "the refreshed context lost its TTL extension"
+
+
 def test_non_mqtt_service_calls_ignored():
     attribution = HaAttribution(clock=FakeClock())
     result = attribution.handle_event(

@@ -870,7 +870,16 @@ class Engine:
     def ha_status(self) -> dict:
         if self._ha_link is None:
             return {"state": "unconfigured", "error": None, "connected_since": None}
-        return {**self._ha_link.status, "counters": dict(self.ha_attr.counters)}
+        return {
+            **self._ha_link.status,
+            "counters": dict(self.ha_attr.counters),
+            # A GAUGE, not a counter, and deliberately beside them rather than
+            # inside: the context table is walked on the event path, so its size
+            # is the input to that cost. Nothing reported it while it grew to the
+            # order of 10^5 and became the top loop-stall source (2026-08-16),
+            # which is the whole reason it is surfaced now.
+            "contexts": self.ha_attr.context_count(),
+        }
 
     def _on_ha_publish(self, topic: str, commander: str, digest: str | None) -> None:
         """Backfill: HA told us who published these bytes; name the chain they opened.
