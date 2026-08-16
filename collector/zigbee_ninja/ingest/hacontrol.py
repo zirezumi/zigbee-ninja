@@ -112,8 +112,26 @@ class HaAttribution:
         }
 
     def _remember_context(self, context_id: str | None, name: str) -> None:
-        if context_id:
-            self._context_names[context_id] = (self._clock(), name)
+        if not context_id:
+            return
+        # Delete before inserting so the entry moves to the END. Dicts preserve
+        # insertion order but a plain re-assignment keeps the ORIGINAL position,
+        # and _prune relies on position matching timestamp: without this, a
+        # refreshed context would sit near the front carrying a new timestamp
+        # and stop the prune early, stranding everything behind it. Refreshes
+        # are real, not hypothetical: a script called by an automation reports
+        # `script_started` under the CALLER's context id.
+        self._context_names.pop(context_id, None)
+        self._context_names[context_id] = (self._clock(), name)
+
+    def context_count(self) -> int:
+        """Live entries in the context table, for /api/ha.
+
+        Bounded only by CONTEXT_TTL_SECONDS times the rate at which automations
+        and scripts start, so on a busy installation it is large by design. It
+        is worth watching: it is walked by every garbage collection, and until
+        2026-08-16 it was walked by every HA event as well."""
+        return len(self._context_names)
 
     def _resolve(self, context: dict) -> str:
         for key in ("id", "parent_id"):
@@ -217,11 +235,46 @@ class HaAttribution:
         """
         self.counters["backfilled" if matched else "backfill_unmatched"] += 1
 
-    def _prune(self) -> None:
+    def _prune(self) -> int:
+        """Drop contexts past their TTL. Returns how many entries were examined.
+
+        Called on EVERY event, so its cost is the per-event cost. It used to
+        scan the whole table (`[k for k, (ts, _) in ... if ts < cutoff]`), which
+        is O(n) per event and therefore O(n^2) across a burst. That was the
+        top loop-stall source on the reference deployment, found 2026-08-16 once
+        `ha_event` carried a span: 36,015 ms of loop time over 18,545 calls,
+        **1.942 ms each**, every one of them far under the 100 ms slow bar and
+        so individually invisible. At a measured 15 ns per entry that is on the
+        order of 10^5 live contexts being walked per event, and the table is
+        large by construction: entries live CONTEXT_TTL_SECONDS and a busy
+        installation starts automations and scripts continuously.
+
+        Insertion order is timestamp order (see _remember_context, which moves a
+        refreshed entry to the end to keep it so), therefore the expired entries
+        are a PREFIX and the scan can stop at the first live one. That makes the
+        work proportional to what actually expired rather than to the table
+        size: amortised O(1) per event, with identical retention.
+
+        The returned count is what makes the prefix property testable without a
+        timing assertion, which would be flaky and would not say WHY it passed.
+        It is INCREMENTED IN THE LOOP rather than derived from the results
+        afterwards, and that is not a style choice: a derived count
+        (`len(stale)` plus one for the entry that stopped it) returns exactly 1
+        for a full scan of an all-live table too, so the assertion built on it
+        certified nothing. Caught by the mutation probe, which is what that
+        probe is for.
+        """
         cutoff = self._clock() - CONTEXT_TTL_SECONDS
-        stale = [key for key, (ts, _) in self._context_names.items() if ts < cutoff]
+        stale: list[str] = []
+        examined = 0
+        for key, (ts, _) in self._context_names.items():
+            examined += 1
+            if ts >= cutoff:
+                break
+            stale.append(key)
         for key in stale:
             del self._context_names[key]
+        return examined
 
 
 async def test_ha(config: HaConfig, timeout: float = 6.0) -> str | None:

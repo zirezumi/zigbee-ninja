@@ -333,6 +333,24 @@ Implemented in `ingest/hacontrol.py`; the commander it resolves takes precedence
 over any broker-log client id in the chain builder. Device area/name enrichment
 via the HA registries is a later add-on to the same connection.
 
+**Event handling runs on the event loop, so its per-event cost is a loop-stall
+budget.** The context table is bounded only by `CONTEXT_TTL_SECONDS` times the
+rate at which automations and scripts start, so on a busy installation it is
+large by design: order 10^5 entries. Pruning it therefore may not scan it.
+Insertion order is kept equal to timestamp order (a refreshed context is moved
+to the end, which matters because a script called by an automation reports
+`script_started` under the caller's context id), so expired entries form a
+prefix and the prune stops at the first live one. That is amortised O(1) per
+event with identical retention.
+
+The full-scan version cost **1.942 ms per event** on the reference deployment,
+which made HA event handling the single largest loop-stall source: 36,015 ms of
+loop time over 18,545 calls in one stall ring. It stayed invisible for months
+because `ACTIVITY_SLOW_MS` is a per-span bar and no individual call came near
+it; it surfaced only once accumulated per-label time was attached to stalls
+(§10 loop integrity). The table size is now a gauge on `/api/ha` (`contexts`),
+because nothing reported the input to a cost that was being paid every event.
+
 ## §8 Event pipeline & time model
 
 ```mermaid
