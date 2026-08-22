@@ -239,3 +239,79 @@ def test_tracking_a_command_does_not_let_it_judge_itself():
     v = d.classify("z2m-1", "dev", _cmd(brightness=100))
     assert v.verdict == VERDICT_UNKNOWN
     assert d.echoes.stats()["tracked_devices"] == 1
+
+
+def test_ct_value_match_in_xy_mode_is_changing_not_a_noop():
+    # The false-positive class measured live 2026-08-22: an unchanged mired
+    # published to a bulb sitting in xy mode flips the bulb's colour MODE,
+    # which the value comparison alone cannot see.
+    d = NoopDetector()
+    d.classify("z2m-1", "bulb", _cmd(color_temp=368))
+    d.note_state("z2m-1", "bulb", _state(color_temp=368, color_mode="xy"))
+    v = d.classify("z2m-1", "bulb", _cmd(color_temp=368))
+    assert v.verdict == VERDICT_CHANGING
+    assert v.differed == ["color_temp"]
+
+
+def test_ct_value_match_in_ct_mode_stays_a_noop():
+    d = NoopDetector()
+    d.classify("z2m-1", "bulb", _cmd(color_temp=368))
+    d.note_state("z2m-1", "bulb", _state(color_temp=368, color_mode="color_temp"))
+    v = d.classify("z2m-1", "bulb", _cmd(color_temp=368))
+    assert v.verdict == VERDICT_NOOP
+    assert v.basis() == "=color_temp"
+
+
+def test_ct_value_match_with_unknown_mode_is_unknown_not_a_noop():
+    # The device has reported the value but never its colour mode: partial
+    # knowledge, and partial knowledge can never produce a no-op.
+    d = NoopDetector()
+    d.classify("z2m-1", "bulb", _cmd(color_temp=368))
+    d.note_state("z2m-1", "bulb", _state(color_temp=368))
+    v = d.classify("z2m-1", "bulb", _cmd(color_temp=368))
+    assert v.verdict == VERDICT_UNKNOWN
+    assert v.unknown == ["color_temp"]
+
+
+def test_xy_value_match_in_ct_mode_is_changing():
+    d = NoopDetector()
+    d.classify("z2m-1", "bulb", _cmd(color={"x": 0.47, "y": 0.408}))
+    d.note_state(
+        "z2m-1", "bulb",
+        _state(color={"x": 0.47, "y": 0.408}, color_mode="color_temp"),
+    )
+    v = d.classify("z2m-1", "bulb", _cmd(color={"x": 0.47, "y": 0.408}))
+    assert v.verdict == VERDICT_CHANGING
+    assert v.differed == ["color"]
+
+
+def test_hs_colour_command_requires_hs_mode():
+    d = NoopDetector()
+    d.classify("z2m-1", "bulb", _cmd(color={"hue": 10, "saturation": 50}))
+    d.note_state(
+        "z2m-1", "bulb",
+        _state(color={"hue": 10, "saturation": 50}, color_mode="xy"),
+    )
+    v = d.classify("z2m-1", "bulb", _cmd(color={"hue": 10, "saturation": 50}))
+    assert v.verdict == VERDICT_CHANGING
+
+
+def test_non_colour_keys_do_not_grow_a_mode_requirement():
+    # brightness has no implied colour space; a bulb whose mode is unknown
+    # must still yield a clean no-op on a matched brightness.
+    d = NoopDetector()
+    d.classify("z2m-1", "bulb", _cmd(brightness=128))
+    d.note_state("z2m-1", "bulb", _state(brightness=128))
+    v = d.classify("z2m-1", "bulb", _cmd(brightness=128))
+    assert v.verdict == VERDICT_NOOP
+
+
+def test_group_ct_match_with_one_member_in_xy_mode_is_changing():
+    d = NoopDetector(resolve_members=lambda inst, target: (["a", "b"], True))
+    d.classify("z2m-1", "grp", _cmd(color_temp=368))
+    d.note_state("z2m-1", "a", _state(color_temp=368, color_mode="color_temp"))
+    d.note_state("z2m-1", "b", _state(color_temp=368, color_mode="xy"))
+    v = d.classify("z2m-1", "grp", _cmd(color_temp=368))
+    assert v.verdict == VERDICT_CHANGING
+    # One wrong-mode member decides it even though the other is fine.
+    assert v.differed == ["color_temp"]

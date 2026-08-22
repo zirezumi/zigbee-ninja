@@ -63,6 +63,36 @@ VERDICT_UNKNOWN = "unknown"
 NUMERIC_TOLERANCE: dict[str, float] = {}
 NEAR_RELATIVE = 0.02  # only for counting `near`, never for deciding a verdict
 
+# The colour keys name a destination colour SPACE as well as a value. A bulb
+# holding color_temp 368 in xy mode is NOT where `{"color_temp": 368}` sends
+# it: the command flips the bulb's colour mode, a real and visible change the
+# value comparison cannot see. Measured on a live fleet (2026-08-22): twice a
+# day, palette anchor crossings re-published an unchanged mired to bulbs
+# sitting in xy mode and every one was misfiled as `=color_temp` -- a
+# recurring false-positive no-op class manufactured by value-only assessment.
+# A colour key's value-match therefore stands only when the reported
+# `color_mode` already matches the mode the command implies; a wrong mode
+# makes the key DIFFER, and an unknown mode leaves it UNKNOWN (the doctrine
+# above: partial knowledge can never produce a no-op).
+COLOR_MODE_KEY = "color_mode"
+
+
+def _implied_modes(name: str, parsed: dict) -> tuple[str, ...]:
+    """Colour modes under which this key's value-match can stand, or () when
+    the key implies no mode (every non-colour key, and a `color` payload whose
+    shape is not recognised -- unrecognised shapes keep value-only assessment
+    rather than inventing a mode requirement)."""
+    if name == "color_temp":
+        return ("color_temp",)
+    if name == "color":
+        value = parsed.get("color")
+        if isinstance(value, dict):
+            if "x" in value or "y" in value:
+                return ("xy",)
+            if "hue" in value or "saturation" in value:
+                return ("hs",)
+    return ()
+
 MAX_TRACKED_DEVICES = 2048
 MAX_TRACKED_KEYS = 48
 
@@ -183,6 +213,15 @@ class EchoState:
                     self.key_cap_hits += 1
                     continue
                 tracked.add(name)
+            # A colour key's assessment needs the device's colour mode too
+            # (see _implied_modes), and `color_mode` is never itself
+            # commanded, so interest in it rides along with the first colour
+            # key rather than waiting for a command that will never come.
+            if tracked & {"color_temp", "color"} and COLOR_MODE_KEY not in tracked:
+                if len(tracked) < MAX_TRACKED_KEYS:
+                    tracked.add(COLOR_MODE_KEY)
+                else:
+                    self.key_cap_hits += 1
             self._tracked_bytes[key] = tuple(
                 name.encode("utf-8") for name in tracked
             )
@@ -306,6 +345,22 @@ class NoopDetector:
             reported = [value for _, value in states]
             tolerance = NUMERIC_TOLERANCE.get(name)
             if all(_equal(commanded, value, tolerance) for value in reported):
+                implied = _implied_modes(name, parsed)
+                if implied:
+                    modes = [
+                        self.echoes.get(instance, device, COLOR_MODE_KEY)
+                        for device in members
+                    ]
+                    # A member in the wrong mode proves the command changes
+                    # something, and that holds whether or not another
+                    # member's mode is known -- same asymmetry as the
+                    # verdict itself.
+                    if any(known and value not in implied for known, value in modes):
+                        differed.append(name)
+                        continue
+                    if any(not known for known, _ in modes):
+                        unknown.append(name)
+                        continue
                 matched.append(name)
             else:
                 differed.append(name)

@@ -453,6 +453,18 @@ Three properties are load-bearing:
   absence cannot be flattered by missing data. `resolution_coverage` (resolved over
   stamped) is mandatory in the report for the same reason: a small count under low
   coverage means *no data*, not *no no-ops*.
+* **Colour keys carry a mode conjunct.** `color_temp` and `color` name a
+  destination colour space as well as a value: a bulb holding `color_temp: 368`
+  while sitting in `xy` mode is *not* where a `{"color_temp": 368}` command sends
+  it: the command flips the bulb's colour mode, a real, visible change a
+  value-only comparison cannot see. Measured on a live fleet (2026-08-22),
+  value-only assessment manufactured a recurring false-positive no-op class out
+  of exactly this shape (palette anchor crossings re-asserting an unchanged
+  mired to xy-mode bulbs, twice daily, fleet-wide). A colour key's value-match
+  therefore stands only when the reported `color_mode` matches the mode the
+  command implies; a wrong mode makes the key differ, an unknown mode leaves it
+  unknown, and `color_mode` is tracked implicitly alongside the first colour key
+  commanded on a device (it is never itself commanded).
 * **Groups are evaluated per member.** A group `/set` is a no-op only if every
   member already holds the value; the group's own state topic is Zigbee2MQTT's
   synthetic optimistic state, not an aggregate, so it cannot answer this. One
