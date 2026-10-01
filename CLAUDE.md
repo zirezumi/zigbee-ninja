@@ -487,6 +487,23 @@ envelope's worst bursts), compressed variant (spacing stripped: the
 the record for comparison). POST /api/calibration/replay/{preview,run};
 replay and ramp tokens refuse each other's endpoints. Every replay run
 still needs the owner's per-run authorization in chat.
+**No-op verdict and attribution corrections (2026-10-01, branch
+`noop-inflight-attribution`, BUILT, NOT RELEASED; release and deploy
+steps go to the owner before anything is pushed).** Four changes, DESIGN
+§7.4 and §9: (1) in-flight overlay: a command that puts a key back where
+the device last reported it while an unconfirmed command moved it
+elsewhere is `changing` (`!key,>key`), never `noop`; held until the
+same value is reported or 10 s; `inflight_flips` counts the verdicts it
+changed, and no-op counts across this release are not comparable
+without it. (2) Paddle invalidation: a switch's `action` report forgets
+its actuating-binding targets' reported and in-flight values, so a
+render reversing a press is `unknown`, not a false `noop`
+(`Registry.bound_devices`). (3) Separator-agnostic HA correlation
+(`correlation_digest`): `to_json` publishes (compact) were never
+attributed; `payload_digest` stays raw. (4) Entity service calls
+(`light.turn_on|turn_off|toggle`) name their commands by entity slug,
+state-checked, unique across instances, outranked by any matching
+`mqtt.publish`. Version bump to 0.8.0 is part of the release step.
 Roadmap: README.md.
 
 ## Hard rules

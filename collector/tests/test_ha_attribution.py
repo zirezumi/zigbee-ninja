@@ -1,7 +1,7 @@
 import json
 
 import zigbee_ninja.api.app as app_module
-from zigbee_ninja.attribution.chains import AMBIGUOUS_COMMANDER, command_digest
+from zigbee_ninja.attribution.chains import AMBIGUOUS_COMMANDER, command_digest, correlation_digest
 from zigbee_ninja.ingest.engine import Engine
 from zigbee_ninja.ingest.hacontrol import HaAttribution, HaConfig, payload_fingerprint
 
@@ -43,9 +43,9 @@ _ABSENT = _Absent()
 
 
 def wire(payload) -> str:
-    """Digest of the bytes such a payload reaches the broker as."""
+    """Correlation digest of the bytes such a payload reaches the broker as."""
     raw = payload.encode("utf-8") if isinstance(payload, str) else json.dumps(payload).encode()
-    return command_digest(raw)
+    return correlation_digest(raw)
 
 
 def test_automation_context_names_a_publish():
@@ -65,22 +65,29 @@ def test_automation_context_names_a_publish():
     )
 
 
-def test_fingerprint_matches_the_bytes_home_assistant_publishes():
-    """The whole correlation rests on reproducing the wire bytes exactly.
+def test_fingerprint_matches_the_wire_whatever_the_separators():
+    """The correlation rests on both sides digesting the same thing.
 
-    A template rendering to a mapping arrives as a native dict, and Home
-    Assistant serialises it with json.dumps' DEFAULT separators. Compact
-    separators produce different bytes and would break every match, silently,
-    by degrading every command to unattributed.
+    A template rendering to a mapping arrives as a native dict, and the wire
+    carries the text the template produced: `| tojson` writes it spaced and
+    `| to_json` compact. The event stream cannot say which, so both sides
+    digest a JSON object canonically and the dict matches either form. Raw-byte
+    digests here matched only the spaced form, and every `to_json` publish
+    (the tap-dial emit among them) went unattributed.
     """
     rendered = {"brightness": 149, "color_temp": 326, "state": "ON"}
-    on_the_wire = b'{"brightness": 149, "color_temp": 326, "state": "ON"}'
-    assert payload_fingerprint(rendered) == command_digest(on_the_wire)
-    assert payload_fingerprint(rendered) != command_digest(
-        json.dumps(rendered, separators=(",", ":")).encode()
-    )
-    # A string payload is published verbatim.
-    assert payload_fingerprint('{"state":"ON"}') == command_digest(b'{"state":"ON"}')
+    spaced = b'{"brightness": 149, "color_temp": 326, "state": "ON"}'
+    compact = b'{"brightness":149,"color_temp":326,"state":"ON"}'
+    assert payload_fingerprint(rendered) == correlation_digest(spaced)
+    assert payload_fingerprint(rendered) == correlation_digest(compact)
+    # Key order and spacing do not matter; values do.
+    assert correlation_digest(b'{"b": 2, "a": 1}') == correlation_digest(b'{"a":1,"b":2}')
+    assert correlation_digest(b'{"a": 1}') != correlation_digest(b'{"a": 2}')
+    # A string payload is published verbatim and digests the same way.
+    assert payload_fingerprint('{"state":"ON"}') == correlation_digest(b'{"state": "ON"}')
+    # Anything that is not a JSON object or array keeps its raw-byte digest.
+    assert payload_fingerprint("ON") == command_digest(b"ON")
+    assert payload_fingerprint(5) == command_digest(b"5")
 
 
 def test_parent_context_resolution_for_scripts():

@@ -12,7 +12,7 @@ from contextlib import contextmanager
 
 from .. import __version__
 from ..alerts import GLOBAL_INSTANCE, AlertManager
-from ..attribution.chains import Chain, ChainTracker, command_digest, parse_command
+from ..attribution.chains import Chain, ChainTracker, correlation_digest, parse_command
 from ..attribution.noop import NoopDetector
 from ..calibration.benchmark import CalibrationManager
 from ..capacity import airtime, ledger
@@ -33,7 +33,7 @@ from ..tiles import (
 )
 from .brokerlog import LOG_TOPIC_PREFIX, BrokerLogCorrelator
 from .fusion import FusionTracker
-from .hacontrol import HaAttribution, HaConfig, HaLink
+from .hacontrol import CORRELATION_TOLERANCE_SECONDS, HaAttribution, HaConfig, HaLink
 from .mqtt import BrokerConfig, MqttIngest
 from .probe import ProbeIngest
 from .rates import GLOBAL, ROLLUP_SECONDS, RateTracker, classify
@@ -596,7 +596,10 @@ class Engine:
             registry=self.registry,
             pricing=self.tap.pricing_params,
         )
-        self.ha_attr = HaAttribution(loop_skew_ms=lambda: self.loop_lag.max_window_ms())
+        self.ha_attr = HaAttribution(
+            loop_skew_ms=lambda: self.loop_lag.max_window_ms(),
+            on_entity_call=self._on_ha_entity_call,
+        )
         self.alerts = AlertManager(db, config, provider=self._alert_metrics)
         self.recommendations = RecommendationEngine(
             db,
@@ -881,6 +884,23 @@ class Engine:
             "contexts": self.ha_attr.context_count(),
         }
 
+    def _on_ha_entity_call(self, slug: str, commander: str, want_state: str | None) -> None:
+        """Backfill for an entity service call (`light.turn_off`) on a Z2M entity.
+
+        Named only when the slug resolves to exactly one device or group, and
+        only a chain opened inside the correlation window: the order where the
+        command beat the HA event to the collector. The other order is
+        `HaAttribution.entity_name_for`, at wire time.
+        """
+        matches = self.registry.targets_for_slug(slug)
+        if len(matches) != 1:
+            return
+        base, target = matches[0]
+        window = CORRELATION_TOLERANCE_SECONDS + max(self.loop_lag.max_window_ms(), 0.0) / 1000.0
+        self.chains.attribute_entity_call(
+            base, target, commander, want_state, since=time.time() - window
+        )
+
     def _on_ha_publish(self, topic: str, commander: str, digest: str | None) -> None:
         """Backfill: HA told us who published these bytes; name the chain they opened.
 
@@ -957,9 +977,11 @@ class Engine:
                 # digest is what ties this command to the service call that sent
                 # it; the chain stores the same fingerprint, so the two sides of
                 # the correlation stay joinable.
-                digest = command_digest(payload)
-                client = self.ha_attr.name_for(topic, digest) or self.brokerlog.client_for(
-                    topic
+                digest = correlation_digest(payload)
+                client = (
+                    self.ha_attr.name_for(topic, digest)
+                    or self.ha_attr.entity_name_for(target, payload)
+                    or self.brokerlog.client_for(topic)
                 )
                 # Judged against state known BEFORE this command, so the
                 # verdict needs no settle window and cannot be invalidated by
@@ -988,6 +1010,8 @@ class Engine:
             # device must have been commanded, and a tracked key must appear
             # in the bytes. This is the only place an echoed VALUE is stored.
             self.noops.note_state(base, suffix, payload)
+            if b'"action"' in payload:
+                self._forget_bound_state(base, suffix, payload)
             self.class_rates.record(base, klass)
             if self.calibration.active:
                 self.calibration.note_ambient(base, "state")
@@ -1000,6 +1024,27 @@ class Engine:
                 self._ledger_autonomous[key] = self._ledger_autonomous.get(key, 0) + 1
         elif kind == "availability" and self.calibration.active:
             self.calibration.on_availability(base, suffix, payload)
+
+    def _forget_bound_state(self, base: str, device: str, payload: bytes) -> None:
+        """A switch reported an action: its bound devices may have moved.
+
+        A paddle press drives an actuating binding over Zigbee, so the bound
+        lights change with no MQTT command and their last report stops
+        describing them. Without this, the render that follows a press is
+        judged against the pre-press value and a command that undoes the
+        press is stamped `noop`. Cheap on the miss: most devices have no
+        actuating binding and return before the parse.
+        """
+        bound = self.registry.bound_devices(base, device)
+        if not bound:
+            return
+        try:
+            parsed = json.loads(payload)
+        except (ValueError, UnicodeDecodeError):
+            return
+        action = parsed.get("action") if isinstance(parsed, dict) else None
+        if isinstance(action, str) and action:
+            self.noops.invalidate(base, bound)
 
     def _attribute_from_log(self, client: str, published_topic: str) -> None:
         base = self.registry.base_for(published_topic)

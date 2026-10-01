@@ -195,3 +195,60 @@ def test_non_group_target_is_complete_and_empty():
     registry = _grouped([{"id": 7, "friendly_name": "bulbs", "members": []}])
     assert registry.group_members_strict("z2m-test", "bulb_a") == ([], True)
     assert registry.is_group("z2m-test", "bulb_a") is False
+
+
+BOUND_DEVICES = [
+    {"ieee_address": "0x00000000000000c0", "friendly_name": "Coordinator", "type": "Coordinator"},
+    {
+        "ieee_address": "0x00000000000000a1",
+        "friendly_name": "plate",
+        "type": "Router",
+        "endpoints": {
+            "1": {"bindings": [
+                # Reporting to the coordinator moves nothing.
+                {"cluster": "genOnOff", "target": {"type": "endpoint", "endpoint": 1,
+                                                   "ieee_address": "0x00000000000000c0"}},
+            ]},
+            "2": {"bindings": [
+                {"cluster": "genOnOff", "target": {"type": "group", "id": 7}},
+                {"cluster": "genLevelCtrl", "target": {"type": "group", "id": 7}},
+                {"cluster": "genLevelCtrl", "target": {"type": "endpoint", "endpoint": 11,
+                                                       "ieee_address": "0x00000000000000b3"}},
+                # A cluster a switch does not actuate with.
+                {"cluster": "haDiagnostic", "target": {"type": "group", "id": 9}},
+            ]},
+        },
+    },
+    {"ieee_address": "0x00000000000000b1", "friendly_name": "bulb_a", "type": "Router"},
+    {"ieee_address": "0x00000000000000b2", "friendly_name": "bulb_b", "type": "Router"},
+    {"ieee_address": "0x00000000000000b3", "friendly_name": "lamp", "type": "Router"},
+    {"ieee_address": "0x00000000000000b4", "friendly_name": "other", "type": "Router"},
+]
+BOUND_GROUPS = [
+    {"id": 7, "friendly_name": "plate_group", "members": [
+        {"ieee_address": "0x00000000000000b1", "endpoint": 11},
+        {"ieee_address": "0x00000000000000b2", "endpoint": 11},
+    ]},
+    {"id": 9, "friendly_name": "diag",
+     "members": [{"ieee_address": "0x00000000000000b4", "endpoint": 1}]},
+]
+
+
+def test_bound_devices_follow_actuating_bindings_only():
+    registry = Registry()
+    registry.handle("z2m-test/bridge/devices", json.dumps(BOUND_DEVICES).encode())
+    registry.handle("z2m-test/bridge/groups", json.dumps(BOUND_GROUPS).encode())
+    # Group members and a directly bound device; never the coordinator, never
+    # the non-actuating group.
+    assert registry.bound_devices("z2m-test", "plate") == ["bulb_a", "bulb_b", "lamp"]
+    assert registry.bound_devices("z2m-test", "bulb_a") == []
+    assert registry.bound_devices("z2m-test", "no_such_device") == []
+    assert registry.bound_devices("z2m-other", "plate") == []
+
+
+def test_bound_devices_resolve_groups_that_arrive_after_the_devices():
+    registry = Registry()
+    registry.handle("z2m-test/bridge/devices", json.dumps(BOUND_DEVICES).encode())
+    assert registry.bound_devices("z2m-test", "plate") == ["lamp"]
+    registry.handle("z2m-test/bridge/groups", json.dumps(BOUND_GROUPS).encode())
+    assert registry.bound_devices("z2m-test", "plate") == ["bulb_a", "bulb_b", "lamp"]

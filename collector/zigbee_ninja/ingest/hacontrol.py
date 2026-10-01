@@ -30,25 +30,42 @@ from dataclasses import dataclass
 
 import websockets
 
-from ..attribution.chains import AMBIGUOUS_COMMANDER, command_digest
+from ..attribution.chains import (
+    AMBIGUOUS_COMMANDER,
+    canonical_json,
+    command_digest,
+    correlation_digest,
+)
+from .registry import entity_slug
 
 CONTEXT_TTL_SECONDS = 600.0
 CORRELATION_TOLERANCE_SECONDS = 3.0
 MAX_BACKOFF_SECONDS = 30
 SUBSCRIBED_EVENTS = ("automation_triggered", "script_started", "call_service")
 
+# Entity service calls that publish through an MQTT entity rather than
+# `mqtt.publish`, and the `state` each one must have sent. A person's call on a
+# Home Assistant light group arrives as one of these per member, carrying the
+# person's context, and was filed "(unattributed)" because no publish event
+# names it (14 commands in one 2026-09-29 05:33 group call, measured).
+ENTITY_DOMAINS = ("light",)
+ENTITY_SERVICES = {"turn_on": "ON", "turn_off": "OFF", "toggle": None}
+
 
 def payload_fingerprint(payload: object) -> str | None:
-    """Digest of the bytes HA will put on the wire for this service_data payload.
+    """`correlation_digest` of the bytes HA puts on the wire for this payload.
 
-    Pinned against 1032 live publishes on a Zigbee2MQTT installation, where it
-    reproduced the wire bytes every time:
+    Separator-agnostic, because the event stream cannot say which separators
+    the wire bytes used:
 
     * A template rendering to a mapping arrives here as a native dict, because
-      Home Assistant un-stringifies a `| tojson` result rather than passing the
-      string through. Those are serialised with `json.dumps` DEFAULT separators.
-      Compact separators do NOT reproduce the wire bytes.
-    * A string payload is published verbatim.
+      Home Assistant un-stringifies the rendered text. The wire carries that
+      TEXT, which `| tojson` writes with spaces and `| to_json` without, so the
+      dict is digested over `canonical_json` and the wire side over the same.
+      The spaced form alone was pinned against 1032 live publishes and matched
+      every one of them, because none of those used `to_json`; the publishes
+      that did were never attributed.
+    * A string payload is published verbatim, and digests the same way.
 
     None means the payload could not be rendered to bytes (absent, or a shape
     this does not model). That degrades the command to ambiguous rather than
@@ -58,11 +75,16 @@ def payload_fingerprint(payload: object) -> str | None:
     if payload is None:
         return None
     if isinstance(payload, bytes):
-        return command_digest(payload)
+        return correlation_digest(payload)
     if isinstance(payload, str):
-        return command_digest(payload.encode("utf-8"))
+        return correlation_digest(payload.encode("utf-8"))
+    if isinstance(payload, (dict, list)):
+        try:
+            return command_digest(canonical_json(payload))
+        except (TypeError, ValueError):
+            return None
     try:
-        return command_digest(json.dumps(payload).encode("utf-8"))
+        return correlation_digest(json.dumps(payload).encode("utf-8"))
     except (TypeError, ValueError):
         return None
 
@@ -93,15 +115,22 @@ class HaAttribution:
         self,
         clock: Callable[[], float] = time.time,
         loop_skew_ms: Callable[[], float] | None = None,
+        on_entity_call: Callable[[str, str, str | None], None] | None = None,
     ):
         self._clock = clock
         # Both the remembered publish and the command it should name are
         # stamped on the event loop, so a stall delays them unequally and can
         # push a genuine pair outside a fixed tolerance. See name_for.
         self._loop_skew_ms = loop_skew_ms or (lambda: 0.0)
+        # (entity slug, commander, implied state) for each entity named by an
+        # ENTITY_DOMAINS service call, so the engine can backfill a chain the
+        # wire opened first. See entity_name_for for the other order.
+        self._on_entity_call = on_entity_call
         self._context_names: dict[str, tuple[float, str]] = {}
         # (stamped_at, topic, payload fingerprint or None, commander).
         self._recent: deque[tuple[float, str, str | None, str]] = deque(maxlen=2048)
+        # (stamped_at, entity slug, commander, implied state or None).
+        self._recent_entities: deque[tuple[float, str, str, str | None]] = deque(maxlen=2048)
         self.counters = {
             "events": 0,
             "publishes": 0,
@@ -109,6 +138,8 @@ class HaAttribution:
             "ambiguous": 0,
             "backfilled": 0,
             "backfill_unmatched": 0,
+            "entity_calls": 0,
+            "entity_named": 0,
         }
 
     def _remember_context(self, context_id: str | None, name: str) -> None:
@@ -178,7 +209,75 @@ class HaAttribution:
             fingerprint = payload_fingerprint(service_data.get("payload"))
             self._recent.append((self._clock(), topic, fingerprint, commander))
             return topic, commander, fingerprint
+        if (
+            event_type == "call_service"
+            and data.get("domain") in ENTITY_DOMAINS
+            and data.get("service") in ENTITY_SERVICES
+        ):
+            self._note_entity_call(data, context)
         return None
+
+    def _note_entity_call(self, data: dict, context: dict) -> None:
+        entity_ids = (data.get("service_data") or {}).get("entity_id")
+        if isinstance(entity_ids, str):
+            entity_ids = [entity_ids]
+        if not isinstance(entity_ids, list):
+            return  # area or device targets: nothing to match on
+        commander = self._resolve(context)
+        want_state = ENTITY_SERVICES[data["service"]]
+        now = self._clock()
+        prefix = f"{data['domain']}."
+        for entity_id in entity_ids:
+            if not isinstance(entity_id, str) or not entity_id.startswith(prefix):
+                continue
+            slug = entity_id[len(prefix) :]
+            self.counters["entity_calls"] += 1
+            self._recent_entities.append((now, slug, commander, want_state))
+            if self._on_entity_call is not None:
+                try:
+                    self._on_entity_call(slug, commander, want_state)
+                except Exception:  # noqa: BLE001 - never kill the link
+                    pass
+
+    def entity_name_for(self, target: str, payload: bytes) -> str | None:
+        """Commander of a recent entity service call on `target`, at wire time.
+
+        For the order where the HA event arrives before the command reaches the
+        broker. A candidate whose implied state the payload contradicts is not
+        one; two distinct commanders left over are AMBIGUOUS_COMMANDER.
+        """
+        if not self._recent_entities:
+            return None
+        slug = entity_slug(target)
+        now = self._clock()
+        tolerance = CORRELATION_TOLERANCE_SECONDS + max(self._loop_skew_ms(), 0.0) / 1000.0
+        candidates = []
+        for ts, seen_slug, commander, want_state in reversed(self._recent_entities):
+            if now - ts > tolerance:
+                break
+            if seen_slug == slug:
+                candidates.append((commander, want_state))
+        if not candidates:
+            return None
+        sent = None
+        try:
+            parsed = json.loads(payload)
+            if isinstance(parsed, dict) and isinstance(parsed.get("state"), str):
+                sent = parsed["state"].upper()
+        except (ValueError, UnicodeDecodeError):
+            pass
+        names = {
+            commander
+            for commander, want_state in candidates
+            if want_state is None or sent is None or sent == want_state
+        }
+        if not names:
+            return None
+        self.counters["entity_named"] += 1
+        if len(names) > 1:
+            self.counters["ambiguous"] += 1
+            return AMBIGUOUS_COMMANDER
+        return next(iter(names))
 
     def name_for(self, topic: str, digest: str | None = None) -> str | None:
         """HA-side publisher of these exact bytes on `topic`, within the window.
