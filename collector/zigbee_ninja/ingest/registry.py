@@ -101,6 +101,58 @@ def _binding_count(entry: dict) -> int:
     )
 
 
+def entity_slug(name: str) -> str:
+    """The object id Home Assistant derives from a Zigbee2MQTT friendly name.
+
+    Lower case, every run of other characters one underscore, none at the ends:
+    `office_couch_sconce/bottom` is `light.office_couch_sconce_bottom`. An
+    entity the owner renamed no longer matches, and stays unattributed.
+    """
+    out: list[str] = []
+    gap = False
+    for char in name.lower():
+        if char.isascii() and char.isalnum():
+            if gap and out:
+                out.append("_")
+            out.append(char)
+            gap = False
+        else:
+            gap = True
+    return "".join(out)
+
+
+# Clusters a switch drives its bound targets with. A binding on any other
+# cluster (or to the coordinator, which is how a device reports) moves nothing.
+_ACTUATING_CLUSTERS = frozenset({"genOnOff", "genLevelCtrl", "lightingColorCtrl"})
+
+
+def _bound_targets(entry: dict, coordinator_ieee: str | None) -> list[tuple[str, str]]:
+    """("group", id) / ("device", ieee) targets this device can move directly.
+
+    A paddle press on a switch with an actuating binding drives the bound
+    group or device over Zigbee, with no MQTT command the collector could see.
+    """
+    endpoints = entry.get("endpoints")
+    if not isinstance(endpoints, dict):
+        return []
+    targets: set[tuple[str, str]] = set()
+    for endpoint in endpoints.values():
+        if not isinstance(endpoint, dict):
+            continue
+        for binding in endpoint.get("bindings") or []:
+            if not isinstance(binding, dict) or binding.get("cluster") not in _ACTUATING_CLUSTERS:
+                continue
+            target = binding.get("target") or {}
+            kind = target.get("type")
+            if kind == "group" and target.get("id") is not None:
+                targets.add(("group", str(target["id"])))
+            elif kind == "endpoint":
+                ieee = target.get("ieee_address")
+                if ieee and ieee != coordinator_ieee:
+                    targets.add(("device", ieee))
+    return sorted(targets)
+
+
 class Registry:
     def __init__(self, on_change=None):
         # on_change(instance, kind, subject, detail): the passive change
@@ -113,6 +165,9 @@ class Registry:
         self._groups: dict[str, list[dict]] = {}
         self._ieee_to_name: dict[str, dict[str, str]] = {}
         self._name_to_nwk: dict[str, dict[str, int]] = {}
+        # friendly name -> actuating binding targets, per instance; only
+        # devices that have any. See bound_devices.
+        self._bound: dict[str, dict[str, list[tuple[str, str]]]] = {}
 
     def _emit(self, instance: str, kind: str, subject: str, detail: dict) -> None:
         if self._on_change is not None:
@@ -246,6 +301,21 @@ class Registry:
             device["friendly_name"]: device["network_address"]
             for device in devices
             if device.get("friendly_name") and isinstance(device.get("network_address"), int)
+        }
+        coordinator_ieee = next(
+            (
+                entry.get("ieee_address")
+                for entry in data
+                if isinstance(entry, dict) and entry.get("type") == "Coordinator"
+            ),
+            None,
+        ) or self._instance(base).get("coordinator_ieee")
+        self._bound[base] = {
+            entry["friendly_name"]: targets
+            for entry in data
+            if isinstance(entry, dict)
+            and entry.get("friendly_name")
+            and (targets := _bound_targets(entry, coordinator_ieee))
         }
         instance = self._instance(base)
         instance.update(
@@ -404,6 +474,39 @@ class Registry:
         """Router census for the mesh-amplification model (0 until discovered)."""
         instance = self._instances.get(base)
         return int(instance.get("router_count") or 0) if instance else 0
+
+    def targets_for_slug(self, slug: str) -> list[tuple[str, str]]:
+        """(instance, friendly name) of every device or group whose name slugs
+        to `slug`, across all instances. More than one means the slug cannot
+        say which, and a caller must treat it as unresolved."""
+        found = []
+        for base in sorted(set(self._devices) | set(self._groups)):
+            for entry in self._devices.get(base, []) + self._groups.get(base, []):
+                name = entry.get("friendly_name")
+                if isinstance(name, str) and entity_slug(name) == slug:
+                    found.append((base, name))
+        return found
+
+    def bound_devices(self, base: str, friendly_name: str) -> list[str]:
+        """Devices `friendly_name` can move over an actuating binding.
+
+        Group targets expand to their members; a member or device whose IEEE
+        is not in the device map is left out, since nothing could be said about
+        it anyway. Empty for a device with no such binding, which is nearly
+        every device.
+        """
+        targets = self._bound.get(base, {}).get(friendly_name)
+        if not targets:
+            return []
+        names = self._ieee_to_name.get(base, {})
+        out: set[str] = set()
+        for kind, ident in targets:
+            if kind == "group":
+                members, _complete = self.group_members_strict(base, ident)
+                out.update(members)
+            elif ident in names:
+                out.add(names[ident])
+        return sorted(out)
 
     def network_address_for(self, base: str, friendly_name: str) -> int | None:
         """Short (nwk) address for a friendly name: the T1↔T2 fusion join

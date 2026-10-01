@@ -333,6 +333,30 @@ Implemented in `ingest/hacontrol.py`; the commander it resolves takes precedence
 over any broker-log client id in the chain builder. Device area/name enrichment
 via the HA registries is a later add-on to the same connection.
 
+**The publish fingerprint is separator-agnostic.** A template that renders to a
+mapping reaches the event stream as a parsed dict, but the wire carries the text
+the template produced, and its separators depend on the filter: `| tojson`
+writes `{"a": 1}`, `| to_json` writes `{"a":1}`. The event carries no trace of
+which, so both sides digest a JSON object or array over one canonical form
+(sorted keys, compact separators) and anything else over its raw bytes
+(`correlation_digest`). The stored `payload_digest` keeps the raw-byte form, so
+comparisons across time are unaffected. Measured 2026-10-01 on the reference
+deployment: the spaced form alone never matched a `to_json` publish (a tap-dial
+emit, a bar reconcile, a blinds LED feedback), so those commands sat
+unattributed in every report.
+
+**Entity service calls name their commands too.** `light.turn_on`, `turn_off`
+and `toggle` publish through the MQTT light entity, so no `mqtt.publish` event
+exists for them, and a person's call on a Home Assistant light group arrives as
+one such call per member under the person's context. A call is matched to a
+command by the entity's object id against the Zigbee2MQTT friendly name slugged
+the way Home Assistant derives it (`entity_slug`), inside the correlation
+window, and only when the command's `state` does not contradict the service.
+A slug that resolves to more than one device or group across instances names
+nothing, and an `mqtt.publish` that explains the command always outranks a
+call. An entity the owner renamed no longer slugs to its device and stays
+unattributed: the safe direction.
+
 **Event handling runs on the event loop, so its per-event cost is a loop-stall
 budget.** The context table is bounded only by `CONTEXT_TTL_SECONDS` times the
 rate at which automations and scripts start, so on a busy installation it is
@@ -440,9 +464,36 @@ choice is what makes it affordable and sound. An echo-based verdict would have t
 wait for the state publish that settles a command, which loses on this fleet:
 42.9% of post-command state publishes arrive after the 1.5 s echo window and 30.1%
 after 3.5 s, so the settled value routinely outlives the chain that would carry it.
-Comparing against state already known needs no settle window, no quiet period and
-no third-writer invalidation. The echo table (`EchoState`) is therefore maintained
-independently of chain lifetime.
+Comparing against state already known needs no settle window and no quiet period;
+the one writer it cannot see, a Zigbee binding, is handled by invalidation (below).
+The echo table (`EchoState`) is therefore maintained independently of chain
+lifetime.
+
+**Prior state includes what is still in flight, and what a binding moved.** Two
+corrections keep the command-time comparison honest without an echo wait:
+
+* *In flight.* Reported state lags a command by hundreds of milliseconds, so a
+  command that puts a key back where the device last reported it, while an
+  earlier command moving it elsewhere is unconfirmed, reverses that command.
+  Each commanded key is held in flight until the device reports that same value
+  or `INFLIGHT_TTL_SECONDS` (10 s) pass, and a key whose reported value matches
+  is still judged to differ while an in-flight value disagrees (`!key,>key` in
+  the basis). The overlay only ever turns a match into a difference, so it can
+  remove a `noop` and never create one; `inflight_flips` counts the verdicts it
+  changed. Measured 2026-10-01 on the reference deployment: presence flaps
+  reversing a render 0.32 s later (median) and wakes sent 0.44 s after an
+  unconfirmed OFF were both stamped `noop` against the stale report, about 100
+  commands in three weeks. **A no-op count compared across the release that
+  introduced this must allow for the drop.**
+* *Moved without MQTT.* A switch with an actuating binding (`genOnOff`,
+  `genLevelCtrl` or `lightingColorCtrl` to a group or device, never to the
+  coordinator) drives its bound lights over Zigbee when its paddle is pressed.
+  The collector sees the switch's `action` report but none of the commands the
+  binding sent, so on an action the bound devices' reported and in-flight
+  values for state, brightness and colour are forgotten, and the next command to
+  them is `unknown` until they report again. Without this a render reversing the
+  press was judged against the pre-press value and stamped `noop`. Binding
+  targets come from `bridge/devices` (`Registry.bound_devices`).
 
 Three properties are load-bearing:
 

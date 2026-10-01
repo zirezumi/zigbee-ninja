@@ -46,6 +46,38 @@ def command_digest(payload: bytes) -> str:
     return hashlib.sha1(payload).hexdigest()[:12]
 
 
+def canonical_json(value) -> bytes:
+    """One byte form for a JSON value, whatever separators produced it."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
+        "utf-8"
+    )
+
+
+def correlation_digest(payload: bytes) -> str:
+    """Fingerprint that joins a wire command to the HA service call that sent it.
+
+    `command_digest` over the raw bytes cannot do this for every publish. Home
+    Assistant hands a template that renders to a mapping to the event stream as
+    a parsed dict, but publishes the TEXT the template produced, and that text
+    depends on the filter: `| tojson` writes `{"a": 1}`, `| to_json` writes
+    `{"a":1}`. The event carries no trace of which, so a dict re-serialised one
+    way matches only the publishes written that way; the other way was never
+    attributed at all (the tap-dial emit, a bar reconcile and the blinds LED
+    feedback, measured 2026-10-01). Both sides therefore digest a JSON object or
+    array over `canonical_json`, and anything that is not one over its raw
+    bytes, as before. `payload_digest` keeps the raw-byte form: it is stored
+    and compared across time, and changing it would break those comparisons at
+    the deploy boundary.
+    """
+    try:
+        parsed = json.loads(payload)
+    except (ValueError, UnicodeDecodeError):
+        return command_digest(payload)
+    if not isinstance(parsed, (dict, list)):
+        return command_digest(payload)
+    return command_digest(canonical_json(parsed))
+
+
 def payload_key_digests(payload: bytes) -> str | None:
     """Per-key value fingerprints for a command payload, as `key:digest` pairs.
 
@@ -67,10 +99,14 @@ def payload_key_digests(payload: bytes) -> str | None:
         return None
     pairs = []
     for key in sorted(parsed)[:MAX_PAYLOAD_KEYS]:
-        value = json.dumps(parsed[key], sort_keys=True, separators=(",", ":"))
-        digest = hashlib.sha1(value.encode("utf-8")).hexdigest()[:KEY_DIGEST_CHARS]
-        pairs.append(f"{key}:{digest}")
+        pairs.append(f"{key}:{key_digest(parsed[key])}")
     return ",".join(pairs)
+
+
+def key_digest(value) -> str:
+    """The per-key value fingerprint `payload_key_digests` stores."""
+    text = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:KEY_DIGEST_CHARS]
 
 
 def parse_key_digests(stored: str | None) -> dict[str, str]:
@@ -129,6 +165,9 @@ class Chain:
     # the detector existed, which is distinct from 'unknown'.
     noop_verdict: str | None = None
     noop_basis: str | None = None
+    # `correlation_digest` of the payload: what an HA publish's fingerprint is
+    # compared with when it backfills this chain's commander. In memory only.
+    correlation: str | None = None
 
     def window(self) -> float:
         return CHAIN_WINDOWS.get(self.verb, CHAIN_WINDOWS["set"])
@@ -192,6 +231,7 @@ class ChainTracker:
             payload_keys=payload_key_digests(payload),
             noop_verdict=noop_verdict,
             noop_basis=noop_basis,
+            correlation=correlation_digest(payload),
         )
         with self._mutex:
             if verb == "set":
@@ -251,10 +291,11 @@ class ChainTracker:
         unattributed chains open on one device, the first name to arrive claimed
         the newest chain regardless of which command it explained.
 
-        With a digest the chain is picked by the bytes it was opened with. The
-        oldest matching chain wins so that repeated identical payloads pair up
-        in arrival order. Callers with no payload in hand (the broker-log
-        correlator) pass none and keep the newest-chain behaviour.
+        With a digest the chain is picked by the bytes it was opened with,
+        compared as `correlation_digest` so separator spacing cannot hide a
+        match. The oldest matching chain wins so that repeated identical
+        payloads pair up in arrival order. Callers with no payload in hand (the
+        broker-log correlator) pass none and keep the newest-chain behaviour.
         """
         with self._mutex:
             chains = self._open.get((instance, target))
@@ -267,9 +308,40 @@ class ChainTracker:
                         return True
                 return False
             for chain in chains:
-                if chain.client is None and chain.payload_digest == digest:
+                if chain.client is None and chain.correlation == digest:
                     chain.client = client
                     return True
+        return False
+
+    def attribute_entity_call(
+        self,
+        instance: str,
+        target: str,
+        client: str,
+        want_state: str | None,
+        since: float,
+    ) -> bool:
+        """Name the chain an HA entity service call (`light.turn_off` ...) opened.
+
+        Such a call publishes through the MQTT entity, not `mqtt.publish`, so
+        there are no bytes to match: only the target, the time, and the state
+        the service implies. The newest unnamed `set` chain on the target
+        opened at or after `since` is named, unless its `state` contradicts the
+        service (a `turn_off` cannot have sent `ON`). Anything less certain is
+        left unattributed.
+        """
+        want = None if want_state is None else key_digest(want_state)
+        with self._mutex:
+            for chain in reversed(self._open.get((instance, target)) or ()):
+                if chain.opened_at < since:
+                    break
+                if chain.client is not None or chain.verb != "set":
+                    continue
+                state = parse_key_digests(chain.payload_keys).get("state")
+                if want is not None and state is not None and state != want:
+                    continue
+                chain.client = client
+                return True
         return False
 
     # -- finalization ---------------------------------------------------------

@@ -35,12 +35,28 @@ below: a partially-known payload can be called `changing` (one differing key
 proves it changes something) but can never be called `noop`. That biases the
 no-op count DOWN, so anyone claiming zero must clear the coverage bar first
 rather than being flattered by ignorance.
+
+**Prior state includes what is still in flight.** A device reports a
+command's value some time after it receives it, so reported state can lag the
+last command by hundreds of milliseconds. A command that puts a key back where
+the device last REPORTED it, while an earlier command moving it elsewhere has
+not been confirmed yet, reverses that earlier command: it is `changing`, not a
+no-op. Measured on a live fleet (2026-10-01): presence flaps sent B then A
+0.32 s apart (median) with B's echo still out, and a wake's ON went out 0.44 s
+after an OFF whose echo landed 0.07 s later; both were stamped `noop` against
+the stale report. Each key commanded is therefore held as IN FLIGHT until the
+device reports that same value or INFLIGHT_TTL_SECONDS pass, and a key whose
+reported value matches is still judged to differ while an in-flight value
+disagrees with the command. The overlay can only turn a match into a
+difference, never the reverse, so it keeps the bias above: it can remove a
+`noop`, never create one.
 """
 
 from __future__ import annotations
 
 import json
 import threading
+import time
 from dataclasses import dataclass, field
 
 # Keys that say how to get somewhere rather than where to go. A payload of
@@ -96,6 +112,19 @@ def _implied_modes(name: str, parsed: dict) -> tuple[str, ...]:
 MAX_TRACKED_DEVICES = 2048
 MAX_TRACKED_KEYS = 48
 
+# How long a commanded value stays in flight without a confirming report. Long
+# on purpose: the reversals this exists for land well under a second after the
+# command they undo, but 30.1% of post-command state publishes on this fleet
+# arrive more than 3.5 s after it, and an entry that expired before its echo
+# would let a reversal through as `noop` again. The cost of holding one too long
+# runs the safe way: a stale entry can only turn a `noop` into `changing`.
+INFLIGHT_TTL_SECONDS = 10.0
+
+# What a bound switch can move without any MQTT command: a paddle press drives
+# its bound targets over a Zigbee binding, so their last REPORTED values stop
+# describing them until they report again. See EchoState.invalidate.
+BINDING_KEYS = ("state", "brightness", "color_temp", "color", COLOR_MODE_KEY)
+
 
 def _normalize(value):
     """Compare 254 and 254.0 as equal without making 254 and '254' equal.
@@ -131,6 +160,9 @@ class Verdict:
     differed: list[str] = field(default_factory=list)
     unknown: list[str] = field(default_factory=list)
     near: list[str] = field(default_factory=list)
+    # Keys whose reported value matched the command but whose IN-FLIGHT value
+    # did not. Always also in `differed`, as `near` is.
+    inflight: list[str] = field(default_factory=list)
     # Why nothing could be assessed, when that is the case: 'no_keys' for a
     # payload of modifiers only, 'not_object' for the bare-scalar
     # `<target>/set/<attribute>` form, 'cold' for keys never reported.
@@ -156,6 +188,11 @@ class Verdict:
             # uptime -- an in-process counter resets on every deploy, which is
             # exactly when someone is looking.
             ("+", self.near),
+            # `>` marks a key that matched the last REPORTED value but not a
+            # value still in flight: `!state,>state` reads as "this command
+            # reverses one the device has not confirmed yet". Readers that do
+            # not know the token skip it, and it never appears on a `noop`.
+            (">", self.inflight),
         ):
             parts.extend(f"{label}{key}" for key in keys)
         if self.reason:
@@ -190,11 +227,17 @@ class EchoState:
         self._values: dict[tuple[str, str], dict[str, object]] = {}
         self._tracked: dict[tuple[str, str], set[str]] = {}
         self._tracked_bytes: dict[tuple[str, str], tuple[bytes, ...]] = {}
+        # (value, deadline) per commanded key not yet confirmed by a report.
+        # Only tracked keys enter it, so it is bounded by the tracking caps.
+        self._pending: dict[tuple[str, str], dict[str, tuple[object, float]]] = {}
         self.parses = 0
         self.prefilter_skips = 0
         self.untracked_skips = 0
         self.device_cap_hits = 0
         self.key_cap_hits = 0
+        self.inflight_confirmed = 0
+        self.inflight_expired = 0
+        self.invalidations = 0
 
     def track(self, instance: str, device: str, keys) -> None:
         """Register interest in keys seen commanded on a device."""
@@ -247,10 +290,75 @@ class EchoState:
         with self._lock:
             self.parses += 1
             values = self._values.setdefault(key, {})
+            pending = self._pending.get(key)
             for name in tracked:
                 if name in parsed:
-                    values[name] = _normalize(parsed[name])
+                    value = _normalize(parsed[name])
+                    values[name] = value
+                    # Only the commanded value confirms it. A report of anything
+                    # else (the old value from a report already in flight, a
+                    # mid-fade step) leaves the command outstanding.
+                    if pending and name in pending and pending[name][0] == value:
+                        del pending[name]
+                        self.inflight_confirmed += 1
         return True
+
+    def note_command(self, instance: str, device: str, values: dict, now: float) -> None:
+        """Hold the values just commanded on a device as in flight.
+
+        Called after `track`, and only tracked keys are held: an untracked key
+        is never parsed from a report, so nothing could ever confirm it.
+        """
+        key = (instance, device)
+        deadline = now + INFLIGHT_TTL_SECONDS
+        with self._lock:
+            tracked = self._tracked.get(key)
+            if not tracked:
+                return
+            pending = self._pending.setdefault(key, {})
+            for name, value in values.items():
+                if name in tracked:
+                    pending[name] = (value, deadline)
+
+    def inflight(self, instance: str, device: str, name: str, now: float):
+        """(pending, value) for a commanded value the device has not confirmed."""
+        with self._lock:
+            pending = self._pending.get((instance, device))
+            if not pending or name not in pending:
+                return False, None
+            value, deadline = pending[name]
+            if deadline <= now:
+                del pending[name]
+                self.inflight_expired += 1
+                return False, None
+            return True, value
+
+    def invalidate(self, instance: str, device: str, names=BINDING_KEYS) -> bool:
+        """Forget what a device last reported for `names`, and what was in flight.
+
+        For a device something has moved WITHOUT an MQTT command, so its last
+        report no longer describes it: a switch paddle drives its bound lights
+        over a Zigbee binding, and the collector sees the paddle's action but
+        none of the commands the binding sent. Until the light reports again a
+        command to it is `unknown` (cold), which is the honest answer; left
+        alone, a render reversing the paddle would be judged against the
+        pre-press value and stamped `noop`. Returns whether anything was known.
+        """
+        key = (instance, device)
+        with self._lock:
+            values = self._values.get(key)
+            pending = self._pending.get(key)
+            dropped = False
+            for name in names:
+                if values and name in values:
+                    del values[name]
+                    dropped = True
+                if pending and name in pending:
+                    del pending[name]
+                    dropped = True
+            if dropped:
+                self.invalidations += 1
+            return dropped
 
     def get(self, instance: str, device: str, name: str):
         """(known, value). `known` distinguishes an absent key from a null one."""
@@ -270,26 +378,40 @@ class EchoState:
                 "untracked_skips": self.untracked_skips,
                 "device_cap_hits": self.device_cap_hits,
                 "key_cap_hits": self.key_cap_hits,
+                "inflight_held": sum(len(p) for p in self._pending.values()),
+                "inflight_confirmed": self.inflight_confirmed,
+                "inflight_expired": self.inflight_expired,
+                "invalidations": self.invalidations,
             }
 
 
 class NoopDetector:
     """Classifies each command against the state known before it was sent."""
 
-    def __init__(self, resolve_members=None):
+    def __init__(self, resolve_members=None, clock=time.time):
         self.echoes = EchoState()
         # (members, complete). `complete` is False only when the target IS a
         # group whose roster could not be fully resolved; a plain device target
         # resolves to ([], True) and is assessed against itself.
         self._resolve_members = resolve_members or (lambda _instance, _target: ([], True))
+        self._clock = clock
         self.counts: dict[str, int] = {
             VERDICT_NOOP: 0,
             VERDICT_CHANGING: 0,
             VERDICT_UNKNOWN: 0,
         }
+        # Verdicts that would have been `noop` against reported state alone and
+        # are `changing` only because of a value in flight. The size of the
+        # correction, and the figure a reader comparing no-op counts across
+        # the change needs.
+        self.inflight_flips = 0
 
     def note_state(self, instance: str, device: str, payload: bytes) -> bool:
         return self.echoes.note_state(instance, device, payload)
+
+    def invalidate(self, instance: str, devices) -> int:
+        """Forget reported and in-flight values on devices moved without MQTT."""
+        return sum(1 for device in devices if self.echoes.invalidate(instance, device))
 
     def classify(self, instance: str, target: str, payload: bytes) -> Verdict:
         try:
@@ -325,17 +447,22 @@ class NoopDetector:
 
         # Register interest AFTER reading, so this command's own keys start
         # being tracked for the next one without this command comparing
-        # against state it just caused.
-        verdict = self._assess(instance, members, parsed, assessable)
+        # against state it just caused. The same goes for holding them in
+        # flight: this command is judged against the one before it.
+        now = self._clock()
+        verdict = self._assess(instance, members, parsed, assessable, now)
+        commanded = {name: _normalize(parsed[name]) for name in assessable}
         for device in members:
             self.echoes.track(instance, device, assessable)
+            self.echoes.note_command(instance, device, commanded, now)
         return self._record(verdict)
 
-    def _assess(self, instance, members, parsed, assessable) -> Verdict:
+    def _assess(self, instance, members, parsed, assessable, now) -> Verdict:
         matched: list[str] = []
         differed: list[str] = []
         unknown: list[str] = []
         near: list[str] = []
+        inflight: list[str] = []
         for name in sorted(assessable):
             commanded = _normalize(parsed[name])
             states = [self.echoes.get(instance, device, name) for device in members]
@@ -361,6 +488,18 @@ class NoopDetector:
                     if any(not known for known, _ in modes):
                         unknown.append(name)
                         continue
+                # Reported state agrees; a value still in flight may not. If
+                # any member was last sent something else and has not
+                # confirmed it, this command reverses that one.
+                if any(
+                    held and not _equal(commanded, value, tolerance)
+                    for held, value in (
+                        self.echoes.inflight(instance, device, name, now) for device in members
+                    )
+                ):
+                    differed.append(name)
+                    inflight.append(name)
+                    continue
                 matched.append(name)
             else:
                 differed.append(name)
@@ -369,14 +508,16 @@ class NoopDetector:
         if differed:
             # One differing key proves the command changes something, and that
             # holds whether or not the rest is known.
-            return Verdict(VERDICT_CHANGING, matched, differed, unknown, near)
+            if not unknown and set(differed) == set(inflight):
+                self.inflight_flips += 1
+            return Verdict(VERDICT_CHANGING, matched, differed, unknown, near, inflight)
         if unknown:
             # Never claim a no-op on partial knowledge: the whole point of the
             # metric is that it survives someone trying to prove an absence.
             return Verdict(
-                VERDICT_UNKNOWN, matched, differed, unknown, near, reason="cold"
+                VERDICT_UNKNOWN, matched, differed, unknown, near, inflight, reason="cold"
             )
-        return Verdict(VERDICT_NOOP, matched, differed, unknown, near)
+        return Verdict(VERDICT_NOOP, matched, differed, unknown, near, inflight)
 
     def _record(self, verdict: Verdict) -> Verdict:
         self.counts[verdict.verdict] = self.counts.get(verdict.verdict, 0) + 1
@@ -391,6 +532,7 @@ class NoopDetector:
             # a small numerator means "no no-ops" or "no data" and the two
             # want opposite responses.
             "resolution_coverage": round(resolved / total, 4) if total else None,
+            "inflight_flips": self.inflight_flips,
             "echoes": self.echoes.stats(),
         }
 

@@ -1,4 +1,8 @@
-from zigbee_ninja.attribution.chains import ChainTracker, command_digest, parse_command
+from zigbee_ninja.attribution.chains import (
+    ChainTracker,
+    correlation_digest,
+    parse_command,
+)
 
 
 class FakeClock:
@@ -156,7 +160,7 @@ def test_client_backfill_picks_the_chain_with_matching_bytes():
 
     assert (
         tracker.attribute_client(
-            "z2m-test", "dimmer", "owner-of-a", digest=command_digest(b'{"a": 1}')
+            "z2m-test", "dimmer", "owner-of-a", digest=correlation_digest(b'{"a":1}')
         )
         is True
     )
@@ -175,7 +179,7 @@ def test_client_backfill_refuses_rather_than_naming_the_wrong_chain():
     chain = tracker.on_command("z2m-test", "dimmer", "set", b'{"a": 1}')
     assert (
         tracker.attribute_client(
-            "z2m-test", "dimmer", "someone", digest=command_digest(b'{"z": 9}')
+            "z2m-test", "dimmer", "someone", digest=correlation_digest(b'{"z": 9}')
         )
         is False
     )

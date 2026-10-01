@@ -4,6 +4,7 @@ about what it could."""
 
 import json
 
+from zigbee_ninja.attribution import noop
 from zigbee_ninja.attribution.noop import (
     VERDICT_CHANGING,
     VERDICT_NOOP,
@@ -315,3 +316,186 @@ def test_group_ct_match_with_one_member_in_xy_mode_is_changing():
     assert v.verdict == VERDICT_CHANGING
     # One wrong-mode member decides it even though the other is fine.
     assert v.differed == ["color_temp"]
+
+
+# -- in flight ----------------------------------------------------------------
+#
+# Reported state lags a command. A command that puts a key back where the
+# device last REPORTED it, while an earlier command elsewhere is unconfirmed,
+# reverses that command, and must not be stamped a no-op against the stale
+# report. The overlay may only ever turn a match into a difference.
+
+
+class _Clock:
+    def __init__(self, t: float = 1000.0):
+        self.t = t
+
+    def __call__(self) -> float:
+        return self.t
+
+
+def _warm(d: NoopDetector, target: str, **reported) -> None:
+    """Command a device once and let it confirm, so it is tracked and settled."""
+    d.classify("z2m-1", target, _cmd(**reported))
+    d.note_state("z2m-1", target, _state(**reported))
+
+
+def test_reversing_an_unconfirmed_command_is_changing_not_a_noop():
+    """The live shape: a wake's ON went out 0.44 s after an OFF whose echo had
+    not landed. Against the stale report the ON matched and was stamped noop."""
+    clock = _Clock()
+    d = NoopDetector(clock=clock)
+    _warm(d, "bulb", state="ON")
+    off = d.classify("z2m-1", "bulb", _cmd(state="OFF"))
+    assert off.verdict == VERDICT_CHANGING
+    clock.t += 0.44
+    on = d.classify("z2m-1", "bulb", _cmd(state="ON"))
+    assert on.verdict == VERDICT_CHANGING
+    assert on.differed == ["state"]
+    assert on.inflight == ["state"]
+    assert on.basis() == "!state,>state"
+    assert d.stats()["inflight_flips"] == 1
+
+
+def test_a_confirming_report_clears_the_command():
+    clock = _Clock()
+    d = NoopDetector(clock=clock)
+    _warm(d, "bulb", state="ON")
+    d.classify("z2m-1", "bulb", _cmd(state="OFF"))
+    d.note_state("z2m-1", "bulb", _state(state="OFF"))
+    again = d.classify("z2m-1", "bulb", _cmd(state="OFF"))
+    assert again.verdict == VERDICT_NOOP
+    assert d.echoes.stats()["inflight_confirmed"] >= 2
+
+
+def test_a_report_of_another_value_does_not_confirm_the_command():
+    """A mid-fade step or a report already in flight is not the device
+    arriving: the command stays outstanding."""
+    clock = _Clock()
+    d = NoopDetector(clock=clock)
+    _warm(d, "bulb", brightness=120)
+    d.classify("z2m-1", "bulb", _cmd(brightness=200))
+    d.note_state("z2m-1", "bulb", _state(brightness=120))
+    back = d.classify("z2m-1", "bulb", _cmd(brightness=120))
+    assert back.verdict == VERDICT_CHANGING
+    assert back.inflight == ["brightness"]
+
+
+def test_an_unconfirmed_command_expires():
+    clock = _Clock()
+    d = NoopDetector(clock=clock)
+    _warm(d, "bulb", state="ON")
+    d.classify("z2m-1", "bulb", _cmd(state="OFF"))  # lost: never confirmed
+    clock.t += noop.INFLIGHT_TTL_SECONDS + 0.01
+    v = d.classify("z2m-1", "bulb", _cmd(state="ON"))
+    assert v.verdict == VERDICT_NOOP
+    assert d.echoes.stats()["inflight_expired"] == 1
+
+
+def test_a_repeat_of_an_unconfirmed_command_is_not_made_a_noop():
+    """The overlay never creates a no-op: re-sending the value in flight is
+    still judged against what the device reported."""
+    clock = _Clock()
+    d = NoopDetector(clock=clock)
+    _warm(d, "bulb", state="ON")
+    d.classify("z2m-1", "bulb", _cmd(state="OFF"))
+    clock.t += 0.2
+    again = d.classify("z2m-1", "bulb", _cmd(state="OFF"))
+    assert again.verdict == VERDICT_CHANGING
+    assert again.inflight == []
+    assert d.stats()["inflight_flips"] == 0
+
+
+def test_a_group_command_is_in_flight_on_every_member():
+    clock = _Clock()
+    d = NoopDetector(
+        clock=clock,
+        resolve_members=lambda inst, target: (["a", "b"], True) if target == "grp" else ([], True),
+    )
+    _warm(d, "a", state="ON")
+    _warm(d, "b", state="ON")
+    d.classify("z2m-1", "grp", _cmd(state="OFF"))
+    v = d.classify("z2m-1", "b", _cmd(state="ON"))
+    assert v.verdict == VERDICT_CHANGING
+    assert v.inflight == ["state"]
+
+
+def test_in_flight_does_not_outvote_a_wrong_colour_mode_or_an_unknown():
+    """Mode and coverage are decided first; the overlay only looks at keys
+    that would otherwise have matched."""
+    clock = _Clock()
+    d = NoopDetector(clock=clock)
+    d.classify("z2m-1", "bulb", _cmd(brightness=10, color_temp=300))
+    d.note_state("z2m-1", "bulb", _state(brightness=10))  # color_temp unseen
+    d.classify("z2m-1", "bulb", _cmd(brightness=50, color_temp=300))
+    v = d.classify("z2m-1", "bulb", _cmd(brightness=10, color_temp=300))
+    assert v.verdict == VERDICT_CHANGING
+    assert v.inflight == ["brightness"]
+    assert v.unknown == ["color_temp"]
+    # Not a flip: an unknown key means it could never have been a noop.
+    assert d.stats()["inflight_flips"] == 0
+
+
+# -- moved without MQTT ----------------------------------------------------------
+
+
+def test_invalidated_device_is_cold_until_it_reports_again():
+    """A paddle drives its bound lights over a Zigbee binding; the light's
+    last report no longer describes it, so a render reversing the press must
+    not be judged against the pre-press value."""
+    clock = _Clock()
+    d = NoopDetector(clock=clock)
+    _warm(d, "bulb", state="ON", brightness=100)
+    assert d.invalidate("z2m-1", ["bulb", "never_seen"]) == 1
+    v = d.classify("z2m-1", "bulb", _cmd(state="ON", brightness=100))
+    assert v.verdict == VERDICT_UNKNOWN
+    assert v.reason == "cold"
+    d.note_state("z2m-1", "bulb", _state(state="ON", brightness=100))
+    assert d.classify("z2m-1", "bulb", _cmd(state="ON", brightness=100)).verdict == VERDICT_NOOP
+
+
+def test_invalidation_leaves_keys_a_binding_cannot_move():
+    clock = _Clock()
+    d = NoopDetector(clock=clock)
+    _warm(d, "dimmer", ledIntensityWhenOn=40, state="ON")
+    d.invalidate("z2m-1", ["dimmer"])
+    v = d.classify("z2m-1", "dimmer", _cmd(ledIntensityWhenOn=40))
+    assert v.verdict == VERDICT_NOOP
+
+
+def _bound_engine(client):
+    import test_registry as fixtures
+
+    client.post("/api/setup", json={"username": "admin", "password": "correct-horse"})
+    engine = client.app.state.engine
+    engine.registry.handle("z2m-test/bridge/info", b'{"version": "2.3.0"}')
+    engine.registry.handle("z2m-test/bridge/devices", json.dumps(fixtures.BOUND_DEVICES).encode())
+    engine.registry.handle("z2m-test/bridge/groups", json.dumps(fixtures.BOUND_GROUPS).encode())
+    return engine
+
+
+def _last_verdict(engine, target):
+    return engine.chains._open[("z2m-test", target)][-1].noop_verdict
+
+
+def test_paddle_action_makes_the_bound_lights_cold(client):
+    engine = _bound_engine(client)
+    engine.on_message("z2m-test/bulb_a/set", b'{"state":"ON"}')
+    engine.on_message("z2m-test/bulb_a", b'{"state":"ON"}')
+    engine.on_message("z2m-test/bulb_a/set", b'{"state":"ON"}')
+    assert _last_verdict(engine, "bulb_a") == VERDICT_NOOP
+
+    # The press drives the bound group over Zigbee: no MQTT command for it.
+    engine.on_message("z2m-test/plate", b'{"action":"down_single","state":"OFF"}')
+    engine.on_message("z2m-test/bulb_a/set", b'{"state":"ON"}')
+    assert _last_verdict(engine, "bulb_a") == VERDICT_UNKNOWN
+
+
+def test_a_report_without_an_action_leaves_the_bound_lights_alone(client):
+    engine = _bound_engine(client)
+    engine.on_message("z2m-test/bulb_a/set", b'{"state":"ON"}')
+    engine.on_message("z2m-test/bulb_a", b'{"state":"ON"}')
+    engine.on_message("z2m-test/plate", b'{"action":"","state":"ON"}')
+    engine.on_message("z2m-test/plate", b'{"state":"ON","brightness":40}')
+    engine.on_message("z2m-test/bulb_a/set", b'{"state":"ON"}')
+    assert _last_verdict(engine, "bulb_a") == VERDICT_NOOP
