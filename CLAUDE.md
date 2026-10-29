@@ -504,6 +504,20 @@ attributed; `payload_digest` stays raw. (4) Entity service calls
 (`light.turn_on|turn_off|toggle`) name their commands by entity slug,
 state-checked, unique across instances, outranked by any matching
 `mqtt.publish`. Version bump to 0.8.0 is part of the release step.
+**External command reports (2026-10-29, branch `ext-command-report`, BUILT,
+NOT RELEASED; release and deploy steps go to the owner).** DESIGN §9.1: an
+extension that sends frames from inside Zigbee2MQTT reports each one on
+`<base>/zigbee-ninja/ext/command` before handing it over; each report opens a
+`set` chain judged by the unchanged no-op detector (`ingest/extreport.py`,
+`Engine._on_external_command`), with `chains.source` = `ext:<reporter>`
+(migration 19). The client comes from the HA publish of the report's cause,
+found through a bounded cause ring of non-entity messages and `name_for(at=)`;
+a later publish names every chain of that cause. Non-entity topics under a
+base (an extension's own topics) are classed `other`, not device state, once
+the registries are known. `tests/test_ext_report.py` (14) with seven mutation
+probes caught. A MINOR release (0.9.0): new protocol topic and a schema change.
+Schema 19 is taken here: `docs/PROPOSAL_commander_provenance.md` also names
+schema 19 and must renumber to 20.
 Roadmap: README.md.
 
 ## Hard rules

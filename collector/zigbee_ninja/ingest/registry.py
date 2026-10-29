@@ -168,6 +168,10 @@ class Registry:
         # friendly name -> actuating binding targets, per instance; only
         # devices that have any. See bound_devices.
         self._bound: dict[str, dict[str, list[tuple[str, str]]]] = {}
+        # Every device and group name per instance, for telling an entity's
+        # state topic from anything else published under the base topic (an
+        # extension's own topics). See is_entity_topic.
+        self._entity_names: dict[str, frozenset[str]] = {}
 
     def _emit(self, instance: str, kind: str, subject: str, detail: dict) -> None:
         if self._on_change is not None:
@@ -290,6 +294,7 @@ class Registry:
             )
         previous = self._devices.get(base)
         self._devices[base] = devices
+        self._refresh_entity_names(base)
         if previous is not None:
             self._diff_devices(base, previous, devices)
         self._ieee_to_name[base] = {
@@ -347,6 +352,7 @@ class Registry:
             )
         previous = self._groups.get(base)
         self._groups[base] = groups
+        self._refresh_entity_names(base)
         if previous is not None:
             self._diff_groups(base, previous, groups)
         self._instance(base)["group_count"] = len(groups)
@@ -527,6 +533,36 @@ class Registry:
             if adapter.startswith("tcp://") and adapter[len("tcp://") :] == needle:
                 return base
         return None
+
+    def _refresh_entity_names(self, base: str) -> None:
+        names = {d["friendly_name"] for d in self._devices.get(base, []) if d.get("friendly_name")}
+        for group in self._groups.get(base, []):
+            if group.get("friendly_name"):
+                names.add(group["friendly_name"])
+            if group.get("id") is not None:
+                names.add(str(group["id"]))
+        self._entity_names[base] = frozenset(names)
+
+    def is_entity(self, base: str, target: str) -> bool:
+        """Whether `target` names a device or a group on this instance (a group
+        by friendly name or numeric id, as `is_group` accepts)."""
+        return target in self._entity_names.get(base, frozenset())
+
+    def is_entity_topic(self, base: str, suffix: str) -> bool:
+        """Whether a base-relative topic is a device's or a group's state topic.
+
+        True when any leading run of its segments is a known name: a friendly
+        name may itself contain `/`, and an endpoint's state topic adds one more
+        segment after the device. Until this instance's device AND group lists
+        have both arrived nothing can be told apart, so the answer is True, which
+        keeps the old behaviour (every non-command, non-bridge topic is state) at
+        startup.
+        """
+        if base not in self._devices or base not in self._groups:
+            return True
+        names = self._entity_names.get(base, frozenset())
+        segments = suffix.split("/")
+        return any("/".join(segments[:i]) in names for i in range(len(segments), 0, -1))
 
     def is_group(self, base: str, target: str) -> bool:
         """Whether a command target names a group (Z2M accepts the friendly

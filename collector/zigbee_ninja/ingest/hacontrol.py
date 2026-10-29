@@ -279,7 +279,9 @@ class HaAttribution:
             return AMBIGUOUS_COMMANDER
         return next(iter(names))
 
-    def name_for(self, topic: str, digest: str | None = None) -> str | None:
+    def name_for(
+        self, topic: str, digest: str | None = None, at: float | None = None
+    ) -> str | None:
         """HA-side publisher of these exact bytes on `topic`, within the window.
 
         Topic alone does not identify a publisher. Two scripts writing different
@@ -297,12 +299,20 @@ class HaAttribution:
         commander name and the publish fell to "(unattributed)" forever. The
         extra slack only ever admits an older candidate for the SAME topic, and
         a healthy loop (sub-millisecond lag) leaves the bound untouched.
+
+        `at` measures the window from another instant than now: the receive time
+        of the message an external command report names as its cause (§9.1),
+        which can be seconds older than the report when the extension queued the
+        frames. The window is then symmetric, since the HA event may have landed
+        on either side of that message.
         """
-        now = self._clock()
+        now = self._clock() if at is None else at
         tolerance = CORRELATION_TOLERANCE_SECONDS + max(self._loop_skew_ms(), 0.0) / 1000.0
         exact: set[str] = set()
         unverifiable = False
         for ts, seen_topic, seen_digest, name in reversed(self._recent):
+            if at is not None and ts - now > tolerance:
+                continue
             if now - ts > tolerance:
                 break
             if seen_topic != topic:

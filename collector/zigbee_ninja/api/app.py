@@ -454,6 +454,9 @@ def create_app(data_dir: Path | str | None = None, static_dir: Path | str | None
         # the echo table is actually being fed, which is the difference
         # between "no no-ops" and "the detector saw nothing".
         report["live"] = engine.noops.stats()
+        # Commands extensions report sending from inside Zigbee2MQTT (§9.1):
+        # judged like any /set, so their intake belongs beside it.
+        report["external_commands"] = engine.external_commands_status()
         return report
 
     @app.get("/api/ledger")
