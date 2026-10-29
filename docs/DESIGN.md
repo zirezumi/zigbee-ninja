@@ -405,7 +405,8 @@ flowchart LR
   frames flag capture gaps. Matched pairs also measure the probe↔pcap clock
   offset continuously: the per-source alignment signal above. Outgoing
   frames have no Z2M-boundary *frame* event (commands are observed as MQTT
-  messages), so fusion is incoming-only.
+  messages, or as an extension's external command reports, §9.1), so fusion
+  is incoming-only.
 - **Watermarks:** attribution windows close on a lateness watermark (~2 s). Live
   views show provisional classifications immediately; storage persists finalized
   ones. A small reorder buffer absorbs cross-source jitter.
@@ -416,7 +417,8 @@ Three orthogonal, joinable dimensions per frame/chain: all derived from generic
 sources:
 
 **(1) Causality class.** A command intake (MQTT `/set`|`/get`|bridge request,
-with client identity from T0.5) opens a chain: matching TX frames (group targets
+with client identity from T0.5, or an extension's external command report,
+§9.1) opens a chain: matching TX frames (group targets
 expanded via the registry), then response traffic inside an adaptive window
 (reads longer, sets shorter; default ≈1.5 s). Classes:
 
@@ -770,6 +772,64 @@ X over 0.2 s", the other "reach Y over 3 s", and the ramp belongs to each
 command. Left in, it was the loudest key in the report, because nearly every
 render varies it.
 
+### §9.1 External command reports
+
+A Zigbee2MQTT extension can send Zigbee frames from inside Zigbee2MQTT, through
+the devices' own converters (for example to sequence several writes on the
+device's answers rather than on MQTT round trips). Those commands never appear
+as `<target>/set`, so without help every chain, no-op verdict and cost line for
+them would be missing, and the targets' state echoes would be filed
+`autonomous`. Reading a result the extension publishes AFTER the frames does not
+work: by then the device has answered and its new state is published, so each
+frame would be judged against its own effect (a manufactured `noop`, which §9
+forbids), its echoes already classed, and nothing keeps older state to rewind to.
+
+**The contract.** An extension that wants its frames measured publishes one report
+per frame on `<base>/zigbee-ninja/ext/command`, **before** it hands the frame
+over, from the same Zigbee2MQTT MQTT client that later publishes the state the
+frame causes (so the report reaches the broker first):
+
+```json
+{"v": 1, "reporter": "<extension name>", "version": "<its version>",
+ "target": "<device or group friendly name>", "payload": {"<exactly what it sent>": 1},
+ "t": 1793289474.954, "ref": "<its own id for the operation>",
+ "cause": {"topic": "<full topic of the MQTT message that made it send>",
+           "digest": "<first 12 hex digits of the SHA-1 of that message's bytes>"}}
+```
+
+`t`, `ref` and `cause` are optional. The topic sits in the probe namespace, so it
+never reaches the state path; a collector that predates this contract ignores it.
+
+**Intake** (`ingest/extreport.py`, `Engine._on_external_command`). A valid report
+whose target the registry knows (device, or group by name or id) opens a `set`
+chain exactly as a `/set` with the canonical form of `payload` would: the no-op
+detector judges it unchanged against the state known before it, the in-flight
+overlay and group expansion apply, the echo window opens, redundancy is tested,
+and it counts as `commanded`. Reports and ordinary `/set` commands to one target
+are judged against each other. The chain's `source` is `ext:<reporter>`. Refused
+reports are counted by reason, never raised.
+
+**Client.** A report carries no HA context; its `cause` does. Every message on a
+base topic that is neither a command nor any entity's state (an extension's own
+command topic among them) is held for 30 s in a bounded ring keyed by the SHA-1
+of its raw bytes, with its topic, receive time and `correlation_digest`. A report
+looks its cause up there and asks §7.4's `name_for` for the HA publish of those
+bytes on that topic, measuring the window from the cause's receive time (an
+extension may queue the frames seconds behind their command). An HA publish that
+arrives later names every unnamed open chain of that cause at once. So a frame
+gets the same commander a `/set` the same automation published would have got,
+with the same §7.4 caveats; the reporter's own vocabulary is never used as the
+commander. Intake counters (reports, named, late-named, unseen causes, unknown
+targets, refusals by reason) are served with `/api/attribution/noops`.
+
+**Non-entity topics are not device state.** Once an instance's device and group
+lists are known, a non-command, non-bridge topic counts as state only when a
+leading run of its segments names a device or group (friendly names may contain
+`/`; endpoint state topics add a segment). Anything else (an extension's own
+command, result and heartbeat topics) is classed `other`: no chain echo, no
+autonomous device spend, no rate as state. Before the lists arrive every such
+topic is treated as state, as before.
+
 ## §10 Capacity & airtime model
 
 **Per-frame airtime** (802.15.4, 2.4 GHz O-QPSK, 250 kbps → 32 µs/byte):
@@ -1013,7 +1073,8 @@ Everything embedded, no external services (P7):
   evidence links, and an input fingerprint that keeps dismissals durable;
   finalized chains additionally persist a short payload digest (never
   payload contents) as the identity evidence the groupcast detectors join
-  on.
+  on, and a `source` (migration 19): NULL for an MQTT command on its own
+  topic, `ext:<reporter>` for a command an extension reported (§9.1).
 - **Hourly Parquet segments**: raw event stream for the burst-inspector window
   (~48 h, quota-capped), queried in place by **embedded DuckDB** (MIT) for ad-hoc
   forensics without a series-cardinality explosion. Implementation: events

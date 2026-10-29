@@ -12,7 +12,13 @@ from contextlib import contextmanager
 
 from .. import __version__
 from ..alerts import GLOBAL_INSTANCE, AlertManager
-from ..attribution.chains import Chain, ChainTracker, correlation_digest, parse_command
+from ..attribution.chains import (
+    Chain,
+    ChainTracker,
+    canonical_json,
+    correlation_digest,
+    parse_command,
+)
 from ..attribution.noop import NoopDetector
 from ..calibration.benchmark import CalibrationManager
 from ..capacity import airtime, ledger
@@ -32,6 +38,7 @@ from ..tiles import (
     TileManager,
 )
 from .brokerlog import LOG_TOPIC_PREFIX, BrokerLogCorrelator
+from .extreport import EXT_COMMAND_SUFFIX, CauseRing, parse_report
 from .fusion import FusionTracker
 from .hacontrol import CORRELATION_TOLERANCE_SECONDS, HaAttribution, HaConfig, HaLink
 from .mqtt import BrokerConfig, MqttIngest
@@ -558,6 +565,12 @@ class Engine:
             # not have.
             loop_skew_ms=lambda: self.loop_lag.max_window_ms(),
         )
+        # External command reports (§9.1): the messages that may have caused
+        # them, and what became of the reports.
+        self.causes = CauseRing()
+        self.ext_counters: dict[str, int] = {
+            "reports": 0, "named": 0, "cause_backfilled": 0, "cause_unseen": 0, "unknown_target": 0,
+        }
         self.fusion = FusionTracker()
         self.probes = ProbeIngest(
             resolve_members=self._resolve_members,
@@ -916,6 +929,64 @@ class Engine:
             self.ha_attr.note_backfill(
                 self.chains.attribute_client(base, command[0], commander, digest=digest)
             )
+        elif digest is not None:
+            # Not a device command: possibly the cause of external command
+            # reports already open (§9.1), which this publish now names.
+            self.ext_counters["cause_backfilled"] += self.chains.attribute_cause(
+                base, (topic, digest), commander
+            )
+
+    def external_commands_status(self) -> dict:
+        """External command report intake (§9.1): counters and the cause ring's size."""
+        return {**self.ext_counters, "causes_held": len(self.causes)}
+
+    def _on_external_command(self, base: str, payload: bytes) -> None:
+        """One frame an extension sent from inside Zigbee2MQTT, reported before it.
+
+        Judged and chained exactly like a `/set` to the same target with the same
+        payload: the report arrives ahead of the state the frame causes, so the
+        no-op detector sees the device's state BEFORE it. The client comes from
+        the HA publish of the message the extension names as its cause, at that
+        message's receive time; a publish recorded later names it through
+        `_on_ha_publish`.
+        """
+        report, why = parse_report(payload)
+        if report is None:
+            key = f"refused_{why}"
+            self.ext_counters[key] = self.ext_counters.get(key, 0) + 1
+            return
+        if not self.registry.is_entity(base, report.target):
+            self.ext_counters["unknown_target"] += 1
+            return
+        body = canonical_json(report.payload)
+        client: str | None = None
+        cause: tuple[str, str] | None = None
+        if report.cause_digest is not None:
+            found = self.causes.lookup(base, report.cause_digest)
+            if found is None:
+                self.ext_counters["cause_unseen"] += 1
+            else:
+                received_at, cause_topic, cause_correlation = found
+                cause = (cause_topic, cause_correlation)
+                client = self.ha_attr.name_for(cause_topic, cause_correlation, at=received_at)
+        verdict = self.noops.classify(base, report.target, body)
+        self.chains.on_command(
+            base,
+            report.target,
+            "set",
+            body,
+            client=client,
+            noop_verdict=verdict.verdict if verdict else None,
+            noop_basis=verdict.basis() if verdict else None,
+            source=f"ext:{report.reporter}",
+            cause=cause,
+        )
+        self.ext_counters["reports"] += 1
+        if client is not None:
+            self.ext_counters["named"] += 1
+        self.class_rates.record(base, "commanded")
+        if self.calibration.active:
+            self.calibration.note_ambient(base, "command")
 
     # -- data path -----------------------------------------------------------
 
@@ -940,12 +1011,20 @@ class Engine:
             return
 
         kind = classify(topic, base)
+        suffix = topic[len(base) + 1 :]
+        if kind == "state" and not self.registry.is_entity_topic(base, suffix):
+            # Neither a command nor any device's or group's state: an extension's
+            # own topic (its commands, results or heartbeat). Not a mesh frame,
+            # so not device spend and never a chain echo (§9.1).
+            kind = "other"
         self.rates.record(base, kind)
         self.rates.record(GLOBAL, kind)
 
-        suffix = topic[len(base) + 1 :]
         self.events.record(time.time(), "mqtt", base, kind, "in", suffix, len(payload))
         if kind == "probe":
+            if suffix == EXT_COMMAND_SUFFIX:
+                self._on_external_command(base, payload)
+                return
             self.probes.handle(base, suffix, payload)
             return
         if kind == "bridge" and suffix.startswith("bridge/response/extension/"):
@@ -1024,6 +1103,9 @@ class Engine:
                 self._ledger_autonomous[key] = self._ledger_autonomous.get(key, 0) + 1
         elif kind == "availability" and self.calibration.active:
             self.calibration.on_availability(base, suffix, payload)
+        elif kind == "other":
+            # A possible cause of external command reports (§9.1).
+            self.causes.note(base, topic, payload)
 
     def _forget_bound_state(self, base: str, device: str, payload: bytes) -> None:
         """A switch reported an action: its bound devices may have moved.
@@ -1378,8 +1460,8 @@ class Engine:
                 conn.executemany(
                     "INSERT INTO chains (instance, target, verb, opened_at, client, "
                     "payload_size, echo_count, first_echo_ms, redundant, payload_digest, "
-                    "clock_skew_ms, payload_keys, noop_verdict, noop_basis) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "clock_skew_ms, payload_keys, noop_verdict, noop_basis, source) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     [
                         (
                             chain.instance,
@@ -1396,6 +1478,7 @@ class Engine:
                             chain.payload_keys,
                             chain.noop_verdict,
                             chain.noop_basis,
+                            chain.source,
                         )
                         for chain in finalized
                     ],

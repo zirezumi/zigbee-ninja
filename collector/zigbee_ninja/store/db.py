@@ -238,6 +238,12 @@ _MIGRATIONS = [
     ALTER TABLE chains ADD COLUMN noop_verdict TEXT;
     ALTER TABLE chains ADD COLUMN noop_basis TEXT;
     """,
+    # External command reports (DESIGN §9.1): NULL for an MQTT command on its
+    # own topic, `ext:<reporter>` for a command an extension sent from inside
+    # Zigbee2MQTT and reported.
+    """
+    ALTER TABLE chains ADD COLUMN source TEXT;
+    """,
 ]
 
 

@@ -168,6 +168,14 @@ class Chain:
     # `correlation_digest` of the payload: what an HA publish's fingerprint is
     # compared with when it backfills this chain's commander. In memory only.
     correlation: str | None = None
+    # Where the command was observed: NULL for an MQTT command on its own
+    # `/set` topic, `ext:<reporter>` for one a Zigbee2MQTT extension sent from
+    # inside Zigbee2MQTT and reported on `zigbee-ninja/ext/command` (DESIGN §9.1).
+    source: str | None = None
+    # For a reported command: (topic, correlation digest) of the MQTT message
+    # that caused it, which is what an HA publish arriving later names it by.
+    # In memory only.
+    cause: tuple[str, str] | None = None
 
     def window(self) -> float:
         return CHAIN_WINDOWS.get(self.verb, CHAIN_WINDOWS["set"])
@@ -215,6 +223,8 @@ class ChainTracker:
         client: str | None = None,
         noop_verdict: str | None = None,
         noop_basis: str | None = None,
+        source: str | None = None,
+        cause: tuple[str, str] | None = None,
     ) -> Chain:
         now = self._clock()
         skew_ms = max(self._loop_skew_ms(), 0.0)
@@ -232,6 +242,8 @@ class ChainTracker:
             noop_verdict=noop_verdict,
             noop_basis=noop_basis,
             correlation=correlation_digest(payload),
+            source=source,
+            cause=cause,
         )
         with self._mutex:
             if verb == "set":
@@ -312,6 +324,23 @@ class ChainTracker:
                     chain.client = client
                     return True
         return False
+
+    def attribute_cause(self, instance: str, cause: tuple[str, str], client: str) -> int:
+        """Name every unnamed open chain a reported command's cause opened.
+
+        One MQTT message to an extension can make it send several frames (to
+        several devices and a group), each reported and each its own chain, so
+        unlike `attribute_client` this names all of them, not the first. Returns
+        how many it named.
+        """
+        named = 0
+        with self._mutex:
+            for chains in self._open.values():
+                for chain in chains:
+                    if chain.instance == instance and chain.client is None and chain.cause == cause:
+                        chain.client = client
+                        named += 1
+        return named
 
     def attribute_entity_call(
         self,
